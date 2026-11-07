@@ -359,9 +359,12 @@ async def test_all_action_dispatch_is_explicit(hass, store, rig):
     manager = rig["manager"]
     for action in ACTIONS:
         params = {"scene_id": saved["id"]} if action == "scene" else {}
+        if action in {"toggle_lights", "turn_on_lights", "turn_off_lights"}:
+            params = {"entity_ids": rig["lights"]}
         value = raw(rig, action, params=params)
         with (
             patch(f"{MODULE}.async_toggle_room", AsyncMock()) as toggle,
+            patch(f"{MODULE}.async_control_lights", AsyncMock()) as selected,
             patch(f"{MODULE}.async_set_adaptive", AsyncMock()) as adaptive,
             patch(f"{MODULE}.async_stop_room", AsyncMock()) as stop,
             patch(f"{MODULE}.async_apply_scene", AsyncMock()) as apply,
@@ -369,7 +372,7 @@ async def test_all_action_dispatch_is_explicit(hass, store, rig):
             patch.object(manager, "_next_scene", AsyncMock()) as next_scene,
         ):
             await manager._action(value, context)
-            calls = [m for m in (toggle, adaptive, stop, apply, dim, next_scene) if m.await_count]
+            calls = [m for m in (toggle, selected, adaptive, stop, apply, dim, next_scene) if m.await_count]
             assert len(calls) == 1
             assert calls[0].call_args.kwargs.get("context", calls[0].call_args.args[-1]) == context
             if action.startswith("adaptive_"):

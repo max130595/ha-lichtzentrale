@@ -6,7 +6,7 @@ import '@testing-library/jest-dom/vitest';
 import {Buttons} from './Buttons';
 import {App} from './App';
 import type {AdaptiveStatus} from './RuntimeControls';
-import type {Binding, ButtonEntity, Hass, Room, Scene} from './types';
+import type {Binding, ButtonEntity, Hass, Light, Room, Scene} from './types';
 
 const rooms: Room[] = [
   {area_id: 'test_room_a', name: 'Testraum A', lights: [], on: false, brightness: null, available_count: 0, cycle: ['test_scene_a'], default_on: 'last'},
@@ -26,11 +26,12 @@ const binding: Binding = {id: 'test_binding', event_entity: buttons[0].entity_id
 const unavailable: AdaptiveStatus = {available: false, rooms: [], switches: []};
 const adaptive: AdaptiveStatus = {available: true, rooms: [{area_id: rooms[0].area_id, switch_entity_id: 'switch.test_adaptive', enabled: true, available: true, default_on: 'last'}], switches: []};
 type Request = {type: string; [key: string]: unknown};
-type Options = {bindings?: Binding[]; buttons?: ButtonEntity[]; rooms?: Room[]; adaptive?: AdaptiveStatus};
+type Options = {lights?: Light[]; bindings?: Binding[]; buttons?: ButtonEntity[]; rooms?: Room[]; adaptive?: AdaptiveStatus};
 function makeApi(options: Options = {}) {
   let savedBindings = options.bindings || [], savedRooms = options.rooms || rooms, double_click_ms = 500;
   const callWS = vi.fn(async (request: Request): Promise<unknown> => {
     switch (request.type) {
+      case 'lichtzentrale/lights/list': return options.lights || [];
       case 'lichtzentrale/buttons/list': return options.buttons || buttons;
       case 'lichtzentrale/bindings/list': return {bindings: savedBindings, double_click_ms};
       case 'lichtzentrale/rooms/list': return savedRooms;
@@ -184,7 +185,7 @@ describe('Tasterbelegungen', () => {
     expect(screen.queryByRole('option', {name: 'Natürliches Licht einschalten'})).not.toBeInTheDocument();
     unmount(); await setup({adaptive}); editEvent(); chooseRoom();
     const actions = within(screen.getByLabelText('Aktion'));
-    expect(actions.getAllByRole('option')).toHaveLength(11); // placeholder + 10 actions
+    expect(actions.getAllByRole('option')).toHaveLength(14); // placeholder + 13 actions
     chooseAction('adaptive_on'); chooseRoom(rooms[1].area_id);
     expect(screen.getByLabelText('Aktion')).toHaveValue('toggle_room');
     expect(screen.queryByRole('option', {name: 'Natürliches Licht einschalten'})).not.toBeInTheDocument();
@@ -331,5 +332,96 @@ describe('Doppelklick-Zeit', () => {
     await act(async () => finish({double_click_ms: 600}));
     expect(screen.getByLabelText('Doppelklick-Zeit in Millisekunden')).toHaveValue(600);
     expect(screen.getByText('Gespeichert: 600 ms')).toBeVisible();
+  });
+});
+
+const testLights: Light[] = [
+  {entity_id: 'light.test_a', name: 'Testlicht A', area_id: rooms[0].area_id, area_name: rooms[0].name, available: true, allowed: true},
+  {entity_id: 'switch.test_b', name: 'Testlicht B', area_id: rooms[1].area_id, area_name: rooms[1].name, available: true, allowed: true},
+  {entity_id: 'light.test_unassigned', name: 'Testlicht ohne Raum', area_id: null, area_name: null, available: false, allowed: true},
+  {entity_id: 'light.test_denied', name: 'Nicht freigegeben', area_id: null, area_name: null, available: true, allowed: false},
+  {entity_id: 'lock.test_invalid', name: 'Falsche Domain', area_id: null, area_name: null, available: true, allowed: true},
+];
+const selectLight = (name: string) => fireEvent.click(screen.getByRole('checkbox', {name: new RegExp(name)}));
+describe('Einzellampen für Taster', () => {
+  it.each(['toggle_lights', 'turn_on_lights', 'turn_off_lights'])('saves %s across rooms without an area, with approved targets only', async action => {
+    const {callWS, unmount} = await setup({lights: testLights}); editEvent(); chooseAction(action);
+    expect(screen.queryByLabelText('Zielraum')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    expect(screen.queryByRole('checkbox', {name: /Nicht freigegeben|Falsche Domain/})).not.toBeInTheDocument();
+    expect(screen.getByRole('group', {name: 'Testraum A'})).toBeVisible();
+    expect(screen.getByRole('group', {name: 'Testraum B'})).toBeVisible();
+    expect(screen.getByRole('group', {name: 'Ohne Raum'})).toBeVisible();
+    selectLight('Testlicht A'); selectLight('Testlicht B');
+    expect(writes(callWS)).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/binding/save', binding: {event_entity: buttons[0].entity_id, event_type: 'short_release', action, area_id: null, params: {entity_ids: ['light.test_a', 'switch.test_b']}}});
+    unmount(); render(<Buttons hass={{callWS} as Hass}/>);
+    await screen.findByRole('region', {name: 'Testgerät'});
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByRole('checkbox', {name: /Testlicht A/})).toBeChecked();
+    expect(screen.getByRole('checkbox', {name: /Testlicht B/})).toBeChecked();
+  });
+  it('allows no-room approved lights even when no controllable room exists', async () => {
+    const {callWS} = await setup({rooms: [], lights: [testLights[2]]}); editEvent(); chooseAction('turn_on_lights');
+    selectLight('Testlicht ohne Raum');
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({area_id: null, params: {entity_ids: ['light.test_unassigned']}})}));
+  });
+  it.each(['dim_up', 'dim_down'])('retains room-wide %s and omits entity_ids until individual targets are requested', async action => {
+    const {callWS} = await setup({lights: testLights}); editEvent(); chooseRoom(); chooseAction(action);
+    expect(screen.getByLabelText('Dimmziel')).toHaveValue('room');
+    fireEvent.change(screen.getByLabelText('Dimmziel'), {target: {value: 'lights'}});
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    selectLight('Testlicht B');
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({action, area_id: null, params: {entity_ids: ['switch.test_b']}})}));
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Dimmziel')).toHaveValue('lights');
+    fireEvent.change(screen.getByLabelText('Dimmziel'), {target: {value: 'room'}}); chooseRoom();
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({action, area_id: rooms[0].area_id, params: {}})}));
+  });
+  it('shows and requires explicit removal of stale targets, including revoked approvals', async () => {
+    const {callWS} = await setup({lights: testLights, bindings: [{...binding, action: 'toggle_lights', params: {entity_ids: ['light.test_a', 'light.test_missing', 'light.test_denied']}}]});
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByRole('alert')).toHaveTextContent('nicht mehr freigegeben oder vorhanden');
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', {name: 'light.test_missing aus Auswahl entfernen'}));
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', {name: 'light.test_denied aus Auswahl entfernen'}));
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({params: {entity_ids: ['light.test_a']}})}));
+  });
+  it('drops irrelevant targets and scene parameters when changing action families', async () => {
+    const {callWS} = await setup({lights: testLights}); editEvent(); chooseRoom(); chooseAction('scene');
+    fireEvent.change(screen.getByLabelText('Szene'), {target: {value: scenes[0].id}});
+    chooseAction('toggle_lights'); selectLight('Testlicht A'); chooseAction('turn_on_room');
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({action: 'turn_on_room', params: {}})}));
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'})); chooseAction('toggle_lights');
+    expect(screen.getByRole('checkbox', {name: /Testlicht A/})).not.toBeChecked();
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+  });
+  it('keeps failed selected-light drafts and locks checkboxes during pending saves', async () => {
+    const {callWS} = await setup({lights: testLights}); editEvent(); chooseAction('toggle_lights'); selectLight('Testlicht A');
+    callWS.mockRejectedValueOnce(new Error('Testfehler'));
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'})); await screen.findByRole('alert');
+    expect(screen.getByRole('checkbox', {name: /Testlicht A/})).toBeChecked();
+    expect(eventGroup().getByText('Noch nicht belegt')).toBeVisible();
+    let finish: (value: Binding) => void = () => {};
+    callWS.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    const save = screen.getByRole('button', {name: 'Belegung speichern'}); fireEvent.click(save); fireEvent.click(save);
+    expect(writes(callWS)).toHaveLength(2);
+    expect(screen.getByRole('checkbox', {name: /Testlicht A/})).toBeDisabled();
+    expect(screen.getByRole('button', {name: 'Abbrechen'})).toBeDisabled();
+    await act(async () => finish({...binding, action: 'toggle_lights', area_id: null, params: {entity_ids: ['switch.test_b']}}));
+    expect(eventGroup().getByText('Ausgewählte Lichter ein / aus · Testlicht B')).toBeVisible();
   });
 });

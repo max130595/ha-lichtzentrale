@@ -4,8 +4,8 @@ Eine lokale Licht-App als Custom Integration für Home Assistant. Oberfläche au
 für schmale Bildschirme ausgelegt. Kein Cloud-Konto und keine zusätzlichen
 Python-Abhängigkeiten zur Laufzeit.
 
-**Stand: Stufe 3.** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import,
-zwölf eigene Farbpaletten, räumliche Verteilung und Wellen, dynamische Palettenszenen, optionales natürliches Licht und konfigurierbare **Taster**. **Zeitpläne** folgen in Stufe 4.
+**Stand: Stufe 3A.** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import,
+zwölf eigene Farbpaletten, räumliche Verteilung und Wellen, dynamische Palettenszenen, optionales natürliches Licht und konfigurierbare **Taster** mit raumübergreifender Einzellampen-Auswahl. **Zeitpläne** folgen in Stufe 4.
 Der weitere Ausbau ist in [docs/BAUPLAN.md](docs/BAUPLAN.md) beschrieben.
 
 ## Installation über HACS
@@ -194,7 +194,7 @@ uv pip install --python .venv-target/bin/python -r requirements-ha2026.11.txt
 
 Der GitHub-Workflow prüft TypeScript, ESLint, Frontend-Tests, Bundle-Aktualität,
 Python-Tests, hassfest und HACS. Die lokale und manuelle Prüfliste steht in
-[docs/STUFE_3_TESTPLAN.md](docs/STUFE_3_TESTPLAN.md).
+[docs/STUFE_3A_TESTPLAN.md](docs/STUFE_3A_TESTPLAN.md).
 
 ## Herkunft und Lizenz
 

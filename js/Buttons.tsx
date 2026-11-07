@@ -1,10 +1,11 @@
 // Geändert für Lichtzentrale
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {AdaptiveStatus} from './RuntimeControls';
-import type {Binding, BindingAction, ButtonEntity, Hass, Room, Scene} from './types';
+import type {Binding, BindingAction, ButtonEntity, Hass, Light, Room, Scene} from './types';
 
 const actionLabels: Record<BindingAction, string> = {
   toggle_room: 'Raum ein / aus', turn_on_room: 'Raum einschalten', turn_off_room: 'Raum ausschalten',
+  toggle_lights: 'Ausgewählte Lichter ein / aus', turn_on_lights: 'Ausgewählte Lichter einschalten', turn_off_lights: 'Ausgewählte Lichter ausschalten',
   next_scene: 'Nächste Szene im Zyklus', scene: 'Bestimmte Szene starten', dim_up: 'Heller (10 %)', dim_down: 'Dunkler (10 %)',
   adaptive_on: 'Natürliches Licht einschalten', adaptive_off: 'Natürliches Licht ausschalten', stop_dynamic: 'Dynamik stoppen',
 };
@@ -18,6 +19,8 @@ const eventLabels: Record<string, string> = {
 const eventLabel = (type: string) => eventLabels[type] || 'Geräteereignis';
 const failure = (error: unknown) => error instanceof Error ? error.message : typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : 'Bitte erneut versuchen.';
 const hasAdaptive = (status: AdaptiveStatus | null, area: string) => !!status?.available && !!status.rooms?.some(room => room.area_id === area && room.available);
+const approved = (light: Light) => light.allowed && /^(light|switch)\./.test(light.entity_id);
+const targetsRequired = (action: BindingAction) => ['toggle_lights', 'turn_on_lights', 'turn_off_lights'].includes(action);
 type Editing = {entity: string; event: string; binding?: Binding};
 type RoomSettings = {cycle: string[]; default_on: string};
 
@@ -25,6 +28,7 @@ export function Buttons({hass}: {hass: Hass}) {
   const api = useRef(hass); api.current = hass;
   const alive = useRef(false), lock = useRef(false), generation = useRef(0);
   const [buttons, setButtons] = useState<ButtonEntity[]>([]), [bindings, setBindings] = useState<Binding[]>([]);
+  const [lights, setLights] = useState<Light[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]), [scenes, setScenes] = useState<Scene[]>([]);
   const [adaptive, setAdaptive] = useState<AdaptiveStatus | null>(null), [doubleClick, setDoubleClick] = useState(500);
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
@@ -34,15 +38,16 @@ export function Buttons({hass}: {hass: Hass}) {
   const load = useCallback(async () => {
     const id = ++generation.current; setLoading(true); setError('');
     try {
-      const [b, saved, r, s, a] = await Promise.all([
+      const [b, saved, r, s, a, l] = await Promise.all([
         api.current.callWS<ButtonEntity[]>({type: 'lichtzentrale/buttons/list'}),
         api.current.callWS<{bindings: Binding[]; double_click_ms: number}>({type: 'lichtzentrale/bindings/list'}),
         api.current.callWS<Room[]>({type: 'lichtzentrale/rooms/list'}),
         api.current.callWS<Scene[]>({type: 'lichtzentrale/scenes/list'}),
         api.current.callWS<AdaptiveStatus>({type: 'lichtzentrale/adaptive/status'}),
+        api.current.callWS<Light[]>({type: 'lichtzentrale/lights/list'}),
       ]);
       if (!alive.current || id !== generation.current) return;
-      setButtons(b); setBindings(saved.bindings); setDoubleClick(saved.double_click_ms); setRooms(r); setScenes(s); setAdaptive(a); setLoaded(true);
+      setLights(l.filter(approved)); setButtons(b); setBindings(saved.bindings); setDoubleClick(saved.double_click_ms); setRooms(r); setScenes(s); setAdaptive(a); setLoaded(true);
     } catch (error) {if (alive.current && id === generation.current) setError(`Taster konnten nicht geladen werden: ${failure(error)}`);}
     finally {if (alive.current && id === generation.current) setLoading(false);}
   }, []);
@@ -71,7 +76,7 @@ export function Buttons({hass}: {hass: Hass}) {
     const group = groups.get(key) || {name: missing ? 'Nicht mehr gefundene Taster' : button.device_name || 'Taster ohne Gerät', buttons: []};
     group.buttons.push(button); groups.set(key, group);
   }
-  const description = (binding: Binding) => `${actionLabels[binding.action] || binding.action} · ${rooms.find(room => room.area_id === binding.area_id)?.name || 'Raum nicht mehr vorhanden'}${binding.action === 'scene' ? ` · ${scenes.find(scene => scene.id === binding.params.scene_id)?.name || 'Szene nicht mehr vorhanden'}` : ''}`;
+  const description = (binding: Binding) => `${actionLabels[binding.action] || binding.action} · ${binding.params.entity_ids ? binding.params.entity_ids.map(id => lights.find(light => light.entity_id === id)?.name || `${id} (nicht mehr freigegeben oder vorhanden)`).join(', ') || 'Keine Lichter ausgewählt' : rooms.find(room => room.area_id === binding.area_id)?.name || 'Raum nicht mehr vorhanden'}${binding.action === 'scene' ? ` · ${scenes.find(scene => scene.id === binding.params.scene_id)?.name || 'Szene nicht mehr vorhanden'}` : ''}`;
   function openEdit(edit: Editing) {setEditing(edit); setDeleting(null); setRoomEditor(''); setError(''); setMessage('');}
   return <section aria-label="Tasterbelegungen">
     <div className="section-heading"><div><h2>Taster</h2><p>Taste und Ereignis wählen, Raum und Aktion zuordnen.</p></div><button disabled={disabled} onClick={() => {setEditing(null); setDeleting(null); setRoomEditor(''); setMessage(''); void load();}}>Taster neu laden</button></div>
@@ -91,13 +96,13 @@ export function Buttons({hass}: {hass: Hass}) {
             const assigned = bindings.filter(binding => binding.event_entity === button.entity_id && binding.event_type === event);
             const supported = button.event_types.includes(event);
             return <div className="button-event" role="group" aria-label={eventLabel(event)} key={event}><h5>{eventLabel(event)}</h5><small>{event}</small>{!supported && <p>Ereignis wird nicht mehr vom Taster angeboten.</p>}
-              {assigned.length ? assigned.map(binding => <div key={binding.id}><p>{description(binding)}</p><div className="actions"><button disabled={disabled || !supported} onClick={() => openEdit({entity: button.entity_id, event, binding})}>Belegung bearbeiten</button><button disabled={disabled} onClick={() => {setDeleting(binding); setEditing(null); setRoomEditor(''); setError(''); setMessage('');}}>Belegung löschen</button></div></div>) : <><p>Noch nicht belegt</p><button disabled={disabled || !supported || !rooms.length} onClick={() => openEdit({entity: button.entity_id, event})}>Belegen</button></>}
+              {assigned.length ? assigned.map(binding => <div key={binding.id}><p>{description(binding)}</p><div className="actions"><button disabled={disabled || !supported} onClick={() => openEdit({entity: button.entity_id, event, binding})}>Belegung bearbeiten</button><button disabled={disabled} onClick={() => {setDeleting(binding); setEditing(null); setRoomEditor(''); setError(''); setMessage('');}}>Belegung löschen</button></div></div>) : <><p>Noch nicht belegt</p><button disabled={disabled || !supported || (!rooms.length && !lights.length)} onClick={() => openEdit({entity: button.entity_id, event})}>Belegen</button></>}
             </div>;
           })}
         </section>;
       })}</section>)}
       {editing && <section ref={editorRef} tabIndex={-1} className="card" aria-label="Belegung bearbeiten"><h3>{eventLabel(editing.event)} belegen</h3><p>{buttons.find(button => button.entity_id === editing.entity)?.name || editing.entity}<small>{editing.event}</small></p>
-        <BindingEditor key={`${editing.entity}/${editing.event}/${editing.binding?.id || 'new'}`} editing={editing} rooms={rooms} scenes={scenes} adaptive={adaptive} disabled={disabled} cancel={() => {setEditing(null); setError('');}} save={binding => void mutate<Binding>('binding/save', {binding}, result => {setBindings(items => [...items.filter(item => item.id !== result.id), result]); setEditing(null);}, 'Belegung in Home Assistant gespeichert.')}/>
+        <BindingEditor key={`${editing.entity}/${editing.event}/${editing.binding?.id || 'new'}`} editing={editing} lights={lights} rooms={rooms} scenes={scenes} adaptive={adaptive} disabled={disabled} cancel={() => {setEditing(null); setError('');}} save={binding => void mutate<Binding>('binding/save', {binding}, result => {setBindings(items => [...items.filter(item => item.id !== result.id), result]); setEditing(null);}, 'Belegung in Home Assistant gespeichert.')}/>
       </section>}
       {deleting && <section ref={editorRef} tabIndex={-1} className="card" aria-label="Belegung löschen bestätigen"><h3>Belegung löschen?</h3><p>{eventLabel(deleting.event_type)} · {description(deleting)}</p><p>Der Taster bleibt in Home Assistant erhalten.</p><button disabled={disabled} onClick={() => void mutate('binding/delete', {binding_id: deleting.id}, () => {setBindings(items => items.filter(item => item.id !== deleting.id)); setDeleting(null);}, 'Belegung gelöscht.')}>Endgültig löschen</button><button className="secondary" disabled={disabled} onClick={() => {setDeleting(null); setError('');}}>Abbrechen</button></section>}
       <DoubleClickSettings key={doubleClick} value={doubleClick} disabled={disabled} save={double_click_ms => void mutate<{double_click_ms: number}>('binding/settings', {double_click_ms}, result => setDoubleClick(result.double_click_ms), 'Doppelklick-Zeit gespeichert.')}/>
@@ -110,16 +115,35 @@ export function Buttons({hass}: {hass: Hass}) {
   </section>;
 }
 
-function BindingEditor({editing, rooms, scenes, adaptive, disabled, save, cancel}: {editing: Editing; rooms: Room[]; scenes: Scene[]; adaptive: AdaptiveStatus | null; disabled: boolean; save: (binding: Omit<Binding, 'id'> & {id?: string}) => void; cancel: () => void}) {
+function BindingEditor({editing, lights, rooms, scenes, adaptive, disabled, save, cancel}: {editing: Editing; lights: Light[]; rooms: Room[]; scenes: Scene[]; adaptive: AdaptiveStatus | null; disabled: boolean; save: (binding: Omit<Binding, 'id'> & {id?: string}) => void; cancel: () => void}) {
   const [area, setArea] = useState(editing.binding?.area_id || '');
   const [action, setAction] = useState<BindingAction>(editing.binding?.action || 'toggle_room');
   const [scene, setScene] = useState(editing.binding?.params.scene_id || '');
+  const [entityIds, setEntityIds] = useState<string[]>(editing.binding?.params.entity_ids || []);
+  const [individual, setIndividual] = useState(editing.binding?.params.entity_ids !== undefined);
+  const dimming = action === 'dim_up' || action === 'dim_down';
+  const selectedTargets = targetsRequired(action) || (dimming && individual);
+  const invalidIds = entityIds.filter(id => !lights.some(light => light.entity_id === id));
+  const targetGroups = new Map<string, {name: string; lights: Light[]}>();
+  for (const light of lights) {
+    const key = light.area_id || '';
+    const group = targetGroups.get(key) || {name: rooms.find(room => room.area_id === light.area_id)?.name || light.area_name || 'Ohne Raum', lights: []};
+    group.lights.push(light); targetGroups.set(key, group);
+  }
   const roomScenes = scenes.filter(item => item.area_id === area).sort((a, b) => a.order - b.order);
   const adaptiveAvailable = hasAdaptive(adaptive, area);
-  const valid = rooms.some(room => room.area_id === area) && (action !== 'scene' || roomScenes.some(item => item.id === scene)) && (!action.startsWith('adaptive_') || adaptiveAvailable);
-  return <form onSubmit={event => {event.preventDefault(); if (!disabled && valid) save({...editing.binding, event_entity: editing.entity, event_type: editing.event, area_id: area, action, params: action === 'scene' ? {scene_id: scene} : {}});}}><fieldset disabled={disabled}><legend>Aktion zuordnen</legend>
-    <label>Zielraum<select className="text-input" value={rooms.some(room => room.area_id === area) ? area : ''} onChange={event => {const next = event.target.value; setArea(next); setScene(''); if (action.startsWith('adaptive_') && !hasAdaptive(adaptive, next)) setAction('toggle_room');}}><option value="">Raum wählen</option>{rooms.map(room => <option key={room.area_id} value={room.area_id}>{room.name}</option>)}</select></label>
-    <label>Aktion<select className="text-input" value={action.startsWith('adaptive_') && !adaptiveAvailable ? '' : action} onChange={event => {setAction(event.target.value as BindingAction); setScene('');}}><option value="" disabled>Aktion wählen</option>{(Object.entries(actionLabels) as [BindingAction, string][]).filter(([value]) => !value.startsWith('adaptive_') || adaptiveAvailable).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+  const valid = (selectedTargets ? entityIds.length > 0 && !invalidIds.length : rooms.some(room => room.area_id === area)) && (action !== 'scene' || roomScenes.some(item => item.id === scene)) && (!action.startsWith('adaptive_') || adaptiveAvailable);
+  return <form onSubmit={event => {event.preventDefault(); if (!disabled && valid) save({...editing.binding, event_entity: editing.entity, event_type: editing.event, area_id: selectedTargets ? null : area, action, params: selectedTargets ? {entity_ids: entityIds} : action === 'scene' ? {scene_id: scene} : {}});}}><fieldset disabled={disabled}><legend>Aktion zuordnen</legend>
+    {!selectedTargets && <label>Zielraum<select className="text-input" value={rooms.some(room => room.area_id === area) ? area : ''} onChange={event => {const next = event.target.value; setArea(next); setScene(''); if (action.startsWith('adaptive_') && !hasAdaptive(adaptive, next)) setAction('toggle_room');}}><option value="">Raum wählen</option>{rooms.map(room => <option key={room.area_id} value={room.area_id}>{room.name}</option>)}</select></label>}
+    <label>Aktion<select className="text-input" value={action.startsWith('adaptive_') && !adaptiveAvailable ? '' : action} onChange={event => {const next = event.target.value as BindingAction; setAction(next); setScene(''); if (!targetsRequired(next) && next !== 'dim_up' && next !== 'dim_down') {setEntityIds([]); setIndividual(false);}}}><option value="" disabled>Aktion wählen</option>{(Object.entries(actionLabels) as [BindingAction, string][]).filter(([value]) => !value.startsWith('adaptive_') || adaptiveAvailable).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+    {dimming && <label>Dimmziel<select className="text-input" value={individual ? 'lights' : 'room'} onChange={event => {setIndividual(event.target.value === 'lights'); setEntityIds([]);}}><option value="room">Ganzer Zielraum</option><option value="lights">Einzelne Lichter auswählen</option></select></label>}
+    {selectedTargets && <fieldset><legend>Lichter auswählen</legend><p>Freigegebene Lampen und Lichtschalter aus beliebigen Räumen. Mindestens ein Licht auswählen.</p>
+      {[...targetGroups].map(([key, group]) => <fieldset key={key}><legend>{group.name}</legend>{group.lights.map(light => <label className="check" key={light.entity_id} style={{minHeight: 44, overflowWrap: 'anywhere'}}><input type="checkbox" checked={entityIds.includes(light.entity_id)} onChange={() => setEntityIds(ids => ids.includes(light.entity_id) ? ids.filter(id => id !== light.entity_id) : [...ids, light.entity_id])}/><span>{light.name} · {light.entity_id}{!light.available && ' (nicht verfügbar)'}</span></label>)}</fieldset>)}
+      {!lights.length && <p>Keine freigegebenen Lichter vorhanden.</p>}
+      {!!invalidIds.length && <div role="alert"><p>Diese Lichter sind nicht mehr freigegeben oder vorhanden. Vor dem Speichern entfernen.</p>{invalidIds.map(id => <p key={id} style={{overflowWrap: 'anywhere'}}>{id} <button type="button" aria-label={`${id} aus Auswahl entfernen`} onClick={() => setEntityIds(ids => ids.filter(item => item !== id))}>Entfernen</button></p>)}</div>}
+      <p>{entityIds.length} Lichter ausgewählt.</p>
+      {dimming && <p>Nur eingeschaltete, dimmbare Lampen werden geändert. Lichtschalter bleiben unverändert.</p>}
+    </fieldset>}
     {action === 'scene' && <label>Szene<select className="text-input" value={roomScenes.some(item => item.id === scene) ? scene : ''} onChange={event => setScene(event.target.value)}><option value="">Szene wählen</option>{roomScenes.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{!roomScenes.length && <small>In diesem Raum ist noch keine Szene gespeichert.</small>}</label>}
     {action === 'next_scene' && <p>Den Szenenzyklus legst du unter „Szenenzyklus und Einschalten“ fest.</p>}
     {action === 'turn_on_room' && <p>Verwendet die Einschalt-Einstellung des Zielraums.</p>}
