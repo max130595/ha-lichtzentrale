@@ -169,10 +169,12 @@ diese Taste überhaupt ein Doppelklick belegt ist.
   Teilfehler werden angezeigt; ein Stopp wird nicht fälschlich als vollständig erfolgreich gemeldet.
 - **Korrekturen aus der Stufe-2-Abnahme:** Statische und dynamische Paletten schalten keine
   `switch.*`-Entities; Snapshot-Szenen behalten den gespeicherten An/Aus-Zustand dieser Schalter.
-  Raum einschalten mit natürlichem Licht aktiviert nur die Adaptive-Lighting-Ziele. Ohne
-  natürliches Licht werden nur zuvor eingeschaltete Einzellichter aus dem gespeicherten
-  Vor-Aus-Zustand wiederhergestellt. Raum aus/an verändert keine Switch-Entities.
-  Das Deckenlicht geht nie automatisch mit an; gezielte Einzelbedienung bleibt möglich.
+  Raum aus schaltet alle freigegebenen Lampen und Switch-Lichter des Raums aus.
+  Raum einschalten mit natürlichem Licht aktiviert nur die Adaptive-Lighting-Ziele und nie
+  Switch-Lichter. Sonst werden in gemischten Räumen nur die vor dem letzten Raum-Aus
+  eingeschalteten Lampen und Schalter aus dem serverseitigen Vor-Aus-Snapshot wiederhergestellt.
+  Räume ohne freigegebene `light`-Entities schalten ihre Switch-Lichter direkt ein/aus; ihr
+  An-Status richtet sich dann nach den Schaltern, in gemischten Räumen nach den Lampen.
 - **Kompatibilität:** Alte Räume brauchen keine Migration; fehlende Positionen bleiben optional.
   Alte Szenen verwenden weiterhin `zufall` und `welle: false`. Keine zusätzlichen Requirements.
 - **Fertig wenn:** Positionen über Neuladen erhalten bleiben; beide Rasterachsen und die Höhe

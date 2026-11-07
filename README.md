@@ -48,11 +48,14 @@ und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
 - Räume entsprechen Home-Assistant-Bereichen, unabhängig von Etagen. Eine direkte
   Bereichszuordnung der Entity hat Vorrang vor der Gerätezuordnung. Nur Räume mit
   freigegebenen Lampen erscheinen; auch reine Lichtschalter-Räume werden unterstützt.
-- Raum und Einzellampen ausschalten, dimmbare Lampen regeln, Farbe oder Weißton wählen.
-  Raum einschalten stellt ohne natürliches Licht nur die vor dem Ausschalten eingeschalteten
-  Einzellichter wieder her, niemals automatisch das Deckenlicht. Ohne gespeicherten Vorzustand
-  werden vorsichtshalber keine neuen Lampen eingeschaltet. Auch Raum aus lässt Switches
-  unverändert; deren gezielte Einzelbedienung und gespeicherte Snapshot-Werte bleiben möglich.
+- Raum ausschalten schaltet alle freigegebenen Einzellichter und Switch-Lichtschalter aus.
+  In gemischten Räumen stellt Raum einschalten ohne natürliches Licht nur die vor dem
+  Ausschalten eingeschalteten Lampen und Schalter wieder her. Ohne gespeicherten Vorzustand
+  werden dort vorsichtshalber keine neuen Ziele eingeschaltet.
+- Räume ohne freigegebene `light`-Entities schalten ihre Switch-Lichter direkt ein/aus,
+  auch ohne vorherigen Snapshot. Ihr An-Status richtet sich nach den Schaltern; in gemischten
+  Räumen weiterhin nach den Lampen. Mit natürlichem Licht gehen Switch-Lichter nie an.
+- Einzelbedienung, Dimmen, Farbe und Weißton bleiben verfügbar.
   Raumhelligkeit ändert nur eingeschaltete dimmbare Lampen. Lichtschalter erhalten niemals
   Farb- oder Helligkeitswerte. Die einzelnen Service-Aufrufe starten parallel.
 - **Aktuellen Zustand als Szene speichern** sichert Ein/Aus und die aktive Helligkeit/Farbe

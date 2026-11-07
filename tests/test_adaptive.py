@@ -214,8 +214,12 @@ async def test_room_on_only_enables_actual_adaptive_subset(hass, store, adaptive
         extras.append(entry.entity_id)
     await store.async_set_lights([light, *extras])
     await async_set_adaptive(hass, store, area, adaptive_switch=switch, default_on="adaptive")
+    await store.async_update_room(
+        area, {"pre_off_lights": {entity: {"on": True} for entity in [light, *extras]}}
+    )
     result = await async_toggle_room(hass, store, area, on=True)
     assert result == {"applied": [light], "skipped": extras}
+    assert hass.states.get(extras[1]).state == "off"
     assert calls[-1].data == {"entity_id": switch, "lights": [light], "turn_on_lights": True}
     assert all(call.data["entity_id"] == switch for call in calls)
 

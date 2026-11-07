@@ -67,7 +67,7 @@ apply_scene:
 
 toggle_room:
   name: Raum schalten
-  description: Schaltet Einzellichter aus oder stellt nur zuvor eingeschaltete Einzellichter wieder her. Mit natürlichem Licht werden nur dessen Ziele aktiviert. Switch-Lichtschalter bleiben unverändert.
+  description: Schaltet alle freigegebenen Raumlichter aus. Einschalten stellt vorher eingeschaltete Lampen und Switch-Lichter wieder her; reine Switch-Räume werden direkt geschaltet. Mit natürlichem Licht werden nur dessen Lampen aktiviert, nie Switch-Lichter.
   fields:
     area_id:
       name: Raum

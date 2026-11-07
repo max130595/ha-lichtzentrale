@@ -362,9 +362,11 @@ async def run(config_dir: str) -> None:
         before_color = hass.states.get(lamp.entity_id).attributes["xy_color"]
         await asyncio.sleep(5.1)
         assert hass.states.get(lamp.entity_id).attributes["xy_color"] != before_color
+        hass.states.async_set(switch.entity_id, "on")
         await async_toggle_room(hass, final, area.id, False)
         assert not active.list()
         assert hass.states.get(lamp.entity_id).state == "off"
+        assert final.data["rooms"][area.id]["pre_off_lights"][switch.entity_id] == {"on": True}
         extra = entities.async_get_or_create("light", "synthetic", "fixture-outside-adaptive")
         entities.async_update_entity(extra.entity_id, area_id=area.id)
         hass.states.async_set(extra.entity_id, "off", lamp_attrs)
@@ -389,13 +391,30 @@ async def run(config_dir: str) -> None:
         restored_off = LichtzentraleStore(hass)
         await restored_off.async_load()
         assert restored_off.data["rooms"][area.id]["pre_off_lights"][lamp.entity_id]["on"]
-        assert switch.entity_id not in restored_off.data["rooms"][area.id]["pre_off_lights"]
+        assert restored_off.data["rooms"][area.id]["pre_off_lights"][switch.entity_id] == {"on": True}
+        assert hass.states.get(switch.entity_id).state == "off"
         result = await async_toggle_room(hass, final, area.id, True)
-        assert result["applied"] == [lamp.entity_id]
+        assert result["applied"] == room_ids
         assert hass.states.get(lamp.entity_id).attributes["brightness"] == 87
         assert hass.states.get(extra.entity_id).state == "off"
         assert hass.states.get(switch.entity_id).state == "on"
-        assert all(call.data.get("entity_id") != switch.entity_id for call in calls[count:])
+        assert [call.service for call in calls[count:] if call.data.get("entity_id") == switch.entity_id] == ["turn_off", "turn_off", "turn_on"]
+        # Switch-only rooms obey direct room commands, even without a prior snapshot.
+        switch_area = area_registry.async_get(hass).async_create("Fixture switch room")
+        entities.async_update_entity(switch.entity_id, area_id=switch_area.id)
+        hass.states.async_set(switch.entity_id, "off")
+        assert switch_area.id not in final.data["rooms"]
+        assert hass.states.get(switch.entity_id).state == "off"
+        assert not next(room for room in list_rooms(hass, final) if room["area_id"] == switch_area.id)["on"]
+        await async_toggle_room(hass, final, switch_area.id, True)
+        assert hass.states.get(switch.entity_id).state == "on"
+        assert next(room for room in list_rooms(hass, final) if room["area_id"] == switch_area.id)["on"]
+        await async_toggle_room(hass, final, switch_area.id)
+        assert hass.states.get(switch.entity_id).state == "off"
+        await async_toggle_room(hass, final, switch_area.id, True)
+        await async_toggle_room(hass, final, switch_area.id, False)
+        assert hass.states.get(switch.entity_id).state == "off"
+        entities.async_update_entity(switch.entity_id, area_id=area.id)
         hass.states.async_set(switch.entity_id, "off")
         await final.async_set_lights(room_ids)
         # Stage 2b: persisted positions, spatial palette/wave, and native-color
@@ -454,7 +473,8 @@ def main() -> None:
         "synthetic Hue controller dispatch; revoked-target and grouped-target rejection; "
         "dynamic timer/color rotation/room-off stop; Adaptive Lighting absence, validated "
         "mapping, scene pause, off/on resume and persisted room defaults; persisted positions, "
-        "spatial wave timer, palette switch exclusion, pre-off restore, adaptive subset-only on, "
+        "spatial wave timer, palette switch exclusion, pre-off lamp/switch restore, switch-only "
+        "room commands/status, adaptive subset-only on, "
         "current-color freeze with and without local run, no off-lamp wake."
     )
     print(

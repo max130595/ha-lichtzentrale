@@ -26,6 +26,7 @@ def list_rooms(hass: HomeAssistant, store: LichtzentraleStore) -> list[dict]:
         members = [item for item in lights if item["allowed"] and item["area_id"] == area.id]
         if not members:
             continue
+        status_members = [item for item in members if item["domain"] == "light"] or members
         brightness = [
             item["brightness"]
             for item in members
@@ -36,7 +37,7 @@ def list_rooms(hass: HomeAssistant, store: LichtzentraleStore) -> list[dict]:
                 "area_id": area.id,
                 "name": area.name,
                 "lights": members,
-                "on": any(item["on"] for item in members if item["domain"] == "light"),
+                "on": any(item["on"] for item in status_members),
                 "brightness": round(sum(brightness) / len(brightness)) if brightness else None,
                 "available_count": sum(item["available"] for item in members),
                 "last_scene_id": store.data["rooms"].get(area.id, {}).get("last_scene_id"),
@@ -176,11 +177,11 @@ async def async_toggle_room(hass, store, area_id, on=None, context=None):
 
 
 def _remember_light(state):
-    """Capture usable light values only, never ceiling switches."""
+    """Capture native light values and only the on/off state for switches."""
     from homeassistant.util.color import color_hs_to_xy, color_RGB_to_xy
 
     value = {"on": state.state == "on"}
-    if not value["on"]:
+    if state.domain == "switch" or not value["on"]:
         return value
     attrs = state.attributes
     brightness = attrs.get("brightness")
@@ -207,7 +208,7 @@ def _remember_light(state):
 
 
 async def _toggle_room(hass, store, area_id, on=None, context=None):
-    """Restore pre-off lamps or AL's subset; never toggle ceiling switches."""
+    """Restore pre-off members or AL targets; switch-only rooms toggle directly."""
     validate_control_options(on=on)
     room_targets(hass, store, area_id)
     from .dynamic_scenes import stop_dynamic
@@ -216,8 +217,10 @@ async def _toggle_room(hass, store, area_id, on=None, context=None):
     # Cancelling a loop can yield; do not retain grants or registry membership.
     targets = room_targets(hass, store, area_id)
     states = [hass.states.get(entity_id) for entity_id in targets]
+    light_states = [state for state in states if state.domain == "light"]
+    switch_only = not light_states
     if on is None:
-        on = not any(state.state == "on" for state in states if state.domain == "light")
+        on = not any(state.state == "on" for state in (light_states or states))
     settings = store.data["rooms"].get(area_id, {})
     if on and settings.get("default_on") == "adaptive":
         from .adaptive import async_turn_on_adaptive
@@ -230,7 +233,7 @@ async def _toggle_room(hass, store, area_id, on=None, context=None):
         snapshot = {
             state.entity_id: _remember_light(state)
             for state in states
-            if state.domain == "light" and state.state in {"on", "off"}
+            if state.state in {"on", "off"}
         }
         # A partial failure keeps the same off cycle across retries/reloads.
         # Only merge currently-on values: already switched-off lamps retain their
@@ -259,16 +262,14 @@ async def _toggle_room(hass, store, area_id, on=None, context=None):
     calls, skipped = [], []
     for state in states:
         value = saved.get(state.entity_id, {}) if isinstance(saved, dict) else {}
-        if (
-            state.domain != "light"
-            or state.state not in {"on", "off"}
-            or (on and value.get("on") is not True)
+        if state.state not in {"on", "off"} or (
+            on and not switch_only and value.get("on") is not True
         ):
             skipped.append(state.entity_id)
             continue
         options = (
             {key: value[key] for key in ("brightness", "xy", "color_temp_kelvin") if key in value}
-            if on
+            if on and state.domain == "light"
             else {}
         )
         try:

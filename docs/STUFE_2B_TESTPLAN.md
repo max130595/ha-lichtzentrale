@@ -56,19 +56,28 @@ die hier beschriebenen Switch- und Einschaltregeln ersetzen deren ältere Erwart
 
 ## Raum aus/an und natürliches Licht
 
-1. Ohne natürliches Licht: zwei Lampen an, eine aus, Deckenlicht aus. Raum aus und wieder an:
-   nur die zuvor eingeschalteten Einzellichter mit ihrem gespeicherten Zustand kommen zurück.
+1. Gemischter Raum ohne natürliches Licht: zwei Lampen an, eine aus, ein freigegebener
+   Switch an und einer aus. Raum aus schaltet alle verfügbaren freigegebenen Ziele aus.
+   Im serverseitigen Vor-Aus-Snapshot stehen beide Switches nur mit ihrem An/Aus-Wert.
+   Raum ein stellt nur die zuvor eingeschalteten Lampen und Switches wieder her.
 2. Raum mehrfach ausschalten, dann an: der gespeicherte Vor-Aus-Zustand bleibt erhalten.
-   Nach Integration-Neuladen wiederholen. Auch Teilfehler beim Ausschalten mit anschließendem
-   erneutem Ausschalten dürfen vorherige An-Zustände nicht verlieren.
-   Deckenlicht-Switches bleiben bei Raum aus/an insgesamt unverändert (an bleibt an, aus bleibt aus). Neue, verschobene oder nicht mehr freigegebene Lampen ebenfalls nicht.
-3. Ohne vorher gespeicherten Zustand schaltet Raum an vorsichtshalber keine neuen Lampen ein;
-   gewünschte Lampen zuerst einzeln einschalten und anschließend den Raum aus/an verwenden.
-4. Natürliches Licht nur für eine Teilmenge der Raumlampen konfigurieren. Mit Einschaltregel
-   Natürliches Licht den Raum einschalten: nur diese Teilmenge wird eingeschaltet.
-   Andere Lampen und Deckenlicht bleiben aus. Ungültige/entfernte Zuordnung darf nicht auf
-   „alle Lampen an“ zurückfallen.
-5. Ohne installierte Adaptive-Lighting-Integration bleiben deren Bedienelemente verborgen.
+   Nach Integration-Neuladen wiederholen. Auch Teilfehler beim Ausschalten von Lampen oder
+   Switches mit anschließendem erneutem Ausschalten dürfen vorherige An-Zustände nicht verlieren.
+   Neue, verschobene oder nicht mehr freigegebene Ziele werden nicht eingeschaltet.
+3. Ohne vorher gespeicherten Zustand schaltet Raum an in gemischten Räumen vorsichtshalber
+   keine neuen Ziele ein. Eine ausgeschaltete oder nicht verfügbare `light`-Entity macht
+   einen gemischten Raum nicht zu einem reinen Switch-Raum.
+4. Natürliches Licht nur für eine Teilmenge der Raumlampen konfigurieren. Im gespeicherten
+   Vor-Aus-Zustand einen Switch mit an haben. Raum ein mit Natürliches Licht aktiviert nur
+   die Adaptive-Lighting-Teilmenge; alle Switch-Lichter bleiben aus. Eine ungültige/entfernte
+   Zuordnung darf nicht auf „alles an“ zurückfallen.
+5. Reiner Switch-Raum: explizit ein, aus und umschalten testen, auch ohne vorherigen Snapshot.
+   Alle freigegebenen verfügbaren Switch-Lichter folgen direkt. Der Raum-An-Status richtet
+   sich nach den Schaltern. Nicht verfügbare Switches, fremde Räume und entzogene Freigaben
+   werden sicher ausgelassen. Mit Einschaltverhalten Natürliches Licht werden keine Switches eingeschaltet.
+6. In gemischten Räumen weiterhin prüfen: ein allein eingeschalteter Switch bestimmt nicht
+   den Raum-An-Status. Einzelbedienung und gespeicherte Snapshot-Szenen bleiben möglich.
+7. Ohne installierte Adaptive-Lighting-Integration bleiben deren Bedienelemente verborgen.
 
 ## Dynamik stoppen, einschließlich Hue
 
