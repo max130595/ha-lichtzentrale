@@ -1,3 +1,4 @@
+# Geändert für Lichtzentrale
 """Scene recalls use synthetic registry-backed devices and fail closed."""
 
 import asyncio
@@ -415,3 +416,27 @@ async def test_never_activated_hue_scene_is_available_and_recallable(hass, store
     assert result == {"applied": [hue[1].entity_id], "skipped": []}
     call.assert_awaited_once()
     assert store.data["rooms"][hue[0]]["last_scene_id"] == scene["id"]
+
+
+async def test_hue_preview_uses_resource_colors_and_refreshes_existing_import(hass, store, hue):
+    from homeassistant.util.color import color_xy_to_RGB
+
+    hue[4].actions[0].action = SimpleNamespace(
+        color=SimpleNamespace(xy=SimpleNamespace(x=0.55, y=0.35)),
+        on=SimpleNamespace(on=True),
+    )
+    expected = "#%02x%02x%02x" % color_xy_to_RGB(0.55, 0.35)
+    saved = await save_hue(hass, store, hue)
+    assert saved["preview"] == [expected]
+    assert list_hue_scenes(hass, store)[0]["preview"] == [expected]
+    hue[4].actions[0].action.color.xy.x = 0.25
+    assert list_scenes(store, hass=hass)[0]["preview"] != [expected]
+    assert list_scenes(store)[0]["preview"] == [expected]
+
+
+async def test_hue_preview_handles_missing_or_invalid_colors(hass, store, hue):
+    hue[4].actions[0].action = SimpleNamespace(
+        color=SimpleNamespace(xy=SimpleNamespace(x=float("nan"), y=0.35))
+    )
+    saved = await save_hue(hass, store, hue)
+    assert saved["preview"] == ["#b6c9ce", "#8396a1"]

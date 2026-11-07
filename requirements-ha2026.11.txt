@@ -1,3 +1,6 @@
 # Target smoke environment without incompatible older pytest fixtures.
 homeassistant==2026.11.0
 home-assistant-frontend==20261028.4
+
+# Native Hue model compatibility in the target smoke test only.
+aiohue==4.9.0

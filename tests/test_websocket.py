@@ -1,3 +1,4 @@
+# Geändert für Lichtzentrale
 """Real authenticated WebSocket protocol and admin authorization."""
 
 from unittest.mock import AsyncMock, patch
@@ -128,6 +129,10 @@ async def test_unapproved_apply_returns_error_without_service_calls(hass, client
         ("rooms/list", {}),
         ("scenes/list", {}),
         ("hue_scenes/list", {}),
+        ("dynamic/list", {}),
+        ("dynamic/stop", {"area_id": "fixture"}),
+        ("adaptive/status", {}),
+        ("adaptive/set", {"area_id": "fixture", "enabled": True}),
         ("room/toggle", {"area_id": "fixture_room"}),
         ("room/brightness", {"area_id": "fixture_room", "brightness": 120}),
         ("light/set", {"entity_id": "light.fixture_a", "on": True}),
@@ -190,6 +195,10 @@ async def test_room_scene_roundtrip_protocol(hass, client, store, light_calls):
         ("rooms/list", {}),
         ("scenes/list", {}),
         ("hue_scenes/list", {}),
+        ("dynamic/list", {}),
+        ("dynamic/stop", {"area_id": "fixture"}),
+        ("adaptive/status", {}),
+        ("adaptive/set", {"area_id": "fixture", "enabled": True}),
         ("scene/apply", {"scene_id": "fixture"}),
     ],
 )

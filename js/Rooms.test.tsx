@@ -106,3 +106,22 @@ describe('Antwortreihenfolge und Sortierung', () => {
     await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scenes/reorder', area_id: room.area_id, scene_ids: ['test_second', scene.id]}));
   });
 });
+
+
+it('shows the selected room in the main heading', async () => {
+  const callWS = vi.fn(async (request: {type: string}) => request.type.endsWith('rooms/list') ? [room] : []);
+  render(<App hass={{callWS} as Hass}/>);
+  fireEvent.click(await screen.findByRole('button', {name: 'Testraum'}));
+  expect(screen.getByRole('heading', {level: 1})).toHaveTextContent('Testraum');
+});
+
+
+it('remembers the selected room after visiting the gallery', async () => {
+  const callWS = vi.fn(async (request: {type: string}) => request.type.endsWith('rooms/list') ? [room] : []);
+  render(<App hass={{callWS} as Hass}/>);
+  fireEvent.click(await screen.findByRole('button', {name: 'Testraum'}));
+  fireEvent.click(screen.getByRole('button', {name: 'Galerie'}));
+  fireEvent.click(screen.getByRole('button', {name: 'Raum'}));
+  expect(await screen.findByRole('button', {name: 'Raum einschalten'})).toBeVisible();
+  expect(screen.getByRole('heading', {level: 1})).toHaveTextContent('Testraum');
+});

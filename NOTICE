@@ -12,8 +12,9 @@ Changed source files are marked "Geändert für Lichtzentrale".
 
 The upstream presets, preset names, photos, logos and custom icon assets are not
 included. Lichtzentrale's twelve palette names, color combinations and generated
-gradient previews are original. Dynamic scenes and upstream custom-preset file
-handling are deliberately not imported in stage 0.
+gradient previews are original. In stage 2, the upstream dynamic-scene loop is
+adapted to persisted room scenes with validated targets, lifecycle cleanup and
+room-scoped stopping. Upstream custom-preset file handling is not imported.
 
 The frontend includes React, React DOM and Scheduler (MIT). Their complete
 license texts and extracted bundle notices are distributed in

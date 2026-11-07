@@ -116,6 +116,14 @@ class LichtzentraleStore:
             await self._store.async_save(updated)
             self._data = updated
 
+    async def async_update_room(self, area_id: str, changes: dict) -> None:
+        """Merge validated room settings atomically with concurrent scene writes."""
+        async with self._lock:
+            updated = deepcopy(self._data)
+            updated["rooms"].setdefault(area_id, {}).update(deepcopy(changes))
+            await self._store.async_save(updated)
+            self._data = updated
+
     async def async_remove(self) -> None:
         """Remove integration data when its config entry is deleted."""
         await self._store.async_remove()

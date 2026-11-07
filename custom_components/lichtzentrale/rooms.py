@@ -9,6 +9,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry as ar
 
 from .color_temperature import find_closest_ct_match
+from .const import DOMAIN
 from .lights import entity_area_id, list_lights, validate_lights
 from .storage import LichtzentraleStore
 
@@ -143,8 +144,21 @@ async def async_set_light(
 
 
 async def async_toggle_room(hass, store, area_id, on=None, context=None):
+    from asyncio import Lock
+
+    locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
+    async with locks.setdefault(area_id, Lock()):
+        return await _toggle_room(hass, store, area_id, on, context)
+
+
+async def _toggle_room(hass, store, area_id, on=None, context=None):
     """Toggle all available approved room lights in parallel."""
     validate_control_options(on=on)
+    targets = room_targets(hass, store, area_id)
+    from .dynamic_scenes import stop_dynamic
+
+    await stop_dynamic(hass, area_id)
+    # Cancelling a loop can yield; do not retain grants or registry membership.
     targets = room_targets(hass, store, area_id)
     states = [hass.states.get(entity_id) for entity_id in targets]
     if on is None:
@@ -155,7 +169,12 @@ async def async_toggle_room(hass, store, area_id, on=None, context=None):
             skipped.append(state.entity_id)
         else:
             calls.append((state.domain, *light_service_data(state, on=on)))
-    return await async_dispatch(hass, calls, skipped, context)
+    result = await async_dispatch(hass, calls, skipped, context)
+    if on and store.data["rooms"].get(area_id, {}).get("default_on") == "adaptive":
+        from .adaptive import async_resume_adaptive
+
+        await async_resume_adaptive(hass, store, area_id, context=context)
+    return result
 
 
 async def async_room_brightness(hass, store, area_id, brightness, context=None):

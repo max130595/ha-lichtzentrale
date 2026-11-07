@@ -7,13 +7,15 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service import async_register_admin_service
 
+from .adaptive import async_set_adaptive
 from .const import DOMAIN, SERVICE_APPLY_PALETTE
+from .dynamic_scenes import DynamicSceneManager, async_stop_room
 from .palettes import async_apply_palette
 from .rooms import async_toggle_room
 from .scenes import async_apply_scene
 from .storage import LichtzentraleStore
 from .view import async_remove_view, async_setup_view
-from .websocket_api import APPLY_FIELDS, async_setup_websocket_api, get_store
+from .websocket_api import ADAPTIVE_FIELDS, APPLY_FIELDS, async_setup_websocket_api, get_store
 
 CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
@@ -29,6 +31,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception:
         runtime.pop("store", None)
         raise
+    runtime["dynamic"] = DynamicSceneManager(hass, store)
     if not runtime.get("websocket_registered"):
         async_setup_websocket_api(hass)
         runtime["websocket_registered"] = True
@@ -77,15 +80,42 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=vol.Schema({vol.Required("area_id"): cv.string, vol.Optional("on"): cv.boolean}),
         supports_response=SupportsResponse.OPTIONAL,
     )
+
+    async def stop_dynamic_service(call):
+        return await async_stop_room(hass, get_store(hass), call.data["area_id"])
+
+    async def set_adaptive_service(call):
+        return await async_set_adaptive(hass, get_store(hass), context=call.context, **call.data)
+
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        "stop_dynamic",
+        stop_dynamic_service,
+        schema=vol.Schema({vol.Required("area_id"): cv.string}),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        "set_adaptive",
+        set_adaptive_service,
+        schema=vol.Schema(ADAPTIVE_FIELDS),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload without removing persisted user settings."""
+    if active := hass.data[DOMAIN].pop("dynamic", None):
+        await active.shutdown()
     await async_remove_view(hass)
     hass.services.async_remove(DOMAIN, SERVICE_APPLY_PALETTE)
     hass.services.async_remove(DOMAIN, "apply_scene")
     hass.services.async_remove(DOMAIN, "toggle_room")
+    hass.services.async_remove(DOMAIN, "stop_dynamic")
+    hass.services.async_remove(DOMAIN, "set_adaptive")
     hass.data[DOMAIN].pop("store", None)
     return True
 

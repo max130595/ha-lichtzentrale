@@ -64,3 +64,45 @@ toggle_room:
       description: Ohne Vorgabe wird der Raumzustand umgeschaltet.
       selector:
         boolean:
+
+stop_dynamic:
+  name: Dynamische Szene stoppen
+  description: Stoppt die laufende Lichtzentrale-Palettenszene im Raum und lässt die aktuelle Lichtfarbe bestehen.
+  fields:
+    area_id:
+      name: Raum
+      required: true
+      selector:
+        area:
+
+set_adaptive:
+  name: Natürliches Licht einstellen
+  description: Steuert und konfiguriert optionales Adaptive Lighting ausschließlich für geprüfte Raumlampen.
+  fields:
+    area_id:
+      name: Raum
+      required: true
+      selector:
+        area:
+    enabled:
+      name: Natürliches Licht einschalten
+      description: Ohne diese Angabe wird nur die Zuordnung oder Einschaltregel gespeichert.
+      selector:
+        boolean:
+    adaptive_switch:
+      name: Adaptive-Lighting-Schalter
+      description: Nur echte Adaptive-Lighting-Hauptschalter mit ausschließlich freigegebenen Lampen dieses Raums sind zulässig.
+      selector:
+        entity:
+          filter:
+            - domain: switch
+              integration: adaptive_lighting
+    default_on:
+      name: Verhalten beim Einschalten
+      selector:
+        select:
+          options:
+            - label: Natürliches Licht
+              value: adaptive
+            - label: Zuletzt verwendete Einstellung
+              value: last
