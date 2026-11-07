@@ -51,7 +51,8 @@ Bad oben in Tests oder Beispielen, Schalter (`switch`) werden nie gedimmt.
   stoppen, optional Raumauswahl. Kein automatisches Auslösen.
 - **Beliebige Schalter freigeben:** Jede `switch`-Entity (nicht nur Shelly mit „Licht“ im Namen)
   lässt sich in der Freigabe ausdrücklich als Licht markieren. Die bisherige Shelly-Erkennung
-  bleibt als Vorschlag erhalten.
+  bleibt als Vorschlag erhalten. Die Vorgabe in AGENTS.md („nur die in HAUS.md genannten switch-Deckenlichter“)
+  entsprechend auf „ausdrücklich als Licht freigegebene switch-Entities“ anpassen.
 - README: Hinweis „Privates Projekt, ohne Support und ohne Gewähr“; Installationsanleitung über
   HACS als benutzerdefiniertes Repository; Liste der Voraussetzungen (HA-Version, optional
   Adaptive Lighting, optional Hue Bridge für Hue-Szenen).
