@@ -5,6 +5,10 @@ export interface ApplyResult { applied: string[]; skipped: string[]; failed?: st
 export interface Hass { callWS<T>(message: {type: string; [key: string]: unknown}): Promise<T> }
 export type Distribution = 'zufall' | 'verlauf_links_rechts' | 'verlauf_vorne_hinten' | 'hoehe';
 export interface Position {cell: [number, number]; height: 'boden' | 'moebel' | 'hintergrund' | 'decke'}
-export interface Room {positions?: Record<string, Position>; area_id: string; name: string; lights: Light[]; on: boolean; brightness: number | null; available_count: number; last_scene_id?: string | null}
+export interface Room {cycle?: string[]; default_on?: string; positions?: Record<string, Position>; area_id: string; name: string; lights: Light[]; on: boolean; brightness: number | null; available_count: number; last_scene_id?: string | null}
 export interface Scene {verteilung?: Distribution; dynamic?: {enabled: boolean; interval: number; transition: number; welle?: boolean}; id: string; name: string; area_id: string; kind: 'snapshot' | 'hue' | 'palette'; lights?: Record<string, {on: boolean; brightness?: number; xy?: number[]; color_temp_kelvin?: number}>; hue_scene?: string; palette_id?: string; brightness?: number; favorite: boolean; order: number; preview: string[]}
 export interface HueScene {entity_id: string; name: string; area_id: string; available: boolean}
+
+export type BindingAction = 'toggle_room' | 'turn_on_room' | 'turn_off_room' | 'next_scene' | 'scene' | 'dim_up' | 'dim_down' | 'adaptive_on' | 'adaptive_off' | 'stop_dynamic';
+export interface Binding {id: string; event_entity: string; event_type: string; action: BindingAction; area_id: string; params: {scene_id?: string}}
+export interface ButtonEntity {entity_id: string; name: string; device_id: string | null; device_name: string; area_id: string | null; event_types: string[]; available: boolean}

@@ -1,11 +1,12 @@
 // Geändert für Lichtzentrale
 // @vitest-environment jsdom
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import {StrictMode, useState} from 'react';
 import {Rooms, rgbToXy} from './Rooms';
 import {App} from './App';
+import {styles} from './styles';
 import type {Hass, Room, Scene} from './types';
 const room: Room = {area_id: 'test_area', name: 'Testraum', on: false, brightness: null, available_count: 1, last_scene_id: 'test_scene', lights: [{entity_id: 'switch.test_fixture', name: 'Testschalter', area_id: 'test_area', area_name: 'Testraum', allowed: true, available: true, on: false, supported_color_modes: ['onoff']}]};
 const scene: Scene = {id: 'test_scene', name: 'Testszene', area_id: room.area_id, kind: 'snapshot', favorite: false, order: 0, lights: {'switch.test_fixture': {on: true}}, preview: ['#abcdef']};
@@ -23,6 +24,19 @@ function setup(r = room) {
 afterEach(cleanup);
 async function open() {fireEvent.click(await screen.findByRole('button', {name: 'Testraum'}));}
 describe('Räume und Szenen', () => {
+  it('renders a frameless room heading with a focusable native keyboard activation target', async () => {
+    setup();
+    const heading = await screen.findByRole('heading', {name: 'Testraum', level: 3});
+    const button = within(heading).getByRole('button', {name: 'Testraum'});
+    expect(button.tagName).toBe('BUTTON'); expect(button.tabIndex).toBe(0);
+    button.focus(); expect(button).toHaveFocus();
+    expect(styles).toMatch(/\.room-link\{[^}]*border:0[^}]*background:transparent/);
+    // A browser generates a zero-detail click for Enter/Space on a native button.
+    // jsdom does not synthesize that default action from a keydown by itself.
+    fireEvent.click(button, {detail: 0});
+    expect(await screen.findByRole('button', {name: 'Raum einschalten'})).toBeVisible();
+    expect(screen.getByRole('heading', {name: 'Testraum', level: 2})).toBeVisible();
+  });
   it('defaults to rooms and shows persisted last scene with restart', async () => {
     const callWS = vi.fn(async (req: {type: string}) => req.type.endsWith('rooms/list') ? [room] : req.type === 'lichtzentrale/scenes/list' ? [scene] : []);
     render(<App hass={{callWS} as Hass}/>);

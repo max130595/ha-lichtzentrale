@@ -37,7 +37,7 @@ from homeassistant.config_entries import (
 from homeassistant.config_entries import (
     ConfigEntries,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import CoreState, HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry, device_registry, entity_registry
 from homeassistant.helpers.storage import Store
@@ -54,6 +54,10 @@ from custom_components.lichtzentrale.adaptive import (  # noqa: E402
 )
 from custom_components.lichtzentrale.adaptive import (
     status as adaptive_status,
+)
+from custom_components.lichtzentrale.bindings import (  # noqa: E402
+    BindingManager,
+    list_buttons,
 )
 from custom_components.lichtzentrale.config_flow import LichtzentraleConfigFlow  # noqa: E402
 from custom_components.lichtzentrale.const import DOMAIN, STORAGE_KEY  # noqa: E402
@@ -451,6 +455,69 @@ async def run(config_dir: str) -> None:
         count = len(calls)
         assert (await async_stop_room(hass, final, area.id))["applied"] == []
         assert len(calls) == count
+        # Stage 3: genuine HA state-change events, server-persisted bindings,
+        # relative dim dispatch and delayed synthetic Hue double release.
+        button = entities.async_get_or_create("event", "hue", "fixture-button")
+        attributes = {"event_types": ["short_release", "clock_wise"], "event_type": "short_release"}
+        hass.states.async_set(button.entity_id, "2026-01-01T00:00:00+00:00", attributes)
+        assert "double_short_release" in list_buttons(hass)[0]["event_types"]
+        single = await final.async_save_binding({
+            "event_entity": button.entity_id, "event_type": "short_release",
+            "action": "turn_on_room", "area_id": area.id, "params": {},
+        })
+        await final.async_save_binding({
+            "event_entity": button.entity_id, "event_type": "clock_wise",
+            "action": "dim_up", "area_id": area.id, "params": {},
+        })
+        await final.async_set_room_settings(area.id, {
+            "cycle": [snapshot["id"], dynamic["id"]], "default_on": snapshot["id"],
+        })
+        button_store = LichtzentraleStore(hass)
+        await button_store.async_load()
+        assert button_store.data == final.data
+        bindings = BindingManager(hass, final)
+        hass.data[DOMAIN]["bindings"] = bindings
+        bindings.start()
+        hass.set_state(CoreState.running)
+        hass.states.async_set(button.entity_id, "2026-01-01T00:00:01+00:00", attributes)
+        await hass.async_block_till_done()
+        assert hass.states.get(lamp.entity_id).state == "on"
+        assert final.data["rooms"][area.id]["last_scene_id"] == snapshot["id"]
+        assert (await bindings.async_next_scene(area.id))["scene_id"] == snapshot["id"]
+        assert (await bindings.async_next_scene(area.id))["scene_id"] == dynamic["id"]
+        await async_stop_room(hass, final, area.id)
+        count = len(calls)
+        hass.states.async_set(button.entity_id, "2026-01-01T00:00:02+00:00", {
+            **attributes, "event_type": "clock_wise",
+        })
+        await hass.async_block_till_done()
+        assert len(calls) == count + 1
+        assert calls[-1].domain == "light"
+        assert calls[-1].data == {"entity_id": lamp.entity_id, "brightness_step_pct": 10}
+        await final.async_save_binding({
+            "event_entity": button.entity_id, "event_type": "double_short_release",
+            "action": "turn_off_room", "area_id": area.id, "params": {},
+        })
+        await final.async_set_double_click(200)
+        count = len(calls)
+        hass.states.async_set(button.entity_id, "2026-01-01T00:00:03+00:00", attributes)
+        await hass.async_block_till_done()
+        assert len(calls) == count
+        hass.states.async_set(button.entity_id, "2026-01-01T00:00:04+00:00", attributes)
+        await hass.async_block_till_done()
+        assert hass.states.get(lamp.entity_id).state == "off"
+        count = len(calls)
+        await asyncio.sleep(0.25)
+        await hass.async_block_till_done()
+        assert len(calls) == count  # No extra single action after the double.
+        hass.states.async_set(button.entity_id, "2026-01-01T00:00:05+00:00", attributes)
+        await hass.async_block_till_done()
+        await bindings.shutdown()
+        await asyncio.sleep(0.25)
+        await hass.async_block_till_done()
+        assert len(calls) == count  # Unload cancels the pending single.
+        await final.async_delete_binding(single["id"])
+        assert len(final.data["bindings"]) == 2
         await active.shutdown()
         assert not active.list()
         await final.async_remove()
@@ -475,7 +542,9 @@ def main() -> None:
         "mapping, scene pause, off/on resume and persisted room defaults; persisted positions, "
         "spatial wave timer, palette switch exclusion, pre-off lamp/switch restore, switch-only "
         "room commands/status, adaptive subset-only on, "
-        "current-color freeze with and without local run, no off-lamp wake."
+        "current-color freeze with and without local run, no off-lamp wake; runtime event "
+        "discovery, binding/cycle/default persistence, native timestamp event dispatch, "
+        "room-on scene, scene cycling, relative dim service payload, double release and unload cancellation."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "

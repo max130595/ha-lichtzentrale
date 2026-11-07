@@ -336,91 +336,96 @@ async def async_apply_scene(
     initial = _scene(store, scene_id)
     locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
     async with locks.setdefault(initial["area_id"], Lock()):
-        scene = _scene(store, scene_id)
-        area_id = scene["area_id"]
-        _area(hass, area_id)
-        from .adaptive import async_pause_adaptive
+        return await async_apply_scene_locked(hass, store, scene_id, context)
 
-        validate_dynamic(scene.get("dynamic", {}), scene["kind"])
-        validate_distribution(scene.get("verteilung", "zufall"))
-        if scene.get("dynamic", {}).get("welle") and scene.get("verteilung", "zufall") == "zufall":
-            _error("Für eine Welle bitte eine räumliche Verteilung auswählen.")
-        # Validate all targets before pausing another integration or replacing a loop.
-        checked = (
-            hue_scene_targets(hass, scene["hue_scene"])
-            if scene["kind"] == "hue"
-            else scene["lights"]
-            if scene["kind"] == "snapshot"
-            else room_targets(hass, store, area_id)
+
+async def async_apply_scene_locked(hass, store, scene_id, context=None):
+    """Recall while the caller holds this room's scene lock (including room-on)."""
+    scene = _scene(store, scene_id)
+    area_id = scene["area_id"]
+    _area(hass, area_id)
+    from .adaptive import async_pause_adaptive
+
+    validate_dynamic(scene.get("dynamic", {}), scene["kind"])
+    validate_distribution(scene.get("verteilung", "zufall"))
+    if scene.get("dynamic", {}).get("welle") and scene.get("verteilung", "zufall") == "zufall":
+        _error("Für eine Welle bitte eine räumliche Verteilung auswählen.")
+    # Validate all targets before pausing another integration or replacing a loop.
+    checked = (
+        hue_scene_targets(hass, scene["hue_scene"])
+        if scene["kind"] == "hue"
+        else scene["lights"]
+        if scene["kind"] == "snapshot"
+        else room_targets(hass, store, area_id)
+    )
+    _targets(hass, store, area_id, checked)
+    if scene["kind"] == "snapshot":
+        for value in scene["lights"].values():
+            validate_control_options(**value)
+    await stop_dynamic(hass, area_id)
+    if scene["kind"] in {"palette", "hue"} or any("xy" in v for v in scene["lights"].values()):
+        await async_pause_adaptive(hass, store, area_id, context=context)
+    if scene["kind"] == "palette":
+        result = await async_apply_palette(
+            hass,
+            store,
+            scene["palette_id"],
+            room_targets(hass, store, area_id),
+            brightness=scene.get("brightness"),
+            context=context,
+            manage=False,
+            verteilung=scene.get("verteilung", "zufall"),
+            welle=scene.get("dynamic", {}).get("welle", False),
+            transition=scene["dynamic"]["transition"],
         )
-        _targets(hass, store, area_id, checked)
-        if scene["kind"] == "snapshot":
-            for value in scene["lights"].values():
-                validate_control_options(**value)
-        await stop_dynamic(hass, area_id)
-        if scene["kind"] in {"palette", "hue"} or any("xy" in v for v in scene["lights"].values()):
-            await async_pause_adaptive(hass, store, area_id, context=context)
-        if scene["kind"] == "palette":
-            result = await async_apply_palette(
-                hass,
-                store,
-                scene["palette_id"],
-                room_targets(hass, store, area_id),
-                brightness=scene.get("brightness"),
-                context=context,
-                manage=False,
-                verteilung=scene.get("verteilung", "zufall"),
-                welle=scene.get("dynamic", {}).get("welle", False),
-                transition=scene["dynamic"]["transition"],
-            )
-        elif scene["kind"] == "hue":
-            entity_id = scene["hue_scene"]
-            targets = _targets(hass, store, area_id, hue_scene_targets(hass, entity_id))
-            unavailable = [
-                e for e in targets if hass.states.get(e).state in {"unknown", "unavailable"}
-            ]
-            state = hass.states.get(entity_id)
-            if unavailable or state.state == "unavailable":
-                return {"applied": [], "skipped": targets}
-            await hass.services.async_call(
-                "hue",
-                "activate_scene",
-                # Dynamische Hue-Szenen auch dynamisch starten (Farben wandern weiter).
-                {"entity_id": entity_id, "dynamic": bool(state.attributes.get("is_dynamic"))},
-                blocking=True,
-                context=context,
-            )
-            result = {"applied": targets, "skipped": []}
-        else:
-            targets = _targets(hass, store, area_id, scene["lights"])
-            commands = []
-            skipped = []
-            for entity_id in targets:
-                state = hass.states.get(entity_id)
-                if state.state in {"unknown", "unavailable"}:
-                    skipped.append(entity_id)
-                    continue
-                value = scene["lights"][entity_id]
-                validate_control_options(**value)
-                payload = light_service_data(state, **value)
-                if payload is None:
-                    skipped.append(entity_id)
-                else:
-                    commands.append((state.domain, *payload))
-            result = await async_dispatch(hass, commands, skipped, context)
-        # Palette switches are intentionally excluded, not incomplete light recalls.
-        incomplete = [
-            e
-            for e in result.get("skipped", [])
-            if scene["kind"] != "palette" or not e.startswith("switch.")
+    elif scene["kind"] == "hue":
+        entity_id = scene["hue_scene"]
+        targets = _targets(hass, store, area_id, hue_scene_targets(hass, entity_id))
+        unavailable = [
+            e for e in targets if hass.states.get(e).state in {"unknown", "unavailable"}
         ]
-        if not incomplete and not result.get("failed") and result["applied"]:
-            await store.async_set_last_scene(area_id, scene_id)
-        if (
-            scene.get("dynamic", {}).get("enabled")
-            and result["applied"]
-            and not result.get("failed")
-        ):
-            if active := manager(hass):
-                await active.start(scene, context, result["applied"])
-        return result
+        state = hass.states.get(entity_id)
+        if unavailable or state.state == "unavailable":
+            return {"applied": [], "skipped": targets}
+        await hass.services.async_call(
+            "hue",
+            "activate_scene",
+            # Dynamische Hue-Szenen auch dynamisch starten (Farben wandern weiter).
+            {"entity_id": entity_id, "dynamic": bool(state.attributes.get("is_dynamic"))},
+            blocking=True,
+            context=context,
+        )
+        result = {"applied": targets, "skipped": []}
+    else:
+        targets = _targets(hass, store, area_id, scene["lights"])
+        commands = []
+        skipped = []
+        for entity_id in targets:
+            state = hass.states.get(entity_id)
+            if state.state in {"unknown", "unavailable"}:
+                skipped.append(entity_id)
+                continue
+            value = scene["lights"][entity_id]
+            validate_control_options(**value)
+            payload = light_service_data(state, **value)
+            if payload is None:
+                skipped.append(entity_id)
+            else:
+                commands.append((state.domain, *payload))
+        result = await async_dispatch(hass, commands, skipped, context)
+    # Palette switches are intentionally excluded, not incomplete light recalls.
+    incomplete = [
+        e
+        for e in result.get("skipped", [])
+        if scene["kind"] != "palette" or not e.startswith("switch.")
+    ]
+    if not incomplete and not result.get("failed") and result["applied"]:
+        await store.async_set_last_scene(area_id, scene_id)
+    if (
+        scene.get("dynamic", {}).get("enabled")
+        and result["applied"]
+        and not result.get("failed")
+    ):
+        if active := manager(hass):
+            await active.start(scene, context, result["applied"])
+    return result
