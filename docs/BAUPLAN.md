@@ -74,7 +74,7 @@ js/                    React + TypeScript Quellcode der Oberfläche (webpack, wi
 `adaptive/status`, `adaptive/set`,
 `bindings/list`, `binding/save`, `binding/delete`, `buttons/list` (alle Event-Entities mit Typen),
 `motion/get`, `motion/save`, `motion/set_enabled`,
-`schedules/list`, `schedule/save`, `schedule/delete`.
+`schedules/list`, `schedule/save`, `schedule/delete`, `schedule/set_enabled`, `schedule/test`.
 
 Services für eigene Automationen: `lichtzentrale.apply_scene`, `lichtzentrale.next_scene`,
 `lichtzentrale.toggle_room`, `lichtzentrale.stop_dynamic`, `lichtzentrale.set_adaptive`.
@@ -248,9 +248,41 @@ diese Taste überhaupt ein Doppelklick belegt ist.
   Nach Öffnen des Draft-PR endet die Arbeit einschließlich CI-Überwachung bis Claudes Rückmeldung.
 
 ### Stufe 4 – Zeitpläne
-- Auslöser Uhrzeit, Sonnenauf-/-untergang mit Versatz, Außenhelligkeit unter Schwelle
-  (ein in den Einstellungen wählbarer Lux-Sensor), Bedingungen, Wochentage.
-- **Fertig wenn:** „Bunt ab Sonnenuntergang“ im Wohnzimmer läuft zur richtigen Zeit an.
+
+- **Auslöser:** Lokale HA-Uhrzeit; Sonnenaufgang/-untergang mit −1440 bis +1440 Minuten
+  Versatz; zur Laufzeit wählbarer Illuminanzsensor mit Einheit `lx`, streng unter oder über
+  einer Schwelle. Lux muss 1–86400 Sekunden ununterbrochen erfüllt sein (Editor: fünf Minuten).
+  Gleichheit, unbekannte oder nicht verfügbare Werte setzen die Wartezeit zurück. Ein dauerhaft
+  erfüllter Wert löst einmal aus; eine neue Schwellenseite startet die nächste Wartezeit.
+- **Bedingungen:** Wochentage beziehen sich auf das tatsächliche lokale Ausführungsdatum,
+  einschließlich über Mitternacht verschobener Sonnenereignisse. Optional mindestens eine
+  ausgewählte `person` zu Hause; alle ausgewählten Personen müssen einen gültigen Zustand haben.
+  Optional Lichtziele an (mindestens eines) oder aus (alle). Unbekannte Ziele blockieren sicher.
+- **Aktionen:** Gespeicherte Szene (auch dynamisch); Natürliches Licht an/aus; Raum aus;
+  freigegebene Lampen und Lichtschalter an/aus mit optionaler Helligkeit; Bewegungsautomatik
+  eines Raums an/aus. Ziele, Freigaben und Bedingungen werden zur Laufzeit erneut geprüft.
+  Natürliches Licht verwendet die bereits geprüfte optionale Zuordnung, verändert keine
+  Freigaben und schaltet ausgeschaltete Lampen nicht ein.
+- **Übergänge:** Optional 0–1800 Sekunden. Nur unterstützende Lampen erhalten den Wert,
+  reine Schalter nie Helligkeit, Farbe oder Übergang. Der erste Tick dynamischer Paletten
+  wartet einen längeren Startübergang ab. Spätere Ticks behalten den Szenenübergang.
+- **Oberfläche:** Deutsche Liste mit Ein/Aus, Bearbeiten, Löschen, nächster Ausführung und
+  „Jetzt testen“. Der Test führt eine echte Aktion aus, auch bei deaktiviertem Plan, aber nur
+  wenn seine Bedingungen erfüllt sind. Bei Lux wird eine nächste Uhrzeit nur während der
+  Mindestdauer angezeigt, ansonsten ist der Auslöser ereignisabhängig. Keine Erfolgsmeldung
+  vor Serverbestätigung, Fehler und Teilergebnisse werden angezeigt.
+- **Speicherung/Lebenszyklus:** Ausschließlich Store `schedules`, keine Migration alter Daten
+  nötig, neue Pläne ausgeschaltet. Editieren, Deaktivieren, Löschen und Entladen verwerfen alte
+  Timer und wartende Befehle. Nach Neustart werden verpasste Termine nicht nachgeholt.
+  Lokale Uhrzeiten in einer Sommerzeitlücke entfallen, doppelte Uhrzeiten laufen einmal.
+- **Stufe-3b-Korrektur:** Bei reinen Switch-Zielen einer Bewegungsregel ist `brightness`
+  optional und darf `null` sein. Für eine Auswahl mit Lampen bleibt 1–255 erforderlich.
+- **Prüfung/Übergabe:** Ausschließlich synthetische Räume und Geräte in Tests und Beispielen.
+  [Stufe-4-Testplan](STUFE_4_TESTPLAN.md). Nach Öffnen des Draft-PR endet die Arbeit
+  einschließlich CI-Überwachung bis Claudes Rückmeldung.
+- **Fertig wenn:** Eine synthetische Szene zum Sonnenuntergang startet, Schwellendauer und
+  Bedingungen eingehalten werden, Schalter nur Ein/Aus erhalten und gespeicherte Pläne nach
+  Neuladen unverändert vorhanden sind.
 
 ## Tests
 

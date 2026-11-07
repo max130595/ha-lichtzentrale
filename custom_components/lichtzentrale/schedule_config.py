@@ -1,0 +1,136 @@
+# Geändert für Lichtzentrale
+"""Closed schedule schemas and runtime-only target/person discovery."""
+
+import math
+from copy import deepcopy
+from uuid import uuid4
+
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import entity_registry as er
+
+from .motion_config import list_lux_sensors, validate_boundary
+from .rooms import room_targets
+from .selected_lights import validate_selected_lights
+
+
+def list_persons(hass):
+    """Discover selectable persons without assuming installation-specific IDs."""
+    registry = er.async_get(hass)
+    return sorted([
+        {"entity_id": state.entity_id, "name": state.name,
+         "available": state.state not in {"unknown", "unavailable"}
+         and not state.attributes.get("restored")}
+        for state in hass.states.async_all("person")
+        if not ((entry := registry.async_get(state.entity_id)) and entry.disabled_by)
+    ], key=lambda item: (item["name"].casefold(), item["entity_id"]))
+
+
+def _require(value, message="Ungültiger Zeitplan."):
+    if not value:
+        raise ServiceValidationError(message)
+
+
+def action_targets(hass, store, action):
+    """Validate references/grants again and return the affected light targets."""
+    kind = action["type"]
+    if kind == "lights":
+        return validate_selected_lights(hass, store, action["entity_ids"])
+    if kind == "scene":
+        from .bindings import _check_scene
+        from .scenes import _scene, hue_scene_targets
+
+        scene = _scene(store, action["scene_id"])
+        _check_scene(hass, store, scene["id"], scene["area_id"])
+        if scene["kind"] == "snapshot":
+            targets = list(scene["lights"])
+        elif scene["kind"] == "hue":
+            targets = hue_scene_targets(hass, scene["hue_scene"])
+        else:
+            targets = [e for e in room_targets(hass, store, scene["area_id"])
+                       if e.startswith("light.")]
+    else:
+        area = action["area_id"]
+        _require(isinstance(area, str) and ar.async_get(hass).async_get_area(area),
+                 "Der Raum wurde nicht gefunden.")
+        if kind == "adaptive":
+            from .adaptive import _validated
+
+            targets = _validated(hass, store, area,
+                                 store.data["rooms"].get(area, {}).get("adaptive_switch"))
+        else:
+            if kind == "motion":
+                from .motion_config import validate_motion
+
+                validate_motion(hass, store, area,
+                                store.data["rooms"].get(area, {}).get("motion"))
+            targets = room_targets(hass, store, area)
+    return validate_selected_lights(hass, store, list(targets))
+
+
+def validate_schedule(hass, store, raw):
+    """Normalize new plans; reject stale update IDs and unknown nested fields."""
+    keys = {"name", "enabled", "trigger", "condition", "action", "transition"}
+    _require(isinstance(raw, dict) and set(raw) in (keys, keys | {"id"}))
+    result = deepcopy(raw)
+    if "id" in raw:
+        _require(isinstance(raw["id"], str) and any(
+            s["id"] == raw["id"] for s in store.data.get("schedules", [])
+        ), "Der Zeitplan wurde nicht gefunden. Bitte neu laden.")
+    else:
+        result["id"] = str(uuid4())
+    _require(isinstance(raw["name"], str) and 0 < len(raw["name"].strip()) <= 100,
+             "Bitte einen Namen mit höchstens 100 Zeichen eingeben.")
+    result["name"] = raw["name"].strip()
+    _require(type(raw["enabled"]) is bool)
+    transition = raw["transition"]
+    _require(transition is None or (type(transition) in (int, float)
+             and math.isfinite(transition) and 0 <= transition <= 1800),
+             "Die Übergangszeit muss 0 bis 1800 Sekunden betragen.")
+    trigger = raw["trigger"]
+    _require(isinstance(trigger, dict))
+    if trigger.get("type") == "lux":
+        _require(set(trigger) == {"type", "sensor_entity_id", "comparison", "threshold",
+                                  "duration_seconds"})
+        _require(isinstance(trigger["sensor_entity_id"], str) and trigger["sensor_entity_id"]
+                 in {s["entity_id"] for s in list_lux_sensors(hass)},
+                 "Bitte einen Illuminanzsensor mit Einheit lx wählen.")
+        _require(trigger["comparison"] in ("below", "above"))
+        _require(type(trigger["threshold"]) in (int, float)
+                 and math.isfinite(trigger["threshold"]) and trigger["threshold"] >= 0)
+        _require(type(trigger["duration_seconds"]) is int
+                 and 1 <= trigger["duration_seconds"] <= 86400)
+    else:
+        result["trigger"] = validate_boundary(trigger)
+    condition = raw["condition"]
+    _require(isinstance(condition, dict)
+             and set(condition) == {"weekdays", "person_entity_ids", "light_state"})
+    days, persons = condition["weekdays"], condition["person_entity_ids"]
+    _require(isinstance(days, list) and all(type(d) is int and 0 <= d <= 6 for d in days))
+    _require(isinstance(persons, list) and all(isinstance(p, str) and p in {
+        s["entity_id"] for s in list_persons(hass)} for p in persons),
+        "Eine ausgewählte Person wurde nicht gefunden.")
+    _require(condition["light_state"] in ("any", "on", "off"))
+    result["condition"]["weekdays"] = sorted(set(days))
+    result["condition"]["person_entity_ids"] = list(dict.fromkeys(persons))
+    action = raw["action"]
+    _require(isinstance(action, dict))
+    kind = action.get("type")
+    fields = {"scene": {"type", "scene_id"}, "adaptive": {"type", "area_id", "enabled"},
+              "room_off": {"type", "area_id"}, "motion": {"type", "area_id", "enabled"},
+              "lights": {"type", "entity_ids", "on", "brightness"}}
+    _require(isinstance(kind, str) and kind in fields and set(action) == fields[kind])
+    if kind in ("adaptive", "motion"):
+        _require(type(action["enabled"]) is bool)
+    if kind == "scene":
+        _require(isinstance(action["scene_id"], str))
+    if kind == "lights":
+        _require(type(action["on"]) is bool)
+        brightness = action["brightness"]
+        _require(brightness is None or (type(brightness) is int and 1 <= brightness <= 255))
+        _require(action["on"] or brightness is None,
+                 "Beim Ausschalten bitte keine Helligkeit angeben.")
+    targets = action_targets(hass, store, action)
+    if kind == "lights":
+        result["action"]["entity_ids"] = targets
+    return result

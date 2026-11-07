@@ -125,15 +125,22 @@ def validate_motion(hass, store, area_id, raw):
 
             switch = store.data["rooms"].get(area_id, {}).get("adaptive_switch")
             _validated(hass, store, area_id, switch)
-        elif action.get("type") == "lights" and set(action) == {"type", "entity_ids", "brightness"}:
-            brightness = action["brightness"]
-            if type(brightness) is not int or not 1 <= brightness <= 255:
-                raise ServiceValidationError("Die Helligkeit muss 1 bis 255 betragen.")
+        elif action.get("type") == "lights" and set(action) in (
+            {"type", "entity_ids"}, {"type", "entity_ids", "brightness"},
+        ):
             targets = action["entity_ids"]
-            if targets is None:
-                validate_selected_lights(hass, store, room_targets(hass, store, area_id))
-            else:
-                action["entity_ids"] = validate_selected_lights(hass, store, targets)
+            checked = validate_selected_lights(
+                hass, store, room_targets(hass, store, area_id) if targets is None else targets
+            )
+            if targets is not None:
+                action["entity_ids"] = checked
+            brightness = action.get("brightness")
+            switch_only = all(entity_id.startswith("switch.") for entity_id in checked)
+            if not (brightness is None and switch_only) and (
+                type(brightness) is not int or not 1 <= brightness <= 255
+            ):
+                raise ServiceValidationError("Die Helligkeit muss 1 bis 255 betragen.")
+            action["brightness"] = brightness
         else:
             raise ServiceValidationError("Bitte Szene, Natürliches Licht oder Lampenauswahl wählen.")
     return config

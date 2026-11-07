@@ -16,6 +16,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN
 from .lights import entity_area_id, validate_lights
+from .rooms import check_execution_guard, validate_transition
 
 ADAPTIVE_DOMAIN = "adaptive_lighting"
 UNSET = object()
@@ -112,7 +113,8 @@ def status(hass, store):
     }
 
 
-async def _set_enabled(hass, store, area_id, entity_id, enabled, context, *, turn_on_lights=False):
+async def _set_enabled(hass, store, area_id, entity_id, enabled, context, *, turn_on_lights=False, transition=None):
+    validate_transition(transition)
     lights = _validated(hass, store, area_id, entity_id)
     await hass.services.async_call(
         "switch",
@@ -132,10 +134,17 @@ async def _set_enabled(hass, store, area_id, entity_id, enabled, context, *, tur
             context=context,
         )
         lights = _validated(hass, store, area_id, entity_id)
+        # Keep the explicit fade on the final apply, after enabling/resetting AL.
+        # AL may start its configured initial fade on already-on lights during
+        # those earlier calls; its own transition timer protects this final fade
+        # from interval adaptation. Off lights are first lit by this apply.
         await hass.services.async_call(
             ADAPTIVE_DOMAIN,
             "apply",
-            {"entity_id": entity_id, "lights": lights, "turn_on_lights": turn_on_lights},
+            {
+                "entity_id": entity_id, "lights": lights, "turn_on_lights": turn_on_lights,
+                **({"transition": transition} if transition is not None else {}),
+            },
             blocking=True,
             context=context,
         )
@@ -143,16 +152,18 @@ async def _set_enabled(hass, store, area_id, entity_id, enabled, context, *, tur
     return lights
 
 
-async def async_turn_on_adaptive(hass, store, area_id, context=None):
+async def async_turn_on_adaptive(hass, store, area_id, context=None, *, transition=None, guard=None):
     """Room-on targets only the strictly validated AL assignment; caller holds lock."""
+    check_execution_guard(guard)
     entity_id = store.data["rooms"].get(area_id, {}).get("adaptive_switch")
     if not entity_id:
         raise ServiceValidationError("Bitte zuerst Adaptive Lighting für diesen Raum zuordnen.")
-    return await _set_enabled(hass, store, area_id, entity_id, True, context, turn_on_lights=True)
+    return await _set_enabled(hass, store, area_id, entity_id, True, context, turn_on_lights=True, transition=transition)
 
 
 async def async_set_adaptive(
-    hass, store, area_id, enabled=None, adaptive_switch=UNSET, default_on=None, context=None
+    hass, store, area_id, enabled=None, adaptive_switch=UNSET, default_on=None, context=None,
+    *, transition=None, guard=None
 ):
     """Serialize settings and adaptive operations with scenes and room toggles."""
     if not isinstance(area_id, str):
@@ -160,14 +171,17 @@ async def async_set_adaptive(
     locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
     async with locks.setdefault(area_id, Lock()):
         return await _async_set_adaptive(
-            hass, store, area_id, enabled, adaptive_switch, default_on, context
+            hass, store, area_id, enabled, adaptive_switch, default_on, context, transition=transition, guard=guard
         )
 
 
 async def _async_set_adaptive(
-    hass, store, area_id, enabled=None, adaptive_switch=UNSET, default_on=None, context=None
+    hass, store, area_id, enabled=None, adaptive_switch=UNSET, default_on=None, context=None,
+    *, transition=None, guard=None
 ):
     """Validate optional mapping/settings before persistence or device actions."""
+    check_execution_guard(guard)
+    validate_transition(transition)
     if not isinstance(area_id, str) or ar.async_get(hass).async_get_area(area_id) is None:
         raise ServiceValidationError("Der Raum wurde nicht gefunden.")
     if enabled is not None and type(enabled) is not bool:
@@ -207,7 +221,7 @@ async def _async_set_adaptive(
 
         await stop_dynamic(hass, area_id)
     if enabled is not None:
-        await _set_enabled(hass, store, area_id, entity_id, enabled, context)
+        await _set_enabled(hass, store, area_id, entity_id, enabled, context, transition=transition)
     if changes:
         await store.async_update_room(area_id, changes)
     return status(hass, store)

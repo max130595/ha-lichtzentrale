@@ -15,7 +15,13 @@ export interface ButtonEntity {entity_id: string; name: string; device_id: strin
 
 export interface MotionSensor {entity_id: string; name: string; device_class: string; available: boolean; area_id?: string | null; area_name?: string | null}
 export type MotionBoundary = {type: 'time'; value: string} | {type: 'sun'; event: 'sunrise' | 'sunset'; offset_min: number};
-export type MotionAction = {type: 'scene'; scene_id: string} | {type: 'adaptive'} | {type: 'lights'; entity_ids: string[] | null; brightness: number};
+export type MotionAction = {type: 'scene'; scene_id: string} | {type: 'adaptive'} | {type: 'lights'; entity_ids: string[] | null; brightness: number | null};
 export interface MotionWindow {start: MotionBoundary; end: MotionBoundary; action: MotionAction}
 export interface MotionConfig {enabled: boolean; sensor_entity_ids: string[]; timeout_seconds: number; dim_before_off: boolean; lux_sensor_entity_id: string | null; lux_below: number | null; windows: MotionWindow[]}
 export interface MotionResponse {config: MotionConfig | null; status: {paused: boolean; active: boolean; enabled: boolean; last_error?: string | null}; sensors: MotionSensor[]; lux_sensors: MotionSensor[]}
+
+export type ScheduleTrigger = MotionBoundary | {type: 'lux'; sensor_entity_id: string; comparison: 'below' | 'above'; threshold: number; duration_seconds: number};
+export type ScheduleAction = {type: 'scene'; scene_id: string} | {type: 'adaptive' | 'motion'; area_id: string; enabled: boolean} | {type: 'room_off'; area_id: string} | {type: 'lights'; entity_ids: string[]; on: boolean; brightness: number | null};
+export interface Schedule {id: string; name: string; enabled: boolean; trigger: ScheduleTrigger; condition: {weekdays: number[]; person_entity_ids: string[]; light_state: 'any' | 'on' | 'off'}; action: ScheduleAction; transition: number | null}
+export interface ScheduleEntry extends Schedule {next_run: string | null; last_error: string | null}
+export interface SchedulesResponse {time_zone: string; schedules: ScheduleEntry[]; lux_sensors: MotionSensor[]; persons: {entity_id: string; name: string; available: boolean}[]}

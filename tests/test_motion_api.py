@@ -204,3 +204,31 @@ async def test_action_validation(hass, store, motion_setup, action):
     config["windows"][0]["action"] = action
     with pytest.raises(ServiceValidationError):
         validate_motion(hass, store, area, config)
+
+
+@pytest.mark.parametrize("omit", [False, True])
+@pytest.mark.parametrize("whole_room", [False, True])
+async def test_switch_only_motion_brightness_optional(hass, store, motion_setup, omit, whole_room):
+    area, _, config = motion_setup
+    registry = er.async_get(hass)
+    switch = registry.async_get_or_create("switch", "shelly", "synthetic-motion-only-switch", original_name="Synthetic ceiling light")
+    registry.async_update_entity(switch.entity_id, area_id=area)
+    hass.states.async_set(switch.entity_id, "off", {"device_class": "outlet"})
+    await store.async_set_lights([switch.entity_id])
+    action = {"type": "lights", "entity_ids": None if whole_room else [switch.entity_id]}
+    if not omit:
+        action["brightness"] = None
+    config["windows"][0]["action"] = action
+    result = await store.async_set_motion(area, config)
+    assert result["windows"][0]["action"]["brightness"] is None
+
+
+@pytest.mark.parametrize("omit", [False, True])
+async def test_motion_light_still_requires_brightness(hass, store, motion_setup, omit):
+    area, lamp, config = motion_setup
+    action = {"type": "lights", "entity_ids": [lamp]}
+    if not omit:
+        action["brightness"] = None
+    config["windows"][0]["action"] = action
+    with pytest.raises(ServiceValidationError):
+        await store.async_set_motion(area, config)
