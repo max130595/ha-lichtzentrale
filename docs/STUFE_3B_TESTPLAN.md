@@ -32,11 +32,16 @@
 - Fehlende, nicht verfügbare, wiederhergestellte oder deaktivierte Bewegungsmelder liefern
   keine sichere Leer-Meldung. Countdown und Abschaltung werden dann blockiert. Lux-Werte müssen
   endlich, nicht negativ und in `lx` sein. Fehlende Sonnenereignisse verhindern das jeweilige Fenster.
-- Eigene Kontexte und ihre Nachfolger gelten nicht als manuelle Bedienung. Änderungen ohne
-  zuordenbaren Kontext werden vorsichtshalber manuell behandelt. Geräte/Bridges, die HA-Kontexte
-  nicht erhalten, müssen bei der Live-Abnahme ausdrücklich geprüft werden. Auch periodische
-  Adaptive-Lighting-Änderungen ohne nachweisbaren eigenen Kontext pausieren vorsichtshalber die
-  Bewegungsautomatik. Dieser Fall kann nur mit der tatsächlichen AL-Version live abgenommen werden.
+- Eigene Kontexte und ihre Nachfolger gelten nicht als manuelle Bedienung. Adaptive-Lighting-
+  Kontexte mit der ID-Vorsilbe `adapt_lgt` werden auch ohne `parent_id` als automatisch erkannt.
+- Bei einer von der Bewegungsautomatik gestarteten dynamischen Szene bleiben reine Farb- und
+  Helligkeitswechsel ihrer tatsächlich geschalteten Lampen automatisch, auch ohne Kontext.
+  Externes Ein/Aus und nicht verfügbare Ziele pausieren weiterhin. Die Ausnahme gilt nicht für
+  statische Szenen, andere konfigurierte Ziele oder einen fremd gestarteten lokalen Dynamiklauf.
+  Lokale Dynamik muss noch mit derselben Start-ID laufen; Hue-Meldungen `dynamics: none` beenden
+  die Ausnahme. Speichern, manuelle Pause und Ablauf entfernen die Laufzeit-Zuordnung.
+- Andere Änderungen ohne zuordenbaren Kontext werden vorsichtshalber manuell behandelt.
+  Geräte-/Bridge-Verhalten bleibt Bestandteil der Live-Abnahme.
 - Speichern/Deaktivieren und Entladen stoppen Timer und laufende Aufgaben ohne zusätzliche
   Gerätebefehle. Bei Neustart oder neuer Konfiguration wartet die Automatik auf ein Sensorereignis;
   alte Laufzeit-Zustände und manuelle Pausen werden nicht rekonstruiert. Es werden keine alten
@@ -59,11 +64,13 @@ npm run build
 git diff --check
 ```
 
-- 520 Python-Tests erfolgreich mit Home Assistant 2026.10.4, inklusive Konfiguration, Admin-Schutz,
+- 537 Python-Tests erfolgreich mit Home Assistant 2026.10.4, inklusive Konfiguration, Admin-Schutz,
   atomarer Speicherung und Lifecycle sowie Bewegungslogik und Laufzeit-Rennen.
 - Frontend: 90 Tests, darunter 13 Bewegungs-Tests; TypeScript und ESLint erfolgreich.
 - Native Home-Assistant-2026.11.0-Prüfung erweitert um Bewegungslicht, Lampen-/Schalterauswahl,
-  Vorabdunkeln ohne Switch-Dimmen, Rückkehr, manuelle Pause und Store-Neuladen.
+  Vorabdunkeln ohne Switch-Dimmen, Rückkehr, manuelle Pause und Store-Neuladen. Die Review-
+  Regressionen prüfen außerdem Abschalten nach parentlosen `adapt_lgt`-Updates und nach
+  kontextlosen Farbwechseln einer von Bewegung gestarteten dynamischen Palette.
 - Zwei aufeinanderfolgende Produktionsbuilds liefern bytegleiche Dateien. Das Bundle wird
   eingecheckt. Webpack meldet lediglich seine Größenempfehlung für das etwa 250-KiB-Bundle.
 - Die vollständige pytest-Suite nutzt weiter 2026.10.4 wegen der bekannten Inkompatibilität des

@@ -37,7 +37,7 @@ from homeassistant.config_entries import (
 from homeassistant.config_entries import (
     ConfigEntries,
 )
-from homeassistant.core import CoreState, HomeAssistant, callback
+from homeassistant.core import Context, CoreState, HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry, device_registry, entity_registry
 from homeassistant.helpers.storage import Store
@@ -350,7 +350,8 @@ async def run(config_dir: str) -> None:
             if call.data.get("turn_on_lights"):
                 for entity_id in call.data["lights"]:
                     state = hass.states.get(entity_id)
-                    hass.states.async_set(entity_id, "on", dict(state.attributes))
+                    hass.states.async_set(entity_id, "on", dict(state.attributes),
+                                          context=Context(id="adapt_lgt_fixture_apply"))
 
         hass.services.async_register("adaptive_lighting", "apply", simulate_adaptive)
         await async_set_adaptive(
@@ -603,6 +604,40 @@ async def run(config_dir: str) -> None:
         motion_store = LichtzentraleStore(hass)
         await motion_store.async_load()
         assert motion_store.data["rooms"][area.id]["motion"]["enabled"]
+        # Review regressions: automatic updates must not cancel vacancy shutdown.
+        motion_config = final.data["rooms"][area.id]["motion"]
+        motion_config["dim_before_off"] = False
+        motion_config["windows"][0]["action"] = {"type": "adaptive"}
+        await final.async_set_motion(area.id, motion_config)
+        hass.states.async_set(motion_sensor, "on", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        assert motion.status(area.id)["active_targets"] == [lamp.entity_id]
+        hass.states.async_set(lamp.entity_id, "on", {**lamp_attrs, "brightness": 170},
+                              context=Context(id="adapt_lgt_fixture_periodic"))
+        await hass.async_block_till_done()
+        assert not motion.status(area.id)["paused"]
+        hass.states.async_set(motion_sensor, "off", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        motion._runtime(area.id)["timers"][-1]._callback()
+        await hass.async_block_till_done()
+        assert hass.states.get(lamp.entity_id).state == "off"
+        motion_config["windows"][0]["action"] = {"type": "scene", "scene_id": dynamic["id"]}
+        await final.async_set_motion(area.id, motion_config)
+        hass.states.async_set(motion_sensor, "on", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        assert active.list()
+        state = hass.states.get(lamp.entity_id)
+        hass.states.async_set(lamp.entity_id, "on", {
+            **state.attributes, "brightness": 150, "xy_color": [0.3, 0.4],
+        })
+        await hass.async_block_till_done()
+        assert not motion.status(area.id)["paused"]
+        hass.states.async_set(motion_sensor, "off", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        motion._runtime(area.id)["timers"][-1]._callback()
+        await hass.async_block_till_done()
+        assert hass.states.get(lamp.entity_id).state == "off"
+        assert not active.list()
         await motion.shutdown()
         await active.shutdown()
         assert not active.list()
@@ -632,7 +667,8 @@ def main() -> None:
         "discovery, binding/cycle/default persistence, native timestamp event dispatch, "
         "room-on scene, scene cycling, relative dim service payload, double release and unload cancellation; "
         "selected cross-room lamp/switch toggles, persisted pre-off color restore and selected dim; motion sensor activation, selected lamp/switch "
-        "ownership, dim/restore without switch dim, manual pause, empty-room release and motion persistence."
+        "ownership, dim/restore without switch dim, manual pause, empty-room release and motion persistence; parentless adapt_lgt updates and contextless "
+        "motion-owned dynamic colors preserve vacancy shutdown."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "

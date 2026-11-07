@@ -232,7 +232,11 @@ diese Taste überhaupt ein Doppelklick belegt ist.
   Taster, App oder Szene, pausieren die Raumautomatik. Sie läuft erst wieder, nachdem alle
   Sensoren für die vollständige Ausschaltzeit leer gemeldet haben. Manuell gewählte Zustände
   werden dabei nicht automatisch ausgeschaltet. Eigene Befehle und ihre HA-Kontexte werden
-  unterschieden; unklare Änderungen werden vorsichtshalber als manuell behandelt.
+  unterschieden. Adaptive-Lighting-Kontexte mit ID-Vorsilbe `adapt_lgt` gelten auch ohne Elternkontext
+  als automatisch. Bei einer von Bewegung gestarteten dynamischen Hue-/Palettenszene pausieren
+  reine Farb- und Helligkeitswechsel ihrer Szenenlampen nicht; externes Ein/Aus bleibt manuell.
+  Die Ausnahme endet mit dem Lauf bzw. seiner Laufzeit-Zuordnung. Andere unklare Änderungen
+  werden vorsichtshalber als manuell behandelt.
 - **Oberfläche und Speicherung:** Ein/Aus-Schalter und deutscher Editor auf der Raumseite.
   Konfiguration liegt ausschließlich im Store unter `rooms.<area_id>.motion`; alte Daten brauchen
   keine Migration. Neue Konfigurationen starten ausgeschaltet. Speichern/Deaktivieren verwirft

@@ -535,3 +535,182 @@ async def test_disabled_registry_at_expiry_does_not_keep_stale_deadline(hass, mo
     registry.async_update_entity(entry.entity_id, disabled_by=None)
     await change(hass, entry.entity_id, "off", friendly_name="Recovered synthetic sensor")
     assert manager.status(area)["remaining_seconds"] == 60
+
+
+async def test_adaptive_context_without_parent_keeps_automatic_off(hass, store, motion, motion_adaptive):
+    manager, area, targets, sensors, calls = motion
+    switch, peer, _ = motion_adaptive
+    store._data["rooms"][area]["adaptive_switch"] = switch
+    store._data["rooms"][area]["motion"]["windows"][0]["action"] = {"type": "adaptive"}
+
+    @callback
+    def apply(call):
+        for entity in call.data["lights"]:
+            state = hass.states.get(entity)
+            hass.states.async_set(entity, "on", {**state.attributes, "brightness": 130},
+                                  context=call.context)
+
+    hass.services.async_register("adaptive_lighting", "apply", apply)
+    await change(hass, sensors[0], "on")
+    assert set(manager.status(area)["active_targets"]) == {targets[0], peer}
+    context = Context(id="adapt_lgt_synthetic_periodic")
+    assert context.parent_id is None
+    await change(hass, targets[0], "on", context, brightness=180, color_temp_kelvin=3500)
+    assert not manager.status(area)["paused"]
+    await change(hass, sensors[0], "off")
+    manager._runtime(area)["timers"][-1]._callback()
+    await hass.async_block_till_done()
+    assert hass.states.get(targets[0]).state == "off"
+    assert hass.states.get(peer).state == "off"
+    assert not manager.status(area)["active"]
+
+
+@pytest.mark.parametrize("prefix", ["adapt_lgt", "adapt_lgt_synthetic"])
+async def test_adaptive_context_and_descendant_are_recognized(hass, motion, prefix):
+    manager, area, targets, sensors, _ = motion
+    await change(hass, sensors[0], "on")
+    context = Context(id=prefix)
+    await change(hass, targets[0], "on", context, brightness=120)
+    await change(hass, targets[0], "on", Context(parent_id=context.id), brightness=110)
+    assert not manager.status(area)["paused"]
+    await change(hass, targets[0], "off", Context(id="synthetic_manual"))
+    assert manager.status(area)["paused"]
+
+
+@pytest.fixture
+async def dynamic_motion(hass, store, motion, request):
+    from types import SimpleNamespace
+
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.lichtzentrale.const import DOMAIN
+    from custom_components.lichtzentrale.dynamic_scenes import DynamicSceneManager
+    from custom_components.lichtzentrale.scenes import async_save_scene
+
+    manager, area, targets, sensors, calls = motion
+    active = DynamicSceneManager(hass, store)
+    hass.data.setdefault(DOMAIN, {}).update(store=store, motion=manager, dynamic=active)
+    if request.param == "hue":
+        entry = MockConfigEntry(domain="hue")
+        entry.add_to_hass(hass)
+        registry = er.async_get(hass)
+        lamp = registry.async_get_or_create("light", "hue", "synthetic-motion-hue-lamp", config_entry=entry)
+        hue_scene = registry.async_get_or_create("scene", "hue", "synthetic-motion-hue-scene", config_entry=entry)
+        for item in (lamp, hue_scene):
+            registry.async_update_entity(item.entity_id, area_id=area)
+        hass.states.async_set(lamp.entity_id, "off", {"supported_color_modes": ["xy"], "brightness": 150})
+        hass.states.async_set(hue_scene.entity_id, "2026-01-01T00:00:00+00:00", {"is_dynamic": True})
+        entry.runtime_data = SimpleNamespace(api=SimpleNamespace(scenes={
+            hue_scene.unique_id: SimpleNamespace(actions=[SimpleNamespace(target=SimpleNamespace(
+                rtype="light", rid=lamp.unique_id))])}))
+        await store.async_set_lights(targets + [lamp.entity_id])
+        scene = await async_save_scene(hass, store, {"name": "Synthetic motion bridge scene",
+            "area_id": area, "kind": "hue", "hue_scene": hue_scene.entity_id})
+
+        @callback
+        def apply_hue(call):
+            assert call.data["dynamic"] is True
+            hass.states.async_set(lamp.entity_id, "on", {"supported_color_modes": ["xy"],
+                "brightness": 150, "dynamics": "dynamic_palette"}, context=call.context)
+
+        hass.services.async_register("hue", "activate_scene", apply_hue)
+        target = lamp.entity_id
+    else:
+        target = targets[0]
+        await change(hass, target, "off", manager._context(), supported_color_modes=["xy"])
+        scene = await async_save_scene(hass, store, {"name": "Synthetic motion palette",
+            "area_id": area, "kind": "palette", "palette_id": "kupfernest",
+            "dynamic": {"enabled": True, "interval": 60, "transition": 1}})
+    config = store._data["rooms"][area]["motion"]
+    config["windows"][0]["action"] = {"type": "scene", "scene_id": scene["id"]}
+    # A separate configured target must not inherit the scene-lamp exception.
+    config["windows"].append({"start": {"type": "time", "value": "00:00"},
+        "end": {"type": "time", "value": "00:00"},
+        "action": {"type": "lights", "entity_ids": [targets[1]], "brightness": 100}})
+    try:
+        yield manager, area, target, sensors, calls, active, scene
+    finally:
+        await active.shutdown()
+
+
+@pytest.mark.parametrize("dynamic_motion", ["palette", "hue"], indirect=True)
+async def test_motion_dynamic_colors_keep_automatic_off(hass, dynamic_motion):
+    manager, area, target, sensors, _, active, _ = dynamic_motion
+    await change(hass, sensors[0], "on")
+    assert manager.status(area)["active_targets"] == [target]
+    if active.active:
+        # Exercise an actual local palette tick as well as a contextless device update.
+        assert await active.tick(active.active[area], 1)
+        await hass.async_block_till_done()
+    await change(hass, target, "on", brightness=101, xy_color=[0.3, 0.4], color_mode="xy")
+    assert not manager.status(area)["paused"]
+    await change(hass, sensors[0], "off")
+    await change(hass, target, "on", brightness=102, xy_color=[0.4, 0.3])
+    assert not manager.status(area)["paused"]
+    manager._runtime(area)["timers"][-1]._callback()
+    await hass.async_block_till_done()
+    assert hass.states.get(target).state == "off"
+    assert not manager.status(area)["active"]
+    assert manager._runtime(area)["dynamic_scene"] is None
+
+
+@pytest.mark.parametrize("dynamic_motion", ["palette", "hue"], indirect=True)
+@pytest.mark.parametrize("state", ["off", "unavailable"])
+async def test_dynamic_scene_external_power_and_unavailable_still_pause(hass, dynamic_motion, state):
+    manager, area, target, sensors, _, _, _ = dynamic_motion
+    await change(hass, sensors[0], "on")
+    await change(hass, target, state, Context(id="synthetic_external"))
+    assert manager.status(area)["paused"]
+    assert manager._runtime(area)["dynamic_scene"] is None
+
+
+@pytest.mark.parametrize("dynamic_motion", ["palette", "hue"], indirect=True)
+async def test_stopped_dynamic_scene_no_longer_exempts_manual_color(hass, dynamic_motion):
+    manager, area, target, sensors, _, active, _ = dynamic_motion
+    await change(hass, sensors[0], "on")
+    if active.active:
+        await active.stop(area)
+        await change(hass, target, "on", brightness=100)
+    else:
+        await change(hass, target, "on", brightness=100, dynamics="none")
+    assert manager.status(area)["paused"]
+
+
+@pytest.mark.parametrize("dynamic_motion", ["palette", "hue"], indirect=True)
+async def test_dynamic_exception_does_not_cover_other_configured_targets(hass, motion, dynamic_motion):
+    manager, area, _, sensors, _, _, _ = dynamic_motion
+    unrelated_switch = motion[2][1]
+    await change(hass, sensors[0], "on")
+    await change(hass, unrelated_switch, "on")
+    assert manager.status(area)["paused"]
+
+
+async def test_static_scene_color_changes_still_pause(hass, store, motion):
+    from custom_components.lichtzentrale.scenes import async_save_scene
+
+    manager, area, target_ids, sensors, _ = motion
+    scene = await async_save_scene(hass, store, {"name": "Synthetic static motion scene",
+        "area_id": area, "kind": "snapshot", "lights": {target_ids[0]: {"on": True, "brightness": 90}}})
+    store._data["rooms"][area]["motion"]["windows"][0]["action"] = {"type": "scene", "scene_id": scene["id"]}
+    await change(hass, sensors[0], "on")
+    await change(hass, target_ids[0], "on", brightness=100)
+    assert manager.status(area)["paused"]
+
+
+@pytest.mark.parametrize("dynamic_motion", ["palette"], indirect=True)
+async def test_replaced_local_dynamic_run_is_not_motion_owned(hass, dynamic_motion):
+    manager, area, target, sensors, _, active, scene = dynamic_motion
+    await change(hass, sensors[0], "on")
+    await active.start(scene, Context(id="synthetic_external_scene"), [target])
+    await change(hass, target, "on", brightness=110)
+    assert manager.status(area)["paused"]
+
+
+@pytest.mark.parametrize("dynamic_motion", ["palette", "hue"], indirect=True)
+async def test_config_refresh_clears_dynamic_exception(hass, dynamic_motion):
+    manager, area, target, sensors, _, _, _ = dynamic_motion
+    await change(hass, sensors[0], "on")
+    manager.refresh_config(area)
+    assert manager._runtime(area)["dynamic_scene"] is None
+    await change(hass, target, "on", brightness=110)
+    assert manager.status(area)["paused"]

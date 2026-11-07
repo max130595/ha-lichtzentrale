@@ -73,7 +73,7 @@ class MotionManager:
     def _runtime(self, area):
         return self._rooms.setdefault(area, {
             "paused": False, "owned": {}, "restore": {}, "deadline": None,
-            "timers": [], "lock": asyncio.Lock(), "last_error": None,
+            "timers": [], "lock": asyncio.Lock(), "last_error": None, "dynamic_scene": None,
         })
 
     @callback
@@ -114,11 +114,37 @@ class MotionManager:
         return context
 
     def _own(self, context):
-        if context and (context.id in self._contexts or context.parent_id in self._contexts):
+        if context and (
+            context.id.startswith("adapt_lgt")
+            or context.id in self._contexts
+            or context.parent_id in self._contexts
+        ):
             if context.id not in self._contexts:
                 self._contexts.append(context.id)
             return True
         return False
+
+    def _dynamic_update(self, area, entity, old, new):
+        """Only exempt same-on updates of this motion run's dynamic scene lamps."""
+        runtime = self._runtime(area)
+        scene = runtime["dynamic_scene"]
+        if (
+            not scene or entity not in runtime["owned"] or not entity.startswith("light.")
+            or old is None or new is None or old.state != "on" or new.state != "on"
+            or not _still_allowed(self.hass, self.store, entity, runtime["owned"])
+        ):
+            return False
+        if scene["kind"] == "hue":
+            # Native Hue exposes a stopped dynamic palette as dynamics="none".
+            # Keep the known motion-owned run as fallback for bridges omitting it.
+            return new.attributes.get("dynamics") in (None, "dynamic_palette")
+        active = self.hass.data.get(DOMAIN, {}).get("dynamic")
+        run = active.active.get(area) if active else None
+        return bool(
+            run and run["scene"]["id"] == scene["id"]
+            and run["context"] is not None and run["context"].id == scene["context_id"]
+            and entity in run["targets"]
+        )
 
     def _targets(self, area):
         """Observe configured targets even before the first automatic activation."""
@@ -166,6 +192,8 @@ class MotionManager:
                     if occupied and not runtime["paused"]:
                         self._spawn(area, self._activate(area))
             elif not own and entity in self._targets(area):
+                if self._dynamic_update(area, entity, old, new):
+                    continue
                 # Ignore metadata-only updates, but unknown/removal revokes ownership.
                 keys = ("brightness", "xy_color", "hs_color", "rgb_color", "color_temp_kelvin")
                 if old and new and old.state == new.state and all(
@@ -175,6 +203,7 @@ class MotionManager:
                 runtime["paused"] = True
                 runtime["owned"].clear()
                 runtime["restore"].clear()
+                runtime["dynamic_scene"] = None
                 self._cancel_work(area)
                 self._cancel_timers(area)
                 if self._occupancy(area) is False:
@@ -222,7 +251,7 @@ class MotionManager:
         self._cancel_timers(area)
         self._cancel_work(area)
         runtime = self._runtime(area)
-        runtime.update(paused=False, owned={}, restore={}, last_error=None)
+        runtime.update(paused=False, owned={}, restore={}, last_error=None, dynamic_scene=None)
 
     def _lux_ok(self, config):
         entity = config.get("lux_sensor_entity_id")
@@ -291,6 +320,7 @@ class MotionManager:
             if window is None:
                 return
             action, context = window["action"], self._context()
+            dynamic_scene = None
             if action["type"] == "scene":
                 from .scenes import _scene, async_apply_scene_locked
                 scene = _scene(self.store, action["scene_id"])
@@ -301,6 +331,11 @@ class MotionManager:
                     if runtime["paused"] or self._occupancy(area) is not True:
                         return
                     result = await async_apply_scene_locked(self.hass, self.store, scene["id"], context)
+                    hue = self.hass.states.get(scene.get("hue_scene", "")) if scene["kind"] == "hue" else None
+                    if (scene["kind"] == "palette" and scene.get("dynamic", {}).get("enabled")) or (
+                        hue is not None and hue.attributes.get("is_dynamic")
+                    ):
+                        dynamic_scene = {"kind": scene["kind"], "id": scene["id"], "context_id": context.id}
             elif action["type"] == "adaptive":
                 from .adaptive import async_turn_on_adaptive
                 from .dynamic_scenes import stop_dynamic
@@ -335,6 +370,7 @@ class MotionManager:
             if runtime["paused"]:
                 return
             runtime["owned"] = {e: entity_area_id(self.hass, e) for e in result.get("applied", [])}
+            runtime["dynamic_scene"] = dynamic_scene if runtime["owned"] else None
             runtime["last_error"] = "Einige Ziele konnten nicht geschaltet werden." if result.get("failed") else None
 
     async def _dispatch_owned(self, area, operation, deadline=None):
@@ -348,6 +384,7 @@ class MotionManager:
             if deadline is not None and runtime["deadline"] != deadline:
                 return
             await _stop_dynamics(self.hass, self.store, targets, runtime["owned"])
+            runtime["dynamic_scene"] = None
             if operation == "dim":
                 candidates = [e for e in targets if (state := self.hass.states.get(e))
                               and state.state == "on" and state.domain == "light"
@@ -410,7 +447,7 @@ class MotionManager:
                 await self._dispatch_owned(area, "off", deadline)
             # New movement can replace the timer while target locks/services yield.
             if runtime["deadline"] == deadline:
-                runtime.update(paused=False, owned={}, restore={})
+                runtime.update(paused=False, owned={}, restore={}, dynamic_scene=None)
                 self._cancel_timers(area)
 
     async def shutdown(self):
