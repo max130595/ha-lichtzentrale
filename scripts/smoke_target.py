@@ -57,7 +57,10 @@ from custom_components.lichtzentrale.adaptive import (
 )
 from custom_components.lichtzentrale.config_flow import LichtzentraleConfigFlow  # noqa: E402
 from custom_components.lichtzentrale.const import DOMAIN, STORAGE_KEY  # noqa: E402
-from custom_components.lichtzentrale.dynamic_scenes import DynamicSceneManager  # noqa: E402
+from custom_components.lichtzentrale.dynamic_scenes import (  # noqa: E402
+    DynamicSceneManager,
+    async_stop_room,
+)
 from custom_components.lichtzentrale.lights import list_lights, validate_lights  # noqa: E402
 from custom_components.lichtzentrale.palettes import async_apply_palette, list_palettes  # noqa: E402
 from custom_components.lichtzentrale.rooms import async_toggle_room, list_rooms  # noqa: E402
@@ -334,6 +337,16 @@ async def run(config_dir: str) -> None:
         }
         for service in ("apply", "set_manual_control"):
             hass.services.async_register("adaptive_lighting", service, capture)
+
+        @callback
+        def simulate_adaptive(call):
+            calls.append(call)
+            if call.data.get("turn_on_lights"):
+                for entity_id in call.data["lights"]:
+                    state = hass.states.get(entity_id)
+                    hass.states.async_set(entity_id, "on", dict(state.attributes))
+
+        hass.services.async_register("adaptive_lighting", "apply", simulate_adaptive)
         await async_set_adaptive(
             hass, final, area.id, adaptive_switch=al.entity_id, default_on="adaptive"
         )
@@ -352,14 +365,73 @@ async def run(config_dir: str) -> None:
         await async_toggle_room(hass, final, area.id, False)
         assert not active.list()
         assert hass.states.get(lamp.entity_id).state == "off"
+        extra = entities.async_get_or_create("light", "synthetic", "fixture-outside-adaptive")
+        entities.async_update_entity(extra.entity_id, area_id=area.id)
+        hass.states.async_set(extra.entity_id, "off", lamp_attrs)
+        await final.async_set_lights([*room_ids, extra.entity_id])
         await async_toggle_room(hass, final, area.id, True)
         assert hass.states.get(al.entity_id).state == "on"
         assert calls[-1].domain == "adaptive_lighting" and calls[-1].service == "apply"
-        assert calls[-1].data["turn_on_lights"] is False
+        assert calls[-1].data["turn_on_lights"] is True
         assert calls[-1].data["lights"] == [lamp.entity_id]
+        assert hass.states.get(lamp.entity_id).state == "on"
+        assert hass.states.get(extra.entity_id).state == "off"
+        assert hass.states.get(switch.entity_id).state == "off"
         restored_defaults = LichtzentraleStore(hass)
         await restored_defaults.async_load()
         assert restored_defaults.data["rooms"][area.id]["default_on"] == "adaptive"
+        await final.async_update_room(area.id, {"default_on": "last"})
+        hass.states.async_set(lamp.entity_id, "on", lamp_attrs)
+        hass.states.async_set(switch.entity_id, "on")
+        count = len(calls)
+        await async_toggle_room(hass, final, area.id, False)
+        await async_toggle_room(hass, final, area.id, False)
+        restored_off = LichtzentraleStore(hass)
+        await restored_off.async_load()
+        assert restored_off.data["rooms"][area.id]["pre_off_lights"][lamp.entity_id]["on"]
+        assert switch.entity_id not in restored_off.data["rooms"][area.id]["pre_off_lights"]
+        result = await async_toggle_room(hass, final, area.id, True)
+        assert result["applied"] == [lamp.entity_id]
+        assert hass.states.get(lamp.entity_id).attributes["brightness"] == 87
+        assert hass.states.get(extra.entity_id).state == "off"
+        assert hass.states.get(switch.entity_id).state == "on"
+        assert all(call.data.get("entity_id") != switch.entity_id for call in calls[count:])
+        hass.states.async_set(switch.entity_id, "off")
+        await final.async_set_lights(room_ids)
+        # Stage 2b: persisted positions, spatial palette/wave, and native-color
+        # freeze dispatch without waking off lamps or touching switch entities.
+        position = {"cell": [2, 1], "height": "decke"}
+        await final.async_set_position(area.id, lamp.entity_id, position)
+        positioned = LichtzentraleStore(hass)
+        await positioned.async_load()
+        assert positioned.data["rooms"][area.id]["positions"][lamp.entity_id] == position
+        assert list_rooms(hass, positioned)[0]["positions"][lamp.entity_id] == position
+        wave = await async_save_scene(hass, final, {
+            "name": "Fixture wave", "area_id": area.id, "kind": "palette",
+            "palette_id": "kupfernest", "verteilung": "verlauf_links_rechts",
+            "dynamic": {"enabled": True, "interval": 5, "transition": 2, "welle": True},
+        })
+        await async_apply_scene(hass, final, wave["id"])
+        assert hass.states.get(switch.entity_id).state == "off"
+        before_color = hass.states.get(lamp.entity_id).attributes["xy_color"]
+        await asyncio.sleep(5.1)
+        assert hass.states.get(lamp.entity_id).attributes["xy_color"] != before_color
+        frozen = dict(hass.states.get(lamp.entity_id).attributes)
+        count = len(calls)
+        result = await async_stop_room(hass, final, area.id)
+        assert result["stopped"] is True and result["applied"] == [lamp.entity_id]
+        assert not active.list()
+        assert len(calls) == count + 1
+        assert calls[-1].domain == "light" and calls[-1].service == "turn_on"
+        assert list(calls[-1].data["xy_color"]) == list(frozen["xy_color"])
+        assert calls[-1].data["brightness"] == frozen["brightness"]
+        # Native bridge dynamics need no local run for the same freeze action.
+        result = await async_stop_room(hass, final, area.id)
+        assert result["stopped"] is False and result["applied"] == [lamp.entity_id]
+        hass.states.async_set(lamp.entity_id, "off", frozen)
+        count = len(calls)
+        assert (await async_stop_room(hass, final, area.id))["applied"] == []
+        assert len(calls) == count
         await active.shutdown()
         assert not active.list()
         await final.async_remove()
@@ -381,7 +453,9 @@ def main() -> None:
         "persistence/reload/deletion; aiohue 4.9.0 scene/action models, color previews and "
         "synthetic Hue controller dispatch; revoked-target and grouped-target rejection; "
         "dynamic timer/color rotation/room-off stop; Adaptive Lighting absence, validated "
-        "mapping, scene pause, off/on resume and persisted room defaults."
+        "mapping, scene pause, off/on resume and persisted room defaults; persisted positions, "
+        "spatial wave timer, palette switch exclusion, pre-off restore, adaptive subset-only on, "
+        "current-color freeze with and without local run, no off-lamp wake."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "

@@ -131,8 +131,7 @@ async def test_unknown_palette_or_empty_targets(hass, store, light_calls, palett
     assert not light_calls
 
 
-async def test_parallel_palette_switch_payload_and_failure(hass, store):
-    import asyncio
+async def test_palette_skips_switch_and_reports_light_failure(hass, store):
 
     from homeassistant.helpers import entity_registry as er
 
@@ -147,17 +146,50 @@ async def test_parallel_palette_switch_payload_and_failure(hass, store):
     hass.states.async_set(ids[1], "off")
     await store.async_set_lights(ids)
     calls = []
-    ready = asyncio.Event()
 
     async def call(domain, service, data, **kwargs):
         calls.append((domain, service, data))
-        if len(calls) == 2:
-            ready.set()
-        await asyncio.wait_for(ready.wait(), 1)
         if domain == "light":
             raise RuntimeError("Synthetic device failure")
 
     with patch.object(type(hass.services), "async_call", side_effect=call):
         result = await async_apply_palette(hass, store, PALETTE, ids)
-    assert calls[1] == ("switch", "turn_on", {"entity_id": ids[1]})
-    assert result == {"applied": [ids[1]], "skipped": [], "failed": [ids[0]]}
+    assert len(calls) == 1
+    assert calls[0][0] == "light"
+    assert result == {"applied": [], "skipped": [ids[1]], "failed": [ids[0]]}
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"verteilung": []}, {"verteilung": "diagonal"}, {"welle": 1}, {"welle": True}]
+)
+async def test_invalid_spatial_options_no_calls(hass, store, light_calls, kwargs):
+    hass.states.async_set("light.fixture_a", "on", {"supported_color_modes": ["xy"]})
+    await store.async_set_lights(["light.fixture_a"])
+    with pytest.raises(ServiceValidationError):
+        await async_apply_palette(hass, store, PALETTE, ["light.fixture_a"], **kwargs)
+    assert not light_calls
+
+
+@pytest.mark.parametrize("wave", [False, True])
+async def test_switch_never_consumes_palette_slot(hass, store, light_calls, wave):
+    from homeassistant.helpers import entity_registry as er
+
+    switch = er.async_get(hass).async_get_or_create(
+        "switch", "shelly", "fixture-palette-switch", original_name="Fixture Licht"
+    )
+    ids = ["light.fixture_a", switch.entity_id, "light.fixture_b"]
+    for entity_id in ids:
+        hass.states.async_set(entity_id, "off", {"supported_color_modes": ["xy"]})
+    await store.async_set_lights(ids)
+    result = await async_apply_palette(
+        hass,
+        store,
+        PALETTE,
+        ids,
+        welle=wave,
+        verteilung="verlauf_links_rechts" if wave else "zufall",
+        layout_targets=ids,
+    )
+    assert result == {"applied": [ids[0], ids[2]], "skipped": [ids[1]]}
+    colors = list_palettes()[0]["colors"]
+    assert [c.data["xy_color"] for c in light_calls] == [(c["x"], c["y"]) for c in colors[:2]]

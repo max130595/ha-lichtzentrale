@@ -45,6 +45,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             call.data.get("brightness"),
             call.data["transition"],
             call.context,
+            verteilung=call.data["verteilung"],
         )
 
     async_register_admin_service(
@@ -82,7 +83,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     async def stop_dynamic_service(call):
-        return await async_stop_room(hass, get_store(hass), call.data["area_id"])
+        return await async_stop_room(hass, get_store(hass), call.data["area_id"], context=call.context)
 
     async def set_adaptive_service(call):
         return await async_set_adaptive(hass, get_store(hass), context=call.context, **call.data)

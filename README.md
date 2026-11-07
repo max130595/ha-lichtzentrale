@@ -4,8 +4,8 @@ Eine lokale Licht-App als Custom Integration für Home Assistant. Oberfläche au
 für schmale Bildschirme ausgelegt. Kein Cloud-Konto und keine zusätzlichen
 Python-Abhängigkeiten zur Laufzeit.
 
-**Stand: Stufe 2.** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import,
-zwölf eigene Farbpaletten, dynamische Palettenszenen und optionales natürliches Licht. **Taster** und **Zeitpläne** bleiben Platzhalter.
+**Stand: Stufe 2b.** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import,
+zwölf eigene Farbpaletten, räumliche Verteilung und Wellen, dynamische Palettenszenen und optionales natürliches Licht. **Taster** und **Zeitpläne** bleiben Platzhalter.
 Der weitere Ausbau ist in [docs/BAUPLAN.md](docs/BAUPLAN.md) beschrieben.
 
 ## Installation über HACS
@@ -38,7 +38,9 @@ Frontend-Dateien direkt verwenden; Node.js wird auf dem HA-System nicht benötig
 Gruppenlampen von Hue und Home Assistant werden ausgeschlossen. Paletten verteilen
 Farben auf Einzellampen. Bei Weißtonlampen wird ein passender Weißton innerhalb der
 Gerätegrenzen gewählt. Dimmbare Lampen erhalten nur Helligkeit, reine An/Aus-Lampen
-nur den Einschaltbefehl. Nicht erreichbare oder unbekannte Lampen werden übersprungen
+nur den Einschaltbefehl. `switch.*`-Lichtschalter bleiben bei statischen und dynamischen
+Paletten unverändert; Snapshot-Szenen stellen ihren gespeicherten An/Aus-Wert her.
+Nicht erreichbare oder unbekannte Lampen werden übersprungen
 und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
 
 ## Räume und Szenen
@@ -46,7 +48,11 @@ und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
 - Räume entsprechen Home-Assistant-Bereichen, unabhängig von Etagen. Eine direkte
   Bereichszuordnung der Entity hat Vorrang vor der Gerätezuordnung. Nur Räume mit
   freigegebenen Lampen erscheinen; auch reine Lichtschalter-Räume werden unterstützt.
-- Raum und Einzellampen ein-/ausschalten, dimmbare Lampen regeln, Farbe oder Weißton wählen.
+- Raum und Einzellampen ausschalten, dimmbare Lampen regeln, Farbe oder Weißton wählen.
+  Raum einschalten stellt ohne natürliches Licht nur die vor dem Ausschalten eingeschalteten
+  Einzellichter wieder her, niemals automatisch das Deckenlicht. Ohne gespeicherten Vorzustand
+  werden vorsichtshalber keine neuen Lampen eingeschaltet. Auch Raum aus lässt Switches
+  unverändert; deren gezielte Einzelbedienung und gespeicherte Snapshot-Werte bleiben möglich.
   Raumhelligkeit ändert nur eingeschaltete dimmbare Lampen. Lichtschalter erhalten niemals
   Farb- oder Helligkeitswerte. Die einzelnen Service-Aufrufe starten parallel.
 - **Aktuellen Zustand als Szene speichern** sichert Ein/Aus und die aktive Helligkeit/Farbe
@@ -75,21 +81,41 @@ und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
 - Laufende Lichtzentrale-Palettenszenen sind mit einer Stopp-Aktion sichtbar. Stoppen hält die aktuelle Farbe.
   Raum ausschalten stoppt die Dynamik. Eine neue Szene ersetzt die bisherige.
   Ausgeschaltete Lampen werden bei späteren Farbwechseln nicht wieder eingeschaltet.
-- Native dynamische Hue-Szenen bleiben in der Hue Bridge. Die lokale Dynamikliste und
-  ihre Stopp-Aktion verwalten nur Lichtzentrale-Palettenszenen, nicht den Bridge-Effekt.
+- **Dynamik stoppen** ist im Raum immer erreichbar, auch ohne lokale Palettenszene.
+  Die Aktion hält eingeschaltete freigegebene Einzellichter mit ihrer aktuellen Farbe und
+  Helligkeit fest und beendet damit auch Hue-Dynamik. Ausgeschaltete, nicht verfügbare Lampen
+  und Switch-Deckenlichter bleiben unverändert. Gerätefehler werden einzeln angezeigt.
 - **Adaptive Lighting ist optional.** Ohne die Integration bleiben die entsprechenden
   Bedienelemente verborgen. Mit installierter Integration wird im Raum ein passender
   Adaptive-Lighting-Schalter zugeordnet. Es werden nur geprüfte, freigegebene Ziele
   dieses Raums verwendet, keine beliebigen Switch-Entities.
 - Farbszenen pausieren natürliches Licht. Bei Raum-Einstellung **Beim Einschalten:
   Natürliches Licht** wird es nach Raum aus/an wieder aktiviert. Diese Einstellung
-  und die Zuordnung bleiben serverseitig gespeichert.
+  und die Zuordnung bleiben serverseitig gespeichert. Raum einschalten aktiviert dabei nur
+  die von Adaptive Lighting gesteuerten Einzellichter, nicht alle Raumlampen.
 - Dynamik startet nach einem Home-Assistant-Neustart nicht von selbst. Die gespeicherten
   Szenen bleiben erhalten; laufende Aufgaben und Listener werden beim Entladen beendet.
 
 Services für Automationen: `lichtzentrale.apply_palette`, `lichtzentrale.apply_scene`,
 `lichtzentrale.toggle_room`, `lichtzentrale.stop_dynamic`, `lichtzentrale.set_adaptive`.
 Alle verwenden dieselben Administrator- und Zielprüfungen wie das Panel.
+
+## Lampenpositionen und räumliche Effekte
+
+- Unter **Lampen anordnen** eine Lampe antippen, dann ein Feld im 3×3-Raster auswählen.
+  Vorne ist die obere Rasterzeile, hinten die untere. Die Höhe separat einstellen:
+  Boden, Möbelhöhe, indirekter Hintergrund oder Decke. Mehrere Lampen je Feld sind möglich.
+- Positionen werden ausschließlich im Home-Assistant-Store gespeichert und können entfernt werden.
+  Nicht positionierte Lampen folgen bei räumlichen Effekten nach den positionierten Lampen.
+- In der Galerie **Farbverteilung** wählen: bisherige Verteilung, links → rechts,
+  vorne → hinten oder nach Höhe. Hintergrundlichter bekommen bei Höhe die kräftigste Palettenfarbe.
+- Bei dynamischen Palettenszenen lässt **Welle** die Palette schrittweise entlang der gewählten
+  Achse wandern. Dafür wird eine räumliche Verteilung benötigt; bei Aktivierung aus der bisherigen
+  Verteilung wird links → rechts gewählt. Ein ausdrücklicher Szenenstart schaltet die Ziele wie
+  bisher ein; spätere Farbwechsel lassen ausgeschaltete Lampen aus. Positionen und Verteilung
+  gelten auch nach Neuladen.
+- Die konkrete Wirkung auf einer echten Hue Bridge und die Handy-Abnahme stehen in
+  [Stufe-2b-Testplan](docs/STUFE_2B_TESTPLAN.md) für Claudes Prüfung.
 
 ## Daten und Sicherheit
 
@@ -141,7 +167,7 @@ uv pip install --python .venv-target/bin/python -r requirements-ha2026.11.txt
 
 Der GitHub-Workflow prüft TypeScript, ESLint, Frontend-Tests, Bundle-Aktualität,
 Python-Tests, hassfest und HACS. Die lokale und manuelle Prüfliste steht in
-[docs/STUFE_2_TESTPLAN.md](docs/STUFE_2_TESTPLAN.md).
+[docs/STUFE_2B_TESTPLAN.md](docs/STUFE_2B_TESTPLAN.md).
 
 ## Herkunft und Lizenz
 

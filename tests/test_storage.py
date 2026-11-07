@@ -1,3 +1,4 @@
+# Geändert für Lichtzentrale
 """Server-side Store persistence and failure safety."""
 
 from copy import deepcopy
@@ -133,3 +134,77 @@ async def test_delete_cleans_references_and_late_recall_cannot_resurrect(store, 
     room = store.data["rooms"][scene["area_id"]]
     assert room == {"cycle": ["other-fixture"], "default_on": "last", "future_option": True}
     assert hass_storage[STORAGE_KEY]["data"] == store.data
+
+
+async def position_fixtures(hass, store):
+    from homeassistant.helpers import area_registry as ar
+    from homeassistant.helpers import entity_registry as er
+
+    area = ar.async_get(hass).async_create("Fixture layout")
+    ids = []
+    for index in range(2):
+        entry = er.async_get(hass).async_get_or_create("light", "synthetic", f"layout-{index}")
+        er.async_get(hass).async_update_entity(entry.entity_id, area_id=area.id)
+        hass.states.async_set(entry.entity_id, "off", {"supported_color_modes": ["xy"]})
+        ids.append(entry.entity_id)
+    await store.async_set_lights(ids)
+    return area.id, ids
+
+
+async def test_positions_concurrent_writes_roundtrip_and_remove(hass, store):
+    import asyncio
+
+    area, ids = await position_fixtures(hass, store)
+    value = {"cell": [0, 2], "height": "boden"}
+    await asyncio.gather(
+        *(store.async_set_position(area, entity, value) for entity in ids),
+        store.async_update_room(area, {"default_on": "last"}),
+    )
+    value["cell"][0] = 2
+    assert store.data["rooms"][area]["positions"][ids[0]]["cell"] == [0, 2]
+    assert set(store.data["rooms"][area]["positions"]) == set(ids)
+    await store.async_set_position(area, ids[0], None)
+    reloaded = LichtzentraleStore(hass)
+    await reloaded.async_load()
+    assert reloaded.data == store.data
+    assert reloaded.data["rooms"][area] == {
+        "positions": {ids[1]: {"cell": [0, 2], "height": "boden"}}, "default_on": "last"
+    }
+
+
+async def test_position_storage_failure_keeps_previous_position(hass, store, hass_storage):
+    area, ids = await position_fixtures(hass, store)
+    await store.async_set_position(area, ids[0], {"cell": [0, 0], "height": "decke"})
+    before = store.data
+    with patch.object(store._store, "async_save", AsyncMock(side_effect=HomeAssistantError("disk"))):
+        with pytest.raises(HomeAssistantError):
+            await store.async_set_position(area, ids[0], None)
+    assert store.data == before == hass_storage[STORAGE_KEY]["data"]
+
+
+async def test_missing_peer_does_not_block_position_edit(hass, store):
+    area, ids = await position_fixtures(hass, store)
+    hass.states.async_remove(ids[1])
+    value = {"cell": [1, 1], "height": "moebel"}
+    assert await store.async_set_position(area, ids[0], value) == value
+
+
+@pytest.mark.parametrize("change", ["grant", "area"])
+async def test_position_checks_membership_after_waiting_for_lock(hass, store, change):
+    import asyncio
+
+    from homeassistant.exceptions import ServiceValidationError
+    from homeassistant.helpers import entity_registry as er
+
+    area, ids = await position_fixtures(hass, store)
+    await store._lock.acquire()
+    task = asyncio.create_task(store.async_set_position(area, ids[0], {"cell": [0, 0], "height": "boden"}))
+    await asyncio.sleep(0)
+    if change == "grant":
+        store._data["settings"]["light_entity_ids"] = ids[1:]
+    else:
+        er.async_get(hass).async_update_entity(ids[0], area_id=None)
+    store._lock.release()
+    with pytest.raises(ServiceValidationError):
+        await task
+    assert area not in store.data["rooms"]

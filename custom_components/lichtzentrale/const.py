@@ -3,7 +3,7 @@
 
 DOMAIN = "lichtzentrale"
 NAME = "Lichtzentrale"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 PANEL_URL = "/lichtzentrale/lichtzentrale_panel.js"
 STORAGE_KEY = f"{DOMAIN}.data"
 STORAGE_VERSION = 1

@@ -134,6 +134,7 @@ async def test_unapproved_apply_returns_error_without_service_calls(hass, client
         ("adaptive/status", {}),
         ("adaptive/set", {"area_id": "fixture", "enabled": True}),
         ("room/toggle", {"area_id": "fixture_room"}),
+        ("room/position", {"area_id": "fixture_room", "entity_id": "light.fixture_a", "position": None}),
         ("room/brightness", {"area_id": "fixture_room", "brightness": 120}),
         ("light/set", {"entity_id": "light.fixture_a", "on": True}),
         ("scene/save", {"scene": {}}),
@@ -222,3 +223,50 @@ async def test_stage_one_invalid_controls(hass, client, light_calls, command, kw
     result = await request(client, command, **kwargs)
     assert result["success"] is False
     assert not light_calls
+
+
+async def test_positions_protocol_roundtrip_and_filters_stale_members(hass, client, store, light_calls):
+    from homeassistant.helpers import area_registry as ar
+    from homeassistant.helpers import entity_registry as er
+
+    area = ar.async_get(hass).async_create("Fixture layout")
+    ids = []
+    for index in range(2):
+        entry = er.async_get(hass).async_get_or_create("light", "synthetic", f"position-{index}")
+        er.async_get(hass).async_update_entity(entry.entity_id, area_id=area.id)
+        hass.states.async_set(entry.entity_id, "off", {"supported_color_modes": ["xy"]})
+        ids.append(entry.entity_id)
+    await store.async_set_lights(ids)
+    position = {"cell": [1, 2], "height": "hintergrund"}
+    result = await request(client, "room/position", area_id=area.id, entity_id=ids[0], position=position)
+    assert result["result"] == position
+    assert (await request(client, "rooms/list"))["result"][0]["positions"] == {ids[0]: position}
+    await store.async_set_lights(ids[1:])
+    assert (await request(client, "rooms/list"))["result"][0]["positions"] == {}
+    assert not (await request(client, "room/position", area_id=area.id, entity_id=ids[0], position=position))["success"]
+    await store.async_set_lights(ids)
+    assert (await request(client, "room/position", area_id=area.id, entity_id=ids[0], position=None))["success"]
+    assert store.data["rooms"][area.id]["positions"] == {}
+    assert not light_calls
+
+
+@pytest.mark.parametrize("position", [
+    {"cell": [3, 0], "height": "boden"}, {"cell": [True, 0], "height": "boden"},
+    {"cell": [0, 0], "height": "roof"}, {"cell": [0, 0]},
+    {"cell": [0, 0], "height": "boden", "extra": True},
+])
+async def test_bad_position_is_rejected_without_store_change(client, store, position):
+    before = store.data
+    result = await request(client, "room/position", area_id="fixture", entity_id="light.fixture_a", position=position)
+    assert not result["success"]
+    assert store.data == before
+
+
+async def test_palette_distribution_protocol(hass, client, store, light_calls):
+    hass.states.async_set("light.fixture_a", "on", {"supported_color_modes": ["xy"]})
+    await store.async_set_lights(["light.fixture_a"])
+    for distribution in ["zufall", "verlauf_links_rechts", "verlauf_vorne_hinten", "hoehe"]:
+        assert (await request(client, "palette/apply", palette_id="kupfernest", entity_ids=["light.fixture_a"], verteilung=distribution))["success"]
+    assert len(light_calls) == 4
+    assert not (await request(client, "palette/apply", palette_id="kupfernest", entity_ids=["light.fixture_a"], verteilung="invalid"))["success"]
+    assert len(light_calls) == 4

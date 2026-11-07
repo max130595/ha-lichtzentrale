@@ -440,3 +440,62 @@ async def test_hue_preview_handles_missing_or_invalid_colors(hass, store, hue):
     )
     saved = await save_hue(hass, store, hue)
     assert saved["preview"] == ["#b6c9ce", "#8396a1"]
+
+
+async def test_spatial_scene_persists_and_rejects_wave_without_axis(hass, store, room):
+    area, _ = room
+    payload = {
+        "name": "Synthetic spatial scene",
+        "kind": "palette",
+        "area_id": area,
+        "palette_id": "kupfernest",
+        "verteilung": "hoehe",
+        "dynamic": {"welle": True},
+    }
+    scene = await async_save_scene(hass, store, payload)
+    assert scene["verteilung"] == "hoehe"
+    assert scene["dynamic"]["welle"] is True
+    assert store.data["scenes"][0]["verteilung"] == "hoehe"
+    for invalid in (
+        {"verteilung": "zufall"},
+        {"verteilung": []},
+        {"kind": "snapshot"},
+        {"kind": "hue"},
+    ):
+        with pytest.raises(ServiceValidationError):
+            await async_save_scene(hass, store, {**payload, **invalid})
+
+
+async def test_stop_does_not_touch_switch(hass, store, room, light_calls):
+    from custom_components.lichtzentrale.dynamic_scenes import async_stop_room
+
+    area, ids = room
+    result = await async_stop_room(hass, store, area)
+    assert result["applied"] == ids[:3]
+    assert result["skipped"] == ids[3:]
+    assert all(call.domain == "light" for call in light_calls)
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+async def test_palette_switch_exclusion_does_not_block_last_scene(
+    hass, store, room, light_calls, unavailable
+):
+    area, ids = room
+    scene = await async_save_scene(
+        hass,
+        store,
+        {
+            "name": "Synthetic palette recall",
+            "area_id": area,
+            "kind": "palette",
+            "palette_id": "kupfernest",
+        },
+    )
+    if unavailable:
+        hass.states.async_set(ids[0], "unavailable", {"supported_color_modes": ["xy"]})
+    result = await async_apply_scene(hass, store, scene["id"])
+    assert ids[-1] in result["skipped"]
+    assert ids[-1] not in result["applied"]
+    remembered = store.data["rooms"].get(area, {}).get("last_scene_id")
+    assert remembered == (None if unavailable else scene["id"])
+    assert (ids[0] in result["skipped"]) == unavailable

@@ -196,3 +196,84 @@ async def test_enabling_stops_dynamics_before_switch(hass, store, adaptive):
     with patch("custom_components.lichtzentrale.dynamic_scenes.stop_dynamic", side_effect=stop):
         await async_set_adaptive(hass, store, area, enabled=True, adaptive_switch=switch)
     assert stopped == [area]
+
+
+async def test_room_on_only_enables_actual_adaptive_subset(hass, store, adaptive):
+    from custom_components.lichtzentrale.rooms import async_toggle_room
+
+    area, light, switch, _, calls = adaptive
+    registry = er.async_get(hass)
+    extras = []
+    for domain, platform, name in [
+        ("light", "synthetic", "Other adaptive lamp"),
+        ("switch", "shelly", "Synthetic Deckenlicht"),
+    ]:
+        entry = registry.async_get_or_create(domain, platform, name, original_name=name)
+        registry.async_update_entity(entry.entity_id, area_id=area)
+        hass.states.async_set(entry.entity_id, "off")
+        extras.append(entry.entity_id)
+    await store.async_set_lights([light, *extras])
+    await async_set_adaptive(hass, store, area, adaptive_switch=switch, default_on="adaptive")
+    result = await async_toggle_room(hass, store, area, on=True)
+    assert result == {"applied": [light], "skipped": extras}
+    assert calls[-1].data == {"entity_id": switch, "lights": [light], "turn_on_lights": True}
+    assert all(call.data["entity_id"] == switch for call in calls)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "revoked", "moved", "switch"])
+async def test_room_on_invalid_adaptive_never_falls_back(hass, store, adaptive, mutation):
+    from custom_components.lichtzentrale.rooms import async_toggle_room
+
+    area, light, switch, runtime, calls = adaptive
+    await async_set_adaptive(hass, store, area, adaptive_switch=switch, default_on="adaptive")
+    if mutation == "missing":
+        hass.data.pop("adaptive_lighting")
+    elif mutation == "revoked":
+        await store.async_set_lights([])
+    elif mutation == "moved":
+        other = ar.async_get(hass).async_create("Another adaptive fixture")
+        er.async_get(hass).async_update_entity(light, area_id=other.id)
+    else:
+        runtime.lights = [switch]
+    with patch.object(type(hass.services), "async_call") as call:
+        with pytest.raises(ServiceValidationError):
+            await async_toggle_room(hass, store, area, on=True)
+    assert not calls
+    call.assert_not_called()
+
+
+async def test_adaptive_room_on_revalidates_after_stop(hass, store, adaptive):
+    from custom_components.lichtzentrale.rooms import async_toggle_room
+
+    area, _, switch, _, calls = adaptive
+    await async_set_adaptive(hass, store, area, adaptive_switch=switch, default_on="adaptive")
+
+    async def revoke(*args):
+        await store.async_set_lights([])
+
+    with patch("custom_components.lichtzentrale.dynamic_scenes.stop_dynamic", side_effect=revoke):
+        with pytest.raises(ServiceValidationError):
+            await async_toggle_room(hass, store, area, on=True)
+    assert not calls
+
+
+async def test_invalid_adaptive_room_on_preserves_pending_off_cycle(hass, store, adaptive):
+    from custom_components.lichtzentrale.rooms import async_toggle_room
+
+    area, light, switch, _, calls = adaptive
+    await async_set_adaptive(hass, store, area, adaptive_switch=switch, default_on="adaptive")
+    await store.async_update_room(
+        area,
+        {
+            "pre_off_lights": {light: {"on": True, "brightness": 83}},
+            "pre_off_pending": [light],
+        },
+    )
+    hass.data.pop("adaptive_lighting")
+    with pytest.raises(ServiceValidationError):
+        await async_toggle_room(hass, store, area, on=True)
+    reloaded = LichtzentraleStore(hass)
+    await reloaded.async_load()
+    assert reloaded.data["rooms"][area]["pre_off_pending"] == [light]
+    assert reloaded.data["rooms"][area]["pre_off_lights"][light]["brightness"] == 83
+    assert not calls

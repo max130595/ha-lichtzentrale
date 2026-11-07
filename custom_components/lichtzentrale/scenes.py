@@ -21,6 +21,7 @@ from .const import DOMAIN
 from .dynamic_scenes import manager, stop_dynamic, validate_dynamic
 from .lights import entity_area_id, validate_lights
 from .palettes import async_apply_palette, list_palettes
+from .positions import validate_distribution
 from .rooms import async_dispatch, light_service_data, room_targets, validate_control_options
 from .storage import LichtzentraleStore
 
@@ -226,6 +227,9 @@ async def async_save_scene(hass, store, scene):
         _error("Ungültige Favoriten- oder Sortierangabe.")
     dynamic = scene.get("dynamic", {"enabled": False, "interval": 60, "transition": 10})
     dynamic = validate_dynamic(dynamic, kind)
+    verteilung = validate_distribution(scene.get("verteilung", "zufall"))
+    if dynamic["welle"] and verteilung == "zufall":
+        _error("Für eine Welle bitte eine räumliche Verteilung auswählen.")
     result = {
         "id": existing["id"] if existing else str(uuid4()),
         "name": _name(scene.get("name")),
@@ -238,6 +242,7 @@ async def async_save_scene(hass, store, scene):
         "favorite": favorite,
         "order": order,
         "dynamic": dynamic,
+        "verteilung": verteilung,
     }
     if kind == "snapshot":
         lights = scene.get("lights")
@@ -337,6 +342,9 @@ async def async_apply_scene(
         from .adaptive import async_pause_adaptive
 
         validate_dynamic(scene.get("dynamic", {}), scene["kind"])
+        validate_distribution(scene.get("verteilung", "zufall"))
+        if scene.get("dynamic", {}).get("welle") and scene.get("verteilung", "zufall") == "zufall":
+            _error("Für eine Welle bitte eine räumliche Verteilung auswählen.")
         # Validate all targets before pausing another integration or replacing a loop.
         checked = (
             hue_scene_targets(hass, scene["hue_scene"])
@@ -361,6 +369,8 @@ async def async_apply_scene(
                 brightness=scene.get("brightness"),
                 context=context,
                 manage=False,
+                verteilung=scene.get("verteilung", "zufall"),
+                welle=scene.get("dynamic", {}).get("welle", False),
                 transition=scene["dynamic"]["transition"],
             )
         elif scene["kind"] == "hue":
@@ -398,7 +408,13 @@ async def async_apply_scene(
                 else:
                     commands.append((state.domain, *payload))
             result = await async_dispatch(hass, commands, skipped, context)
-        if not result.get("skipped") and not result.get("failed") and result["applied"]:
+        # Palette switches are intentionally excluded, not incomplete light recalls.
+        incomplete = [
+            e
+            for e in result.get("skipped", [])
+            if scene["kind"] != "palette" or not e.startswith("switch.")
+        ]
+        if not incomplete and not result.get("failed") and result["applied"]:
             await store.async_set_last_scene(area_id, scene_id)
         if (
             scene.get("dynamic", {}).get("enabled")

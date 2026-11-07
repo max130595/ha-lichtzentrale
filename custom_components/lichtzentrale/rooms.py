@@ -36,10 +36,21 @@ def list_rooms(hass: HomeAssistant, store: LichtzentraleStore) -> list[dict]:
                 "area_id": area.id,
                 "name": area.name,
                 "lights": members,
-                "on": any(item["on"] for item in members),
+                "on": any(item["on"] for item in members if item["domain"] == "light"),
                 "brightness": round(sum(brightness) / len(brightness)) if brightness else None,
                 "available_count": sum(item["available"] for item in members),
                 "last_scene_id": store.data["rooms"].get(area.id, {}).get("last_scene_id"),
+                "positions": {
+                    item["entity_id"]: position
+                    for item in members
+                    if (
+                        position := store.data["rooms"]
+                        .get(area.id, {})
+                        .get("positions", {})
+                        .get(item["entity_id"])
+                    )
+                    is not None
+                },
             }
         )
     return sorted(result, key=lambda room: room["name"])
@@ -105,18 +116,31 @@ def light_service_data(state: State, on=None, brightness=None, xy=None, color_te
     return ("turn_on", params) if on is True or len(params) > 1 else None
 
 
-async def async_dispatch(hass, calls, skipped=None, context=None):
+async def async_dispatch(hass, calls, skipped=None, context=None, guard=None):
     """Start all prepared calls together and isolate individual device failures."""
     result = {"applied": [], "skipped": list(skipped or [])}
+    not_allowed = object()
+
+    async def dispatch(domain, service, params):
+        # gather schedules children later: revalidate at that final boundary.
+        if guard is not None and not guard(params["entity_id"]):
+            return not_allowed
+        return await hass.services.async_call(
+            domain, service, params, blocking=True, context=context
+        )
+
     outcomes = await asyncio.gather(
-        *(
-            hass.services.async_call(domain, service, params, blocking=True, context=context)
-            for domain, service, params in calls
-        ),
+        *(dispatch(domain, service, params) for domain, service, params in calls),
         return_exceptions=True,
     )
     for (_, _, params), outcome in zip(calls, outcomes, strict=True):
-        key = "failed" if isinstance(outcome, BaseException) else "applied"
+        key = (
+            "skipped"
+            if outcome is not_allowed
+            else "failed"
+            if isinstance(outcome, BaseException)
+            else "applied"
+        )
         result.setdefault(key, []).append(params["entity_id"])
     return result
 
@@ -151,10 +175,41 @@ async def async_toggle_room(hass, store, area_id, on=None, context=None):
         return await _toggle_room(hass, store, area_id, on, context)
 
 
+def _remember_light(state):
+    """Capture usable light values only, never ceiling switches."""
+    from homeassistant.util.color import color_hs_to_xy, color_RGB_to_xy
+
+    value = {"on": state.state == "on"}
+    if not value["on"]:
+        return value
+    attrs = state.attributes
+    brightness = attrs.get("brightness")
+    if type(brightness) is int and 1 <= brightness <= 255:
+        value["brightness"] = brightness
+    mode = attrs.get("color_mode")
+    kelvin = attrs.get("color_temp_kelvin")
+    if mode == "color_temp" and type(kelvin) is int and kelvin > 0:
+        value["color_temp_kelvin"] = kelvin
+    elif mode in COLOR_MODES:
+        xy = attrs.get("xy_color")
+        if xy is None and attrs.get("rgb_color"):
+            xy = color_RGB_to_xy(*attrs["rgb_color"])
+        if xy is None and attrs.get("hs_color"):
+            xy = color_hs_to_xy(*attrs["hs_color"])
+        if xy is not None:
+            try:
+                validate_control_options(xy=xy)
+            except ServiceValidationError:
+                pass
+            else:
+                value["xy"] = list(xy)
+    return value
+
+
 async def _toggle_room(hass, store, area_id, on=None, context=None):
-    """Toggle all available approved room lights in parallel."""
+    """Restore pre-off lamps or AL's subset; never toggle ceiling switches."""
     validate_control_options(on=on)
-    targets = room_targets(hass, store, area_id)
+    room_targets(hass, store, area_id)
     from .dynamic_scenes import stop_dynamic
 
     await stop_dynamic(hass, area_id)
@@ -162,18 +217,93 @@ async def _toggle_room(hass, store, area_id, on=None, context=None):
     targets = room_targets(hass, store, area_id)
     states = [hass.states.get(entity_id) for entity_id in targets]
     if on is None:
-        on = not any(state.state == "on" for state in states)
+        on = not any(state.state == "on" for state in states if state.domain == "light")
+    settings = store.data["rooms"].get(area_id, {})
+    if on and settings.get("default_on") == "adaptive":
+        from .adaptive import async_turn_on_adaptive
+
+        applied = await async_turn_on_adaptive(hass, store, area_id, context=context)
+        if applied and settings.get("pre_off_pending"):
+            await store.async_update_room(area_id, {"pre_off_pending": []})
+        return {"applied": applied, "skipped": [e for e in targets if e not in applied]}
+    if not on:
+        snapshot = {
+            state.entity_id: _remember_light(state)
+            for state in states
+            if state.domain == "light" and state.state in {"on", "off"}
+        }
+        # A partial failure keeps the same off cycle across retries/reloads.
+        # Only merge currently-on values: already switched-off lamps retain their
+        # original on state. A successful off or explicit room-on ends the cycle.
+        pending = settings.get("pre_off_pending", [])
+        if pending:
+            snapshot = {
+                **settings.get("pre_off_lights", {}),
+                **{entity: value for entity, value in snapshot.items() if value["on"]},
+            }
+        # Repeated all-off calls preserve the last useful snapshot.
+        if any(value["on"] for value in snapshot.values()):
+            await store.async_update_room(
+                area_id,
+                {
+                    "pre_off_lights": snapshot,
+                    "pre_off_pending": [
+                        entity for entity, value in snapshot.items() if value["on"]
+                    ],
+                },
+            )
+        # Persistence yields too. Recheck approval, area and device eligibility.
+        targets = room_targets(hass, store, area_id)
+        states = [hass.states.get(entity_id) for entity_id in targets]
+    saved = settings.get("pre_off_lights", {})
     calls, skipped = [], []
     for state in states:
-        if state.state in {"unavailable", "unknown"}:
+        value = saved.get(state.entity_id, {}) if isinstance(saved, dict) else {}
+        if (
+            state.domain != "light"
+            or state.state not in {"on", "off"}
+            or (on and value.get("on") is not True)
+        ):
             skipped.append(state.entity_id)
-        else:
-            calls.append((state.domain, *light_service_data(state, on=on)))
-    result = await async_dispatch(hass, calls, skipped, context)
-    if on and store.data["rooms"].get(area_id, {}).get("default_on") == "adaptive":
-        from .adaptive import async_resume_adaptive
+            continue
+        options = (
+            {key: value[key] for key in ("brightness", "xy", "color_temp_kelvin") if key in value}
+            if on
+            else {}
+        )
+        try:
+            validate_control_options(on=on, **options)
+        except ServiceValidationError:
+            skipped.append(state.entity_id)
+            continue
+        calls.append((state.domain, *light_service_data(state, on=on, **options)))
 
-        await async_resume_adaptive(hass, store, area_id, context=context)
+    def still_allowed(entity_id):
+        if (
+            entity_id not in store.data["settings"]["light_entity_ids"]
+            or entity_area_id(hass, entity_id) != area_id
+        ):
+            return False
+        try:
+            validate_lights(hass, [entity_id])
+        except ServiceValidationError:
+            return False
+        return hass.states.get(entity_id).state in {"on", "off"}
+
+    result = await async_dispatch(hass, calls, skipped, context, guard=still_allowed)
+    if on and result["applied"] and settings.get("pre_off_pending"):
+        await store.async_update_room(area_id, {"pre_off_pending": []})
+    if not on and store.data["rooms"].get(area_id, {}).get("pre_off_pending"):
+        await store.async_update_room(
+            area_id,
+            {
+                "pre_off_pending": [
+                    entity
+                    for entity in store.data["rooms"][area_id]["pre_off_pending"]
+                    if entity in result.get("failed", []) or entity in result["skipped"]
+                ]
+            },
+        )
     return result
 
 
