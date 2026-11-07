@@ -12,3 +12,10 @@ export interface HueScene {entity_id: string; name: string; area_id: string; ava
 export type BindingAction = 'toggle_room' | 'turn_on_room' | 'turn_off_room' | 'toggle_lights' | 'turn_on_lights' | 'turn_off_lights' | 'next_scene' | 'scene' | 'dim_up' | 'dim_down' | 'adaptive_on' | 'adaptive_off' | 'stop_dynamic';
 export interface Binding {id: string; event_entity: string; event_type: string; action: BindingAction; area_id: string | null; params: {scene_id?: string; entity_ids?: string[]}}
 export interface ButtonEntity {entity_id: string; name: string; device_id: string | null; device_name: string; area_id: string | null; event_types: string[]; available: boolean}
+
+export interface MotionSensor {entity_id: string; name: string; device_class: string; available: boolean; area_id?: string | null; area_name?: string | null}
+export type MotionBoundary = {type: 'time'; value: string} | {type: 'sun'; event: 'sunrise' | 'sunset'; offset_min: number};
+export type MotionAction = {type: 'scene'; scene_id: string} | {type: 'adaptive'} | {type: 'lights'; entity_ids: string[] | null; brightness: number};
+export interface MotionWindow {start: MotionBoundary; end: MotionBoundary; action: MotionAction}
+export interface MotionConfig {enabled: boolean; sensor_entity_ids: string[]; timeout_seconds: number; dim_before_off: boolean; lux_sensor_entity_id: string | null; lux_below: number | null; windows: MotionWindow[]}
+export interface MotionResponse {config: MotionConfig | null; status: {paused: boolean; active: boolean; enabled: boolean; last_error?: string | null}; sensors: MotionSensor[]; lux_sensors: MotionSensor[]}

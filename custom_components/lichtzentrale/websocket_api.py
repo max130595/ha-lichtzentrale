@@ -126,6 +126,7 @@ def async_setup_websocket_api(hass: HomeAssistant) -> None:
         *STAGE_ONE_HANDLERS,
         *STAGE_TWO_HANDLERS,
         *STAGE_THREE_HANDLERS,
+        *MOTION_HANDLERS,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -338,4 +339,36 @@ STAGE_THREE_HANDLERS = (
         },
         room_settings,
     ),
+)
+
+
+async def motion_get(hass, store, msg, context):
+    from .motion_config import list_lux_sensors, list_motion_sensors
+
+    area_id = msg["area_id"]
+    config = store.data["rooms"].get(area_id, {}).get("motion")
+    manager = hass.data.get(DOMAIN, {}).get("motion")
+    return {
+        "config": config,
+        "status": manager.status(area_id) if manager else {
+            "enabled": bool(config and config.get("enabled")), "paused": False, "active": False,
+        },
+        "sensors": list_motion_sensors(hass), "lux_sensors": list_lux_sensors(hass),
+    }
+
+
+async def motion_save(hass, store, msg, context):
+    await store.async_set_motion(msg["area_id"], msg["config"])
+    return await motion_get(hass, store, msg, context)
+
+
+async def motion_set_enabled(hass, store, msg, context):
+    await store.async_set_motion_enabled(msg["area_id"], msg["enabled"])
+    return await motion_get(hass, store, msg, context)
+
+
+MOTION_HANDLERS = (
+    command("motion/get", AREA_FIELDS, motion_get),
+    command("motion/save", {**AREA_FIELDS, vol.Required("config"): dict}, motion_save),
+    command("motion/set_enabled", {**AREA_FIELDS, vol.Required("enabled"): bool}, motion_set_enabled),
 )

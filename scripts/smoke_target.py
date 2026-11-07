@@ -37,7 +37,7 @@ from homeassistant.config_entries import (
 from homeassistant.config_entries import (
     ConfigEntries,
 )
-from homeassistant.core import CoreState, HomeAssistant, callback
+from homeassistant.core import Context, CoreState, HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry, device_registry, entity_registry
 from homeassistant.helpers.storage import Store
@@ -66,6 +66,7 @@ from custom_components.lichtzentrale.dynamic_scenes import (  # noqa: E402
     async_stop_room,
 )
 from custom_components.lichtzentrale.lights import list_lights, validate_lights  # noqa: E402
+from custom_components.lichtzentrale.motion import MotionManager  # noqa: E402
 from custom_components.lichtzentrale.palettes import async_apply_palette, list_palettes  # noqa: E402
 from custom_components.lichtzentrale.rooms import async_toggle_room, list_rooms  # noqa: E402
 from custom_components.lichtzentrale.scenes import (  # noqa: E402
@@ -245,7 +246,8 @@ async def run(config_dir: str) -> None:
             state = hass.states.get(entity_id)
             attrs = dict(state.attributes)
             attrs.update({key: value for key, value in call.data.items() if key != "entity_id"})
-            hass.states.async_set(entity_id, "on" if call.service == "turn_on" else "off", attrs)
+            hass.states.async_set(entity_id, "on" if call.service == "turn_on" else "off", attrs,
+                                  context=call.context)
 
         for domain in ("light", "switch"):
             for service in ("turn_on", "turn_off"):
@@ -348,7 +350,8 @@ async def run(config_dir: str) -> None:
             if call.data.get("turn_on_lights"):
                 for entity_id in call.data["lights"]:
                     state = hass.states.get(entity_id)
-                    hass.states.async_set(entity_id, "on", dict(state.attributes))
+                    hass.states.async_set(entity_id, "on", dict(state.attributes),
+                                          context=Context(id="adapt_lgt_fixture_apply"))
 
         hass.services.async_register("adaptive_lighting", "apply", simulate_adaptive)
         await async_set_adaptive(
@@ -562,6 +565,80 @@ async def run(config_dir: str) -> None:
         assert len(calls) == count + 1
         assert calls[-1].data == {"entity_id": lamp.entity_id, "brightness_step_pct": 10}
         await selected_manager.shutdown()
+        # Native motion dispatch uses the same synthetic lamp/switch capture.
+        motion_sensor = "binary_sensor.fixture_motion"
+        hass.states.async_set(motion_sensor, "off", {"device_class": "motion"})
+        await final.async_set_motion(area.id, {
+            "enabled": True, "sensor_entity_ids": [motion_sensor], "timeout_seconds": 60,
+            "dim_before_off": True, "lux_sensor_entity_id": None, "lux_below": None,
+            "windows": [{"start": {"type": "time", "value": "00:00"},
+                         "end": {"type": "time", "value": "00:00"},
+                         "action": {"type": "lights", "entity_ids": [lamp.entity_id, switch.entity_id],
+                                    "brightness": 140}}],
+        })
+        motion = MotionManager(hass, final)
+        hass.data[DOMAIN]["motion"] = motion
+        motion.start()
+        hass.states.async_set(motion_sensor, "on", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        assert set(motion.status(area.id)["active_targets"]) == {lamp.entity_id, switch.entity_id}
+        assert hass.states.get(lamp.entity_id).attributes["brightness"] == 140
+        hass.states.async_set(motion_sensor, "off", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        count = len(calls)
+        await motion._expire(area.id, dim=True)
+        await hass.async_block_till_done()
+        assert len(calls) == count + 1 and calls[-1].domain == "light"
+        assert hass.states.get(lamp.entity_id).attributes["brightness"] == 76
+        hass.states.async_set(motion_sensor, "on", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        assert hass.states.get(lamp.entity_id).attributes["brightness"] == 140
+        hass.states.async_set(lamp.entity_id, "on", {**lamp_attrs, "brightness": 100})
+        await hass.async_block_till_done()
+        assert motion.status(area.id)["paused"]
+        hass.states.async_set(motion_sensor, "off", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        count = len(calls)
+        await motion._expire(area.id)
+        assert len(calls) == count and not motion.status(area.id)["paused"]
+        motion_store = LichtzentraleStore(hass)
+        await motion_store.async_load()
+        assert motion_store.data["rooms"][area.id]["motion"]["enabled"]
+        # Review regressions: automatic updates must not cancel vacancy shutdown.
+        motion_config = final.data["rooms"][area.id]["motion"]
+        motion_config["dim_before_off"] = False
+        motion_config["windows"][0]["action"] = {"type": "adaptive"}
+        await final.async_set_motion(area.id, motion_config)
+        hass.states.async_set(motion_sensor, "on", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        assert motion.status(area.id)["active_targets"] == [lamp.entity_id]
+        hass.states.async_set(lamp.entity_id, "on", {**lamp_attrs, "brightness": 170},
+                              context=Context(id="adapt_lgt_fixture_periodic"))
+        await hass.async_block_till_done()
+        assert not motion.status(area.id)["paused"]
+        hass.states.async_set(motion_sensor, "off", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        motion._runtime(area.id)["timers"][-1]._callback()
+        await hass.async_block_till_done()
+        assert hass.states.get(lamp.entity_id).state == "off"
+        motion_config["windows"][0]["action"] = {"type": "scene", "scene_id": dynamic["id"]}
+        await final.async_set_motion(area.id, motion_config)
+        hass.states.async_set(motion_sensor, "on", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        assert active.list()
+        state = hass.states.get(lamp.entity_id)
+        hass.states.async_set(lamp.entity_id, "on", {
+            **state.attributes, "brightness": 150, "xy_color": [0.3, 0.4],
+        })
+        await hass.async_block_till_done()
+        assert not motion.status(area.id)["paused"]
+        hass.states.async_set(motion_sensor, "off", {"device_class": "motion"})
+        await hass.async_block_till_done()
+        motion._runtime(area.id)["timers"][-1]._callback()
+        await hass.async_block_till_done()
+        assert hass.states.get(lamp.entity_id).state == "off"
+        assert not active.list()
+        await motion.shutdown()
         await active.shutdown()
         assert not active.list()
         await final.async_remove()
@@ -589,7 +666,9 @@ def main() -> None:
         "current-color freeze with and without local run, no off-lamp wake; runtime event "
         "discovery, binding/cycle/default persistence, native timestamp event dispatch, "
         "room-on scene, scene cycling, relative dim service payload, double release and unload cancellation; "
-        "selected cross-room lamp/switch toggles, persisted pre-off color restore and selected dim."
+        "selected cross-room lamp/switch toggles, persisted pre-off color restore and selected dim; motion sensor activation, selected lamp/switch "
+        "ownership, dim/restore without switch dim, manual pause, empty-room release and motion persistence; parentless adapt_lgt updates and contextless "
+        "motion-owned dynamic colors preserve vacancy shutdown."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "

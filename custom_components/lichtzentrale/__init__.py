@@ -11,6 +11,7 @@ from .adaptive import async_set_adaptive
 from .bindings import BindingManager
 from .const import DOMAIN, SERVICE_APPLY_PALETTE
 from .dynamic_scenes import DynamicSceneManager, async_stop_room
+from .motion import MotionManager
 from .palettes import async_apply_palette
 from .rooms import async_toggle_room
 from .scenes import async_apply_scene
@@ -105,6 +106,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=vol.Schema(ADAPTIVE_FIELDS),
         supports_response=SupportsResponse.OPTIONAL,
     )
+    runtime["motion"] = MotionManager(hass, store)
+    runtime["motion"].start()
     runtime["bindings"] = BindingManager(hass, store)
     runtime["bindings"].start()
 
@@ -126,6 +129,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload without removing persisted user settings."""
+    if motion := hass.data[DOMAIN].pop("motion", None):
+        await motion.shutdown()
     if bindings := hass.data[DOMAIN].pop("bindings", None):
         await bindings.shutdown()
     if active := hass.data[DOMAIN].pop("dynamic", None):
