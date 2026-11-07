@@ -15,6 +15,9 @@ Taster im Haus (`HAUS.md`) bekommst du **separat vom Nutzer** – sie liegt bewu
   Branch zu arbeiten. Claude prüft, korrigiert und testet und meldet über den Nutzer, wann es fertig
   ist. Erst danach arbeitet ChatGPT/Codex weiter – und immer zuerst `git pull`, dann ändern.
   Gefundene Fehler während Claudes Prüfung nur melden, nicht selbst beheben.
+- **Aufträge:** Die nächsten Stufen stehen in [`docs/AUFTRAEGE.md`](docs/AUFTRAEGE.md). Nur die
+  Stufe umsetzen, die der Nutzer startet. Claude darf `docs/AUFTRAEGE.md` (reine Doku) direkt auf
+  `main` pflegen; nach dem Merge einer Stufe dort den Status auf „erledigt“ setzen.
 - Jeder PR beschreibt: was gebaut wurde, was bewusst fehlt, wie man es testet.
 - Nach jeder Stufe muss die Integration **installierbar und lauffähig** sein (HACS-Installation,
   Neustart, keine Fehler im Log).
