@@ -78,7 +78,7 @@ async def _stop_dynamics(hass, store, targets, areas):
 
 
 async def async_control_lights(
-    hass, store, entity_ids, on=None, context=None, *, brightness=None, transition=None, guard=None
+    hass, store, entity_ids, on=None, context=None, *, brightness=None, transition=None, guard=None, dispatch_guard=None
 ):
     """Any selected on means all off; otherwise restore all selected lights."""
     validate_control_options(on=on, brightness=brightness)
@@ -129,6 +129,8 @@ async def async_control_lights(
             prepared[entity_id] = state
 
         def still_allowed(entity_id):
+            # Recheck launch constraints after awaits, not mutable light-state conditions.
+            check_execution_guard(dispatch_guard)
             return (
                 _still_allowed(hass, store, entity_id, areas)
                 and hass.states.get(entity_id) is prepared[entity_id]

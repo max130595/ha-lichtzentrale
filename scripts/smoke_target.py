@@ -13,10 +13,12 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 # Import HA before anything that may import httpx: HA 2026.11 installs its
 # supported httpx2 alias during package initialization.
@@ -41,6 +43,7 @@ from homeassistant.core import Context, CoreState, HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry, device_registry, entity_registry
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -77,6 +80,7 @@ from custom_components.lichtzentrale.scenes import (  # noqa: E402
     hue_scene_preview,
     hue_scene_targets,
 )
+from custom_components.lichtzentrale.schedule_windows import window_is_open  # noqa: E402
 from custom_components.lichtzentrale.schedules import ScheduleManager, next_run  # noqa: E402
 from custom_components.lichtzentrale.storage import LichtzentraleStore  # noqa: E402
 from custom_components.lichtzentrale.websocket_api import APPLY_FIELDS  # noqa: E402
@@ -653,6 +657,7 @@ async def run(config_dir: str) -> None:
             "action": {"type": "lights", "entity_ids": [lamp.entity_id, switch.entity_id],
                        "on": True, "brightness": 111}, "transition": 1800,
         })
+        assert plan["condition"]["time_window"] is None
         assert next_run(hass, plan) is not None
         count = len(calls)
         result = await schedules.async_test(plan["id"])
@@ -669,8 +674,23 @@ async def run(config_dir: str) -> None:
             **plan, "trigger": {"type": "lux", "sensor_entity_id": lux_id,
                                "comparison": "below", "threshold": 30, "duration_seconds": 300},
             "enabled": True,
+            "condition": {**plan["condition"], "time_window": {
+                "after": {"type": "time", "value": "00:00"},
+                "before": {"type": "time", "value": "00:00"}}},
         })
         assert schedules.list_schedules()[0]["next_run"]
+        runtime = schedules._state(lux_plan["id"])
+        schedules._fire(lux_plan["id"], runtime["generation"], runtime["timer_token"])
+        await hass.async_block_till_done()
+        assert final.data["settings"]["schedule_last_run_dates"][lux_plan["id"]] == dt_util.now().date().isoformat()
+        count = len(calls)
+        schedules._fire(lux_plan["id"], runtime["generation"], runtime["timer_token"])
+        await hass.async_block_till_done()
+        assert len(calls) == count
+        overnight = {"after": {"type": "time", "value": "22:00"},
+                     "before": {"type": "time", "value": "06:00"}}
+        assert window_is_open(hass, overnight, datetime(2026, 11, 2, 23, tzinfo=ZoneInfo("UTC")))
+        assert not window_is_open(hass, overnight, datetime(2026, 11, 2, 12, tzinfo=ZoneInfo("UTC")))
         await final.async_set_schedule_enabled(lux_plan["id"], False)
         assert schedules.list_schedules()[0]["next_run"] is None
         saved_schedules = LichtzentraleStore(hass)
@@ -710,7 +730,7 @@ def main() -> None:
         "ownership, dim/restore without switch dim, manual pause, empty-room release and motion persistence; parentless adapt_lgt updates and contextless "
         "motion-owned dynamic colors preserve vacancy shutdown; schedule time calculation, manual selected-light/switch "
         "dispatch, bounded transition selection, atomic save/enable/delete, Lux timer registration and cancellation, "
-        "schedule persistence/reload/unload."
+        "schedule persistence/reload/unload, overnight windows and persisted daily lux limits."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "

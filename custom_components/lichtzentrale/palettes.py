@@ -12,7 +12,7 @@ from homeassistant.util.color import color_RGB_to_xy
 from .color_temperature import find_closest_ct_match
 from .lights import entity_area_id, is_individual_light, validate_lights
 from .positions import ordered_targets, palette_indices, validate_distribution
-from .rooms import async_dispatch, validate_transition
+from .rooms import async_dispatch, check_execution_guard, validate_transition
 from .storage import LichtzentraleStore
 
 # Original names and color choices; no upstream presets or image assets.
@@ -78,6 +78,7 @@ async def async_apply_palette(
     layout_targets: list[str] | None = None,
     tick_area_id: str | None = None,
     schedule_transition: bool = False,
+    dispatch_guard=None,
 ) -> dict[str, list[str]]:
     """Apply one original palette to explicitly allowed individual lamps only."""
     validate_distribution(verteilung)
@@ -121,7 +122,7 @@ async def async_apply_palette(
                 await stack.enter_async_context(locks.setdefault(area_id, Lock()))
             for area_id in areas:
                 await stop_dynamic(hass, area_id)
-                await async_pause_adaptive(hass, store, area_id, context=context)
+                await async_pause_adaptive(hass, store, area_id, context=context, dispatch_guard=dispatch_guard)
             return await async_apply_palette(
                 hass,
                 store,
@@ -137,6 +138,7 @@ async def async_apply_palette(
                 layout_targets=layout_targets,
                 tick_area_id=tick_area_id,
                 schedule_transition=schedule_transition,
+                dispatch_guard=dispatch_guard,
             )
 
     skipped_switches = [e for e in targets if e.startswith("switch.")]
@@ -181,7 +183,12 @@ async def async_apply_palette(
         return await _async_dispatch_tick(
             hass, store, tick_area_id, calls, result["skipped"], context
         )
-    return await async_dispatch(hass, calls, result["skipped"], context)
+    # Only the initial recall carries this guard; running ticks keep their own checks.
+    def still_allowed(entity_id):
+        check_execution_guard(dispatch_guard)
+        return True
+
+    return await async_dispatch(hass, calls, result["skipped"], context, guard=still_allowed)
 
 
 async def _async_dispatch_tick(hass, store, area_id, calls, skipped, context):

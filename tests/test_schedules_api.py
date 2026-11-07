@@ -131,3 +131,63 @@ async def test_legacy_store_without_schedules_needs_no_migration(hass, store):
     restored = LichtzentraleStore(hass)
     await restored.async_load()
     assert restored.data["schedules"] == []
+
+
+@pytest.mark.parametrize("window", [
+    None,
+    {"after": {"type": "sun", "event": "sunset", "offset_min": -30},
+     "before": {"type": "time", "value": "01:00"}},
+    {"after": None, "before": {"type": "time", "value": "09:00"}},
+])
+async def test_schedule_time_window_api_roundtrip(hass, store, schedule_setup, schedule_client, window):
+    schedule_setup["condition"]["time_window"] = window
+    response = await request(schedule_client, "schedule/save", schedule=schedule_setup)
+    assert response["success"]
+    saved = response["result"]["schedules"][0]
+    assert saved["condition"]["time_window"] == window
+    restored = LichtzentraleStore(hass)
+    await restored.async_load()
+    assert restored.data == store.data
+    response = await request(schedule_client, "schedule/set_enabled", schedule_id=saved["id"], enabled=True)
+    assert response["success"]
+    assert response["result"]["schedules"][0]["condition"]["time_window"] == window
+
+
+async def test_invalid_saved_window_cannot_enable_but_can_disable(hass, store, schedule_setup):
+    saved = await store.async_save_schedule(schedule_setup)
+    store._data["schedules"][0]["condition"]["time_window"] = {
+        "after": {"type": "time", "value": "25:00"}, "before": None}
+    before = store.data
+    with pytest.raises(ServiceValidationError):
+        await store.async_set_schedule_enabled(saved["id"], True)
+    assert store.data == before
+    assert not (await store.async_set_schedule_enabled(saved["id"], False))["enabled"]
+
+
+async def test_daily_claim_is_atomic_persistent_and_cleared_on_delete(hass, store, schedule_setup):
+    saved = await store.async_save_schedule({**schedule_setup, "enabled": True})
+    claims = await asyncio.gather(*(
+        store.async_claim_schedule_day(saved["id"], "2026-11-07") for _ in range(3)))
+    assert claims.count(True) == 1
+    restored = LichtzentraleStore(hass)
+    await restored.async_load()
+    assert not await restored.async_claim_schedule_day(saved["id"], "2026-11-07")
+    assert await restored.async_claim_schedule_day(saved["id"], "2026-11-08")
+    await restored.async_delete_schedule(saved["id"])
+    assert saved["id"] not in restored.data["settings"]["schedule_last_run_dates"]
+    assert not await restored.async_claim_schedule_day(saved["id"], "2026-11-09")
+
+
+async def test_daily_claim_failure_and_disabled_plan_do_not_mutate(hass, store, schedule_setup):
+    saved = await store.async_save_schedule(schedule_setup)
+    assert not await store.async_claim_schedule_day(saved["id"], "2026-11-07")
+    await store.async_set_schedule_enabled(saved["id"], True)
+    before = store.data
+    with patch.object(store._store, "async_save", AsyncMock(side_effect=HomeAssistantError("disk"))):
+        with pytest.raises(HomeAssistantError):
+            await store.async_claim_schedule_day(saved["id"], "2026-11-07")
+    assert store.data == before
+    restored = LichtzentraleStore(hass)
+    await restored.async_load()
+    assert restored.data == before
+    assert await store.async_claim_schedule_day(saved["id"], "2026-11-07")

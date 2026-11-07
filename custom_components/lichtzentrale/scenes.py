@@ -338,18 +338,18 @@ async def async_reorder_scenes(store, area_id, scene_ids):
 
 async def async_apply_scene(
     hass: HomeAssistant, store: LichtzentraleStore, scene_id: str, context: Context | None = None,
-    *, transition=None, guard=None
+    *, transition=None, guard=None, dispatch_guard=None
 ):
     """Serialize recalls per room; dispatch each recall's individual lamps in parallel."""
     initial = _scene(store, scene_id)
     locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
     async with locks.setdefault(initial["area_id"], Lock()):
         return await async_apply_scene_locked(
-            hass, store, scene_id, context, transition=transition, guard=guard
+            hass, store, scene_id, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard
         )
 
 
-async def async_apply_scene_locked(hass, store, scene_id, context=None, *, transition=None, guard=None):
+async def async_apply_scene_locked(hass, store, scene_id, context=None, *, transition=None, guard=None, dispatch_guard=None):
     """Recall while the caller holds this room's scene lock (including room-on)."""
     check_execution_guard(guard)
     validate_transition(transition)
@@ -376,7 +376,7 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
             validate_control_options(**value)
     await stop_dynamic(hass, area_id)
     if scene["kind"] in {"palette", "hue"} or any("xy" in v for v in scene["lights"].values()):
-        await async_pause_adaptive(hass, store, area_id, context=context)
+        await async_pause_adaptive(hass, store, area_id, context=context, dispatch_guard=dispatch_guard)
     if scene["kind"] == "palette":
         result = await async_apply_palette(
             hass,
@@ -390,6 +390,7 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
             welle=scene.get("dynamic", {}).get("welle", False),
             transition=scene["dynamic"]["transition"] if transition is None else transition,
             schedule_transition=transition is not None,
+            dispatch_guard=dispatch_guard,
         )
     elif scene["kind"] == "hue":
         entity_id = scene["hue_scene"]
@@ -400,6 +401,7 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
         state = hass.states.get(entity_id)
         if unavailable or state.state == "unavailable":
             return {"applied": [], "skipped": targets}
+        check_execution_guard(dispatch_guard)
         await hass.services.async_call(
             "hue",
             "activate_scene",
@@ -438,6 +440,7 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
                 prepared[entity_id] = state
 
         def still_allowed(entity_id):
+            check_execution_guard(dispatch_guard)
             try:
                 _targets(hass, store, area_id, [entity_id])
             except ServiceValidationError:

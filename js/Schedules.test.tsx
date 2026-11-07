@@ -51,6 +51,67 @@ describe('Zeitpläne', () => {
   it('saves lux and switch-only selection without brightness', async () => {
     const {callWS} = setup(); await edit(); change('Auslöser', 'lux'); change('Lux-Sensor', 'sensor.test_lux'); change('Vergleich', 'above'); change('Schwelle in lx', '42.5'); change('Mindestdauer in Sekunden', '300'); change('Aktion', 'lights'); expect(screen.queryByText('Gesperrt')).not.toBeInTheDocument(); fireEvent.click(screen.getByLabelText('Testschalter · Nur Ein/Aus')); save(); await screen.findByText('Zeitplan in Home Assistant gespeichert.'); expect(writes(callWS)[0][0].schedule).toMatchObject({trigger: {type: 'lux', sensor_entity_id: 'sensor.test_lux', comparison: 'above', threshold: 42.5, duration_seconds: 300}, action: {type: 'lights', entity_ids: ['switch.test_switch'], on: true, brightness: null}}); expect(screen.getByText(/Lux-Pläne reagieren/)).toBeInTheDocument();
   });
+  it('normalizes old plans without a time window to null on save', async () => {
+    const {callWS} = setup(); await edit();
+    expect(screen.getByLabelText('Nur zwischen … und …')).not.toBeChecked();
+    expect(screen.queryByLabelText('Beginn: Grenze')).not.toBeInTheDocument();
+    save(); await screen.findByText('Zeitplan in Home Assistant gespeichert.');
+    expect(writes(callWS)[0][0].schedule).toMatchObject({condition: {time_window: null}});
+  });
+  it('persists a solar lower boundary, reloads and edits it repeatedly', async () => {
+    const {callWS} = setup(); await edit();
+    fireEvent.click(screen.getByLabelText('Nur zwischen … und …'));
+    change('Beginn: Grenze', 'sun'); change('Beginn: Versatz in Minuten', '-60'); change('Ende: Grenze', 'none');
+    save(); await screen.findByText('Zeitplan in Home Assistant gespeichert.');
+    expect(writes(callWS)[0][0].schedule).toMatchObject({condition: {time_window: {after: {type: 'sun', event: 'sunset', offset_min: -60}, before: null}}});
+    expect(screen.getByText('Zeitfenster: ab Sonnenuntergang −60 min')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Zeitpläne neu laden')); await edit();
+    expect(screen.getByLabelText('Beginn: Versatz in Minuten')).toHaveValue(-60);
+    expect(screen.getByLabelText('Ende: Grenze')).toHaveValue('none');
+    change('Beginn: Sonnenereignis', 'sunrise'); change('Beginn: Versatz in Minuten', '30'); save();
+    await screen.findByText('Zeitfenster: ab Sonnenaufgang +30 min');
+    await edit(); change('Beginn: Grenze', 'time'); change('Beginn: Uhrzeit', '22:00'); change('Ende: Grenze', 'time'); change('Ende: Uhrzeit', '06:00'); save();
+    await screen.findByText('Zeitfenster: ab 22:00 Uhr · bis 06:00 Uhr');
+    expect(writes(callWS).at(-1)?.[0].schedule).toMatchObject({condition: {time_window: {after: {type: 'time', value: '22:00'}, before: {type: 'time', value: '06:00'}}}});
+  });
+  it.each(['time', 'sun', 'lux'] as const)('supports upper-only and open windows for %s triggers', async type => {
+    const initial = plan(); initial.trigger = type === 'time' ? initial.trigger : type === 'sun' ? {type, event: 'sunset', offset_min: 0} : {type, sensor_entity_id: 'sensor.test_lux', comparison: 'below', threshold: 50, duration_seconds: 300};
+    const {callWS} = setup({initial: response([initial])}); await edit();
+    fireEvent.click(screen.getByLabelText('Nur zwischen … und …')); change('Beginn: Grenze', 'none'); change('Ende: Grenze', 'sun');
+    save(); await screen.findByText('Zeitfenster: bis Sonnenaufgang');
+    expect(writes(callWS).at(-1)?.[0].schedule).toMatchObject({condition: {time_window: {after: null, before: {type: 'sun', event: 'sunrise', offset_min: 0}}}});
+    await edit(); change('Ende: Grenze', 'none'); save(); await screen.findByText('Zeitfenster: Ohne zeitliche Begrenzung');
+    expect(writes(callWS).at(-1)?.[0].schedule).toMatchObject({condition: {time_window: {after: null, before: null}}});
+  });
+  it('disables windows explicitly and cancel never mutates the saved boundaries', async () => {
+    const initial = plan(); initial.condition.time_window = {after: {type: 'time', value: '21:30'}, before: {type: 'sun', event: 'sunrise', offset_min: -15}};
+    const {callWS} = setup({initial: response([initial])}); await edit();
+    change('Beginn: Uhrzeit', '23:00'); fireEvent.click(screen.getByLabelText('Nur zwischen … und …')); fireEvent.click(screen.getByText('Abbrechen')); await edit();
+    expect(screen.getByLabelText('Nur zwischen … und …')).toBeChecked(); expect(screen.getByLabelText('Beginn: Uhrzeit')).toHaveValue('21:30');
+    expect(initial.condition.time_window.after).toEqual({type: 'time', value: '21:30'});
+    fireEvent.click(screen.getByLabelText('Nur zwischen … und …')); save(); await screen.findByText('Zeitplan in Home Assistant gespeichert.');
+    expect(writes(callWS)[0][0].schedule).toMatchObject({condition: {time_window: null}});
+    expect(screen.queryByText(/^Zeitfenster:/)).not.toBeInTheDocument();
+    await edit(); expect(screen.getByLabelText('Nur zwischen … und …')).not.toBeChecked();
+  });
+  it('validates both boundary offsets and times without blocking disabled windows', async () => {
+    setup(); await edit(); fireEvent.click(screen.getByLabelText('Nur zwischen … und …'));
+    for (const label of ['Beginn', 'Ende']) {
+      change(`${label}: Grenze`, 'sun');
+      for (const invalid of ['1441', '-1441', '1.5', '']) {change(`${label}: Versatz in Minuten`, invalid); expect(screen.getByText('Zeitplan speichern')).toBeDisabled();}
+      for (const valid of ['-1440', '1440', '0']) {change(`${label}: Versatz in Minuten`, valid); expect(screen.getByText('Zeitplan speichern')).toBeEnabled();}
+      change(`${label}: Grenze`, 'time'); change(`${label}: Uhrzeit`, ''); expect(screen.getByText('Zeitplan speichern')).toBeDisabled(); change(`${label}: Uhrzeit`, '00:00'); expect(screen.getByText('Zeitplan speichern')).toBeEnabled();
+    }
+    change('Ende: Uhrzeit', ''); fireEvent.click(screen.getByLabelText('Nur zwischen … und …')); expect(screen.getByText('Zeitplan speichern')).toBeEnabled();
+  });
+  it('keeps time window drafts after rejected saves and locks boundary controls while pending', async () => {
+    const pending = deferred<SchedulesResponse>(); const {callWS} = setup({write: () => pending.promise}); await edit();
+    fireEvent.click(screen.getByLabelText('Nur zwischen … und …')); change('Beginn: Grenze', 'sun'); change('Beginn: Versatz in Minuten', '-60'); save(); save();
+    expect(writes(callWS)).toHaveLength(1); expect(screen.getByLabelText('Beginn: Grenze')).toBeDisabled(); expect(screen.getByLabelText('Nur zwischen … und …')).toBeDisabled();
+    await act(async () => pending.reject(Error('Testfehler')));
+    expect(screen.getByLabelText('Beginn: Versatz in Minuten')).toHaveValue(-60); expect(screen.getByLabelText('Beginn: Grenze')).toBeEnabled();
+    fireEvent.click(screen.getByText('Abbrechen')); await edit(); expect(screen.getByLabelText('Nur zwischen … und …')).not.toBeChecked();
+  });
   it('supports brightness, off and room actions', async () => {
     const {callWS} = setup({adaptive: true}); await edit(); change('Aktion', 'lights'); fireEvent.click(screen.getByLabelText('Testlampe')); fireEvent.click(screen.getByLabelText('Helligkeit festlegen')); change('Helligkeit (1–255)', '77'); save(); await waitFor(() => expect(screen.queryByText('Zeitplan speichern')).not.toBeInTheDocument()); expect(writes(callWS).at(-1)?.[0].schedule).toMatchObject({action: {brightness: 77, on: true}});
     await edit(); fireEvent.click(screen.getByLabelText('Lampen einschalten (sonst ausschalten)')); save(); await waitFor(() => expect(screen.queryByText('Zeitplan speichern')).not.toBeInTheDocument()); expect(writes(callWS).at(-1)?.[0].schedule).toMatchObject({action: {on: false, brightness: null}});

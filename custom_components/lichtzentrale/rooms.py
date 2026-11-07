@@ -99,7 +99,7 @@ def validate_control_options(on=None, brightness=None, xy=None, color_temp_kelvi
 
 
 def check_execution_guard(guard):
-    """Evaluate a schedule's conditions after locking, before its first side effect."""
+    """Fail closed when a supplied execution or dispatch condition no longer holds."""
     if guard is not None and not guard():
         raise ServiceValidationError("Die Bedingungen des Zeitplans sind nicht mehr erfüllt.")
 
@@ -213,14 +213,14 @@ async def async_set_light(
 
 
 async def async_toggle_room(
-    hass, store, area_id, on=None, context=None, *, transition=None, guard=None
+    hass, store, area_id, on=None, context=None, *, transition=None, guard=None, dispatch_guard=None
 ):
     from asyncio import Lock
 
     locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
     async with locks.setdefault(area_id, Lock()):
         return await _toggle_room(
-            hass, store, area_id, on, context, transition=transition, guard=guard
+            hass, store, area_id, on, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard
         )
 
 
@@ -256,7 +256,7 @@ def _remember_light(state):
 
 
 async def _toggle_room(
-    hass, store, area_id, on=None, context=None, *, transition=None, guard=None
+    hass, store, area_id, on=None, context=None, *, transition=None, guard=None, dispatch_guard=None
 ):
     """Restore pre-off members or AL targets; switch-only rooms toggle directly."""
     check_execution_guard(guard)
@@ -280,14 +280,14 @@ async def _toggle_room(
 
         if not any(s["id"] == default and s["area_id"] == area_id for s in store.data["scenes"]):
             raise ServiceValidationError("Die Einschalt-Szene dieses Raums wurde nicht gefunden.")
-        result = await async_apply_scene_locked(hass, store, default, context, transition=transition)
+        result = await async_apply_scene_locked(hass, store, default, context, transition=transition, dispatch_guard=dispatch_guard)
         if result["applied"] and not result.get("failed") and settings.get("pre_off_pending"):
             await store.async_update_room(area_id, {"pre_off_pending": []})
         return result
     if on and default == "adaptive":
         from .adaptive import async_turn_on_adaptive
 
-        applied = await async_turn_on_adaptive(hass, store, area_id, context=context, transition=transition)
+        applied = await async_turn_on_adaptive(hass, store, area_id, context=context, transition=transition, dispatch_guard=dispatch_guard)
         if applied and settings.get("pre_off_pending"):
             await store.async_update_room(area_id, {"pre_off_pending": []})
         return {"applied": applied, "skipped": [e for e in targets if e not in applied]}
@@ -346,6 +346,7 @@ async def _toggle_room(
         prepared[state.entity_id] = state
 
     def still_allowed(entity_id):
+        check_execution_guard(dispatch_guard)
         if (
             entity_id not in store.data["settings"]["light_entity_ids"]
             or entity_area_id(hass, entity_id) != area_id
