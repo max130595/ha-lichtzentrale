@@ -55,18 +55,20 @@ und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
 - **Hue-Szene importieren** bietet native Hue-Bridge-Szenen an. Vor Import und jedem Start
   werden die tatsächlichen Hue-Ziele gegen Raum und Freigaben geprüft. Unbekannte Ziele,
   nicht freigegebene Lampen, Gruppen- und Smart-Szenen werden sicher abgelehnt. Start erfolgt
-  über `hue.activate_scene`, ohne Dynamik. Dafür wird der geladene Hue-V2-Ressourcencontroller
+  über `hue.activate_scene`; in der Hue Bridge als dynamisch angelegte Szenen (`is_dynamic`)
+  starten dabei dynamisch, die Farben wandern also wie in der Hue-App weiter. Dafür wird der geladene Hue-V2-Ressourcencontroller
   verwendet; wenn dessen Ziele nicht auslesbar sind, wird kein unkontrollierter Aufruf gesendet.
 - Die **zuletzt über Lichtzentrale gestartete Szene** bleibt pro Raum im Store erhalten,
   erscheint in Übersicht und Raum und lässt sich mit einem Tipp neu starten. Nur vollständig
   erfolgreiche Starts aktualisieren sie; Teilfehler erhalten den bisherigen Eintrag. Löschen
   entfernt die Referenz. Dies ist ein Startverlauf, keine Erkennung externer Aktivierungen.
-  Die Referenz ist typenunabhängig; dynamische Starts kommen mit Stufe 2 dazu.
+  Die Referenz ist typenunabhängig und gilt auch für dynamische Hue-Szenen; eigene dynamische
+  Szenen der Lichtzentrale kommen mit Stufe 2 dazu.
 - Zur Laufzeit angebotene Shelly-Schalter benötigen eine Beleuchtungsbezeichnung am Gerät
   oder an der Entity (etwa „Deckenlicht“). Andere Switch-Integrationen und alle anderen
   Steuerdomains bleiben gesperrt. Die zusätzliche explizite Freigabe ist immer erforderlich.
 
-Adaptive Lighting und dynamische Szenen folgen in Stufe 2. Automatische Anpassungen anderer
+Adaptive Lighting und eigene dynamische Szenen der Lichtzentrale (aus Paletten) folgen in Stufe 2. Automatische Anpassungen anderer
 Integrationen werden noch nicht pausiert. Adaptive Lighting muss nicht installiert sein.
 Services für Automationen: `lichtzentrale.apply_palette`, `lichtzentrale.apply_scene` und
 `lichtzentrale.toggle_room`. Alle verwenden dieselben Administrator- und Zielprüfungen wie das Panel.

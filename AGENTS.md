@@ -11,6 +11,10 @@ Taster im Haus (`HAUS.md`) bekommst du **separat vom Nutzer** – sie liegt bewu
   `stufe-<n>-<kurzname>` und ein Pull Request gegen `main`. Nie direkt auf `main` committen.
 - Rollen: **ChatGPT/Codex** baut die Grundlage einer Stufe. **Claude** prüft den PR, testet gegen
   das echte Home Assistant und macht den Feinschliff. Nie gleichzeitig am selben Branch arbeiten.
+- **Übergabe:** Sobald der Pull Request als Entwurf geöffnet ist, hört ChatGPT/Codex auf, am
+  Branch zu arbeiten. Claude prüft, korrigiert und testet und meldet über den Nutzer, wann es fertig
+  ist. Erst danach arbeitet ChatGPT/Codex weiter – und immer zuerst `git pull`, dann ändern.
+  Gefundene Fehler während Claudes Prüfung nur melden, nicht selbst beheben.
 - Jeder PR beschreibt: was gebaut wurde, was bewusst fehlt, wie man es testet.
 - Nach jeder Stufe muss die Integration **installierbar und lauffähig** sein (HACS-Installation,
   Neustart, keine Fehler im Log).
