@@ -13,6 +13,8 @@ const scene: Scene = {id: 'test_scene', name: 'Testszene', area_id: room.area_id
 function setup(r = room) {
   const callWS = vi.fn(async (req: {type: string; [key: string]: unknown}): Promise<unknown> => {
     if (req.type.endsWith('rooms/list')) return [r];
+    if (req.type.endsWith('motion/get')) return {config: null, status: {paused: false, active: false, enabled: false}, sensors: [], lux_sensors: []};
+    if (req.type.endsWith('lights/list')) return r.lights;
     if (req.type.endsWith('hue_scenes/list')) return [{entity_id: 'scene.test_hue', area_id: r.area_id, name: 'Test Hue', available: true}];
     if (req.type.endsWith('scenes/list')) return [scene];
     if (req.type.endsWith('scene/snapshot')) return {scene, skipped: ['light.test_offline']};
@@ -56,7 +58,7 @@ describe('Räume und Szenen', () => {
     const callWS = setup(); await open();
     fireEvent.change(screen.getByLabelText('Szenenname'), {target: {value: 'Neue Szene'}});
     fireEvent.click(screen.getByRole('button', {name: 'Aktuellen Zustand als Szene speichern'}));
-    expect(await screen.findByRole('status')).toHaveTextContent('1 nicht verfügbare Lampe(n) fehlen');
+    expect(await screen.findByText(/1 nicht verfügbare Lampe\(n\) fehlen/)).toHaveAttribute('role', 'status');
     expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/snapshot', area_id: room.area_id, name: 'Neue Szene'});
   });
   it('preserves scene data when favoriting and imports selected Hue scene', async () => {

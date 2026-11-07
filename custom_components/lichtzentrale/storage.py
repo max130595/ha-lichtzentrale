@@ -280,6 +280,43 @@ class LichtzentraleStore:
             self._data = updated
             return {"cycle": list(room.get("cycle", [])), "default_on": room.get("default_on", "last")}
 
+    async def async_set_motion(self, area_id: str, config: dict) -> dict:
+        """Commit complete room automation without losing concurrent room edits."""
+        from .motion_config import validate_motion
+
+        async with self._lock:
+            config = validate_motion(self._hass, self, area_id, config)
+            updated = deepcopy(self._data)
+            updated["rooms"].setdefault(area_id, {})["motion"] = config
+            await self._store.async_save(updated)
+            self._data = updated
+            self._refresh_motion(area_id)
+            return deepcopy(config)
+
+    async def async_set_motion_enabled(self, area_id: str, enabled: bool) -> dict:
+        """Disable even stale setups; enabling revalidates every selected resource."""
+        from .motion_config import validate_motion
+
+        if type(enabled) is not bool:
+            raise ServiceValidationError("Bitte einen Ein/Aus-Wert angeben.")
+        async with self._lock:
+            config = deepcopy(self._data["rooms"].get(area_id, {}).get("motion"))
+            if not isinstance(config, dict):
+                raise ServiceValidationError("Bitte zuerst die Bewegungsautomatik einrichten.")
+            config["enabled"] = enabled
+            if enabled:
+                config = validate_motion(self._hass, self, area_id, config)
+            updated = deepcopy(self._data)
+            updated["rooms"][area_id]["motion"] = config
+            await self._store.async_save(updated)
+            self._data = updated
+            self._refresh_motion(area_id)
+            return deepcopy(config)
+
+    def _refresh_motion(self, area_id: str) -> None:
+        if manager := self._hass.data.get(DOMAIN, {}).get("motion"):
+            manager.refresh_config(area_id)
+
     async def async_remove(self) -> None:
         """Remove integration data when its config entry is deleted."""
         await self._store.async_remove()

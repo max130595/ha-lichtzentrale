@@ -21,6 +21,8 @@ custom_components/lichtzentrale/
   dynamic_scenes.py    aus Upstream übernommen, an Szenen-Modell angepasst
   adaptive.py          optionale Anbindung an Adaptive Lighting
   bindings.py          Tasterbelegung: Event-Entities abhören, Aktionen ausführen
+  motion.py            Bewegungsautomatik: Belegung, Zeitfenster, Nachlauf und manuelle Pause
+  motion_config.py     Sensor-Auswahl und geschlossene Konfigurationsprüfung
   schedules.py         Zeitpläne: Uhrzeit, Sonnenauf/-untergang mit Versatz, Helligkeitsschwelle
   websocket_api.py     alle Befehle für die Oberfläche (siehe unten)
   services.yaml        Services für Automationen
@@ -71,6 +73,7 @@ js/                    React + TypeScript Quellcode der Oberfläche (webpack, wi
 `dynamic/list`, `dynamic/stop`,
 `adaptive/status`, `adaptive/set`,
 `bindings/list`, `binding/save`, `binding/delete`, `buttons/list` (alle Event-Entities mit Typen),
+`motion/get`, `motion/save`, `motion/set_enabled`,
 `schedules/list`, `schedule/save`, `schedule/delete`.
 
 Services für eigene Automationen: `lichtzentrale.apply_scene`, `lichtzentrale.next_scene`,
@@ -194,6 +197,51 @@ diese Taste überhaupt ein Doppelklick belegt ist.
   Switch-Lichter werden beim Dimmen immer übersprungen und erhalten keinen Serviceaufruf.
 - Tastereditor mit Mehrfachauswahl gruppiert nach Raum, inklusive „Ohne Raum“.
 - Details, Sicherheitsregeln und Abnahme: [STUFE_3A_TESTPLAN.md](STUFE_3A_TESTPLAN.md).
+
+### Stufe 3b – Bewegungsmelder
+
+- **Sensoren pro Raum:** Beliebig viele zur Laufzeit ausgewählte `binary_sensor` mit
+  `device_class: motion`, `occupancy` oder `presence`. Jeder aktive Sensor hält den Raum belegt.
+  Erst wenn alle Sensoren sicher `off` melden, beginnt die Ausschaltzeit. Fehlende oder nicht
+  verfügbare Sensoren gelten nicht als leerer Raum und verhindern ein automatisches Ausschalten.
+- **Zeitfenster:** Pro Raum mehrere geordnete Fenster mit Beginn und Ende als lokale Uhrzeit
+  oder Sonnenauf-/untergang, jeweils mit Versatz von −1440 bis +1440 Minuten. Mitternacht wird
+  unterstützt. Gleiche Uhrzeiten bedeuten ganztägig, bei Überschneidungen gilt das erste Fenster.
+  Ohne passende Zeitgrenzen (etwa fehlendes Sonnenereignis) wird nicht eingeschaltet.
+  Das Fenster wird bei einer neuen Aktivierung gewählt, nicht während einer laufenden Belegung
+  zwangsweise gewechselt. Allgemeine Zeitpläne bleiben Stufe 4.
+- **Aktion je Fenster:** Eine gespeicherte Szene dieses Raums, „Natürliches Licht“ mit geprüfter
+  optionaler Adaptive-Lighting-Zuordnung oder eine Lampenauswahl mit Helligkeit als Nachtlicht.
+  Bei der Lampenaktion können der ganze Raum oder ausdrücklich ausgewählte, freigegebene
+  Einzellampen und Lichtschalter auch aus mehreren Räumen gewählt werden, wie bei `toggle_lights`.
+  Szenen und Natürliches Licht behalten ihre bereits geprüften eigenen Ziele.
+- **Nachlauf und Abdunkeln:** Ausschalten nach 1 bis 86400 Sekunden bestätigter Leerzeit.
+  Optional werden 20 Sekunden vorher nur eingeschaltete dimmbare Lampen auf höchstens 30 %
+  reduziert; dunklere Nachtlichter werden nicht aufgehellt. Neue Bewegung stellt die unmittelbar
+  vorherige Helligkeit wieder her. Reine Schalter werden niemals gedimmt und erhalten nur Ein/Aus.
+  Optionales Adaptive Lighting wird vor Nachtlicht/Vorabdunkeln nur für die ausgewählten Lampen
+  auf manuell gesetzt, nicht raumweit deaktiviert. Die nächste ausdrückliche Natürliches-Licht-
+  Aktivierung hebt diese Markierung wieder auf.
+  Automatisches Ausschalten betrifft ausschließlich die erfolgreich automatisch geschalteten Ziele,
+  keine anderen Geräte im Raum. Freigabe, Raumzuordnung und Eignung werden vor Befehlen erneut geprüft.
+- **Lux-Bedingung:** Optionaler zur Laufzeit wählbarer Illuminanzsensor mit Einheit `lx` und
+  Schwelle. Nur Werte unter der Schwelle erlauben den Start. Fehlende, unbekannte oder ungültige
+  Werte verhindern ihn; eine spätere Aufhellung blockiert weder Rückkehr aus dem Abdunkeln noch
+  das Ausschalten eines bereits gestarteten Bewegungslichts.
+- **Manuelle Bedienung hat Vorrang:** Änderungen an den konfigurierten Lichtzielen, etwa durch
+  Taster, App oder Szene, pausieren die Raumautomatik. Sie läuft erst wieder, nachdem alle
+  Sensoren für die vollständige Ausschaltzeit leer gemeldet haben. Manuell gewählte Zustände
+  werden dabei nicht automatisch ausgeschaltet. Eigene Befehle und ihre HA-Kontexte werden
+  unterschieden; unklare Änderungen werden vorsichtshalber als manuell behandelt.
+- **Oberfläche und Speicherung:** Ein/Aus-Schalter und deutscher Editor auf der Raumseite.
+  Konfiguration liegt ausschließlich im Store unter `rooms.<area_id>.motion`; alte Daten brauchen
+  keine Migration. Neue Konfigurationen starten ausgeschaltet. Speichern/Deaktivieren verwirft
+  offene Timer und Besitzansprüche, ohne Lichtbefehle; die nächste Bewegung aktiviert neu.
+  Laufende Timer und manuelle Pausen sind nicht persistent. Nach Neustart werden keine alten
+  Ausschaltbefehle nachgeholt. Nur bestätigte Serverantworten gelten als gespeichert.
+- **Prüfung/Übergabe:** Ausschließlich synthetische Räume und Geräte; keine ausgeschlossenen
+  privaten Räume in Tests oder Beispielen. Details: [STUFE_3B_TESTPLAN.md](STUFE_3B_TESTPLAN.md).
+  Nach Öffnen des Draft-PR endet die Arbeit einschließlich CI-Überwachung bis Claudes Rückmeldung.
 
 ### Stufe 4 – Zeitpläne
 - Auslöser Uhrzeit, Sonnenauf-/-untergang mit Versatz, Außenhelligkeit unter Schwelle
