@@ -28,6 +28,7 @@ class LichtzentraleStore:
     """Own the complete data model while preserving future-stage fields."""
 
     def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
         self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._data = empty_data()
         self._lock = Lock()
@@ -123,6 +124,34 @@ class LichtzentraleStore:
             updated["rooms"].setdefault(area_id, {}).update(deepcopy(changes))
             await self._store.async_save(updated)
             self._data = updated
+
+    async def async_set_position(self, area_id: str, entity_id: str, position: dict | None):
+        """Write one position without losing concurrent edits or trusting stale grants."""
+        from homeassistant.helpers import area_registry as ar
+
+        from .lights import entity_area_id, validate_lights
+        from .positions import validate_position
+
+        position = validate_position(position) if position is not None else None
+        async with self._lock:
+            # Validate after waiting for the Store lock: settings or area membership
+            # may have changed while another write was being persisted.
+            if (
+                ar.async_get(self._hass).async_get_area(area_id) is None
+                or entity_id not in self._data["settings"]["light_entity_ids"]
+                or entity_area_id(self._hass, entity_id) != area_id
+            ):
+                raise ServiceValidationError("Die Lampe muss für diesen Raum freigegeben sein.")
+            validate_lights(self._hass, [entity_id])
+            updated = deepcopy(self._data)
+            positions = updated["rooms"].setdefault(area_id, {}).setdefault("positions", {})
+            if position is None:
+                positions.pop(entity_id, None)
+            else:
+                positions[entity_id] = deepcopy(position)
+            await self._store.async_save(updated)
+            self._data = updated
+            return deepcopy(position)
 
     async def async_remove(self) -> None:
         """Remove integration data when its config entry is deleted."""

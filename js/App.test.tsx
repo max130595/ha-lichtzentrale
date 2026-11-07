@@ -53,7 +53,7 @@ describe('Galerie', () => {
     const button = screen.getByRole('button', {name: 'Auf 1 Lampe(n) anwenden'});
     fireEvent.click(button); fireEvent.click(button);
     expect(callWS.mock.calls.filter(([request]) => request.type === 'lichtzentrale/palette/apply')).toHaveLength(1);
-    expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/palette/apply', palette_id: palette.id, entity_ids: ['light.test_fixture'], brightness: 128, transition: 2});
+    expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/palette/apply', palette_id: palette.id, entity_ids: ['light.test_fixture'], brightness: 128, transition: 2, verteilung: 'zufall'});
     resolve({applied: [], skipped: ['light.test_fixture']});
     expect(await screen.findByText(/0 Lampe\(n\) angewendet. 1 Lampe\(n\) übersprungen./)).toBeVisible();
   });

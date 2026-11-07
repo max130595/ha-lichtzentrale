@@ -10,6 +10,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import DOMAIN
 from .lights import list_lights, validate_lights
 from .palettes import async_apply_palette, list_palettes
+from .positions import DISTRIBUTIONS
 from .rooms import async_room_brightness, async_set_light, async_toggle_room, list_rooms
 from .scenes import (
     async_apply_scene,
@@ -28,6 +29,7 @@ APPLY_FIELDS = {
     vol.Required("entity_ids"): vol.All(LIGHT_IDS, vol.Length(min=1)),
     vol.Optional("brightness"): vol.All(vol.Coerce(int), vol.Range(min=1, max=255)),
     vol.Optional("transition", default=1): vol.All(vol.Coerce(float), vol.Range(min=0, max=60)),
+    vol.Optional("verteilung", default="zufall"): vol.In(DISTRIBUTIONS),
 }
 
 
@@ -106,6 +108,7 @@ async def ws_apply(hass, connection, msg):
             msg.get("brightness"),
             msg["transition"],
             connection.context(msg),
+            verteilung=msg["verteilung"],
         )
         connection.send_result(msg["id"], result)
     except HomeAssistantError as error:
@@ -169,6 +172,10 @@ async def room_brightness(hass, store, msg, context):
     )
 
 
+async def room_position(hass, store, msg, context):
+    return await store.async_set_position(msg["area_id"], msg["entity_id"], msg["position"])
+
+
 async def light_set(hass, store, msg, context):
     return await async_set_light(
         hass,
@@ -212,6 +219,11 @@ STAGE_ONE_HANDLERS = (
     command("rooms/list", {}, rooms_list),
     command("room/toggle", {**AREA_FIELDS, vol.Optional("on"): bool}, room_toggle),
     command(
+        "room/position",
+        {**AREA_FIELDS, vol.Required("entity_id"): cv.entity_id, vol.Required("position"): vol.Any(None, dict)},
+        room_position,
+    ),
+    command(
         "room/brightness", {**AREA_FIELDS, vol.Required("brightness"): BRIGHTNESS}, room_brightness
     ),
     command("light/set", {vol.Required("entity_id"): cv.entity_id, **CONTROL_FIELDS}, light_set),
@@ -239,7 +251,7 @@ async def dynamic_list(hass, store, msg, context):
 async def dynamic_stop(hass, store, msg, context):
     from .dynamic_scenes import async_stop_room
 
-    return await async_stop_room(hass, store, msg["area_id"])
+    return await async_stop_room(hass, store, msg["area_id"], context=context)
 
 
 async def adaptive_status(hass, store, msg, context):

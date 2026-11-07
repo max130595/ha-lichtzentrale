@@ -2,7 +2,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {RoomPalette} from './RoomPalette';
 import {Rooms} from './Rooms';
-import type {ApplyResult, Hass, Light, Palette} from './types';
+import type {ApplyResult, Distribution, Hass, Light, Palette} from './types';
 
 const tabs = ['Räume', 'Raum', 'Galerie', 'Taster', 'Zeitpläne'] as const;
 type Tab = typeof tabs[number];
@@ -34,6 +34,7 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
   const [palette, setPalette] = useState<Palette | null>(null);
   const [brightness, setBrightness] = useState(128);
   const [transition, setTransition] = useState(2);
+  const [distribution, setDistribution] = useState<Distribution>('zufall');
   const load = useCallback(async () => {
     const id = ++loadId.current; const keepGrants = preserveGrants.current; preserveGrants.current = false; setLoading(true); setError('');
     try {
@@ -71,7 +72,7 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
     if (lock.current || !palette || !selected.length) return;
     lock.current = true; setBusy(true); setError(''); setMessage('');
     try {
-      const result = await api.current.callWS<ApplyResult>({type: 'lichtzentrale/palette/apply', palette_id: palette.id, entity_ids: selected, brightness, transition});
+      const result = await api.current.callWS<ApplyResult>({type: 'lichtzentrale/palette/apply', palette_id: palette.id, entity_ids: selected, brightness, transition, verteilung: distribution});
       if (!alive.current) return;
       setMessage(`${result.applied.length} Lampe(n) angewendet. ${result.skipped.length} Lampe(n) übersprungen. ${result.failed?.length || 0} Lampe(n) fehlgeschlagen.${result.skipped.length || result.failed?.length ? ' Nicht alle Lampen konnten geändert werden. Verfügbarkeit und Freigaben prüfen.' : ''}`);
     } catch (error) { if (alive.current) setError(`Anwenden fehlgeschlagen: ${errorText(error)} Einzelne Lampen könnten bereits geändert worden sein. Prüfe ihren Zustand vor einem erneuten Versuch.`); }
@@ -80,7 +81,7 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
   const allowed = lights.filter(light => light.allowed);
   const disabled = busy || loading;
   return <div className="app">
-    <header><button className="menu" aria-label="Seitenleiste öffnen" onClick={onMenu}>☰</button><div><h1>{tab === 'Raum' && roomName ? roomName : 'Lichtzentrale'}</h1><p>Dein Licht. Deine Farben.</p></div><span className="stage">Stufe 2</span></header>
+    <header><button className="menu" aria-label="Seitenleiste öffnen" onClick={onMenu}>☰</button><div><h1>{tab === 'Raum' && roomName ? roomName : 'Lichtzentrale'}</h1><p>Dein Licht. Deine Farben.</p></div><span className="stage">Stufe 2b</span></header>
     <main>
       {error && <div role="alert" className="error">{error}</div>}
       {message && <div role="status" className="notice">{message}</div>}
@@ -100,6 +101,7 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
         {palette && <section ref={application} tabIndex={-1}><RoomPalette key={palette.id} hass={hass} palette={palette}/></section>}
         {palette && <section className="card" aria-label="Palette anwenden"><h3>{palette.name} anwenden</h3><p>Wähle freigegebene Lampen. Farblose Lampen erhalten nur die Helligkeit, reine Ein/Aus-Lampen werden eingeschaltet.</p>
           <fieldset disabled={disabled}><legend>Lampen auswählen</legend>{allowed.length === 0 && <p>Bitte zuerst Lampen freigeben.</p>}{allowed.map(light => <label className="check" key={light.entity_id}><input type="checkbox" disabled={!light.available} checked={selected.includes(light.entity_id)} onChange={() => setSelected(toggle(selected, light.entity_id))}/><span>{light.name}<small>{light.area_name || 'Ohne Bereich'}{!light.available ? ' · Nicht verfügbar' : ''}</small></span></label>)}
+          <label>Farbverteilung für einzelne Lampen<select className="text-input" value={distribution} onChange={event => setDistribution(event.target.value as Distribution)}><option value="zufall">Zufällig</option><option value="verlauf_links_rechts">Verlauf von links nach rechts</option><option value="verlauf_vorne_hinten">Verlauf von vorne nach hinten</option><option value="hoehe">Nach Höhe: unten nach oben</option></select></label><p>Die Positionen stammen aus den jeweiligen Räumen. Lampen ohne Position kommen zuletzt. Bei Höhe erhält Hintergrund die kräftigste Farbe.</p>
           <label className="slider">Helligkeit: {Math.round(brightness / 255 * 100)} %<input aria-label="Helligkeit" type="range" min="1" max="255" value={brightness} onChange={event => setBrightness(Number(event.target.value))}/></label>
           <label className="slider">Übergang: {transition} Sekunden<input aria-label="Übergang" type="range" min="0" max="60" value={transition} onChange={event => setTransition(Number(event.target.value))}/></label></fieldset>
           <button disabled={disabled || !selected.length} onClick={() => void apply()}>{busy ? 'Bitte warten …' : `Auf ${selected.length} Lampe(n) anwenden`}</button>

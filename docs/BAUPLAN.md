@@ -65,7 +65,7 @@ js/                    React + TypeScript Quellcode der Oberfläche (webpack, wi
 
 ### Websocket-Befehle (Präfix `lichtzentrale/`)
 
-`rooms/list`, `room/toggle`, `room/brightness`, `light/set`,
+`rooms/list`, `room/toggle`, `room/brightness`, `room/position`, `light/set`,
 `scenes/list`, `scene/save`, `scene/delete`, `scene/apply`, `scene/snapshot`, `scenes/reorder`,
 `palettes/list`, `palette/save`, `palette/delete`,
 `dynamic/list`, `dynamic/stop`,
@@ -138,6 +138,48 @@ diese Taste überhaupt ein Doppelklick belegt ist.
 - Dynamische Szenen auf das Szenenmodell umstellen, Anzeige laufender Szenen mit Stopp.
 - Adaptive-Lighting-Anbindung nach den Regeln oben.
 - **Fertig wenn:** Farbszene pausiert natürliches Licht, Raum aus und wieder an startet es wieder.
+
+### Stufe 2b – Lampenpositionen und räumliche Effekte
+
+- **Positionen:** Jede freigegebene Lampe bekommt pro Raum optional eine Position in einem
+  3×3-Raster (vorne/mitte/hinten × links/mitte/rechts) und eine Höhe: `boden` (unter 50 cm),
+  `moebel` (Möbelhöhe, um 1,20 m), `hintergrund` (hinter TV/Möbeln, indirekt), `decke`.
+  Speicherung im Store unter `rooms.<area_id>.positions.<entity_id> = {"cell": [x, y], "height": "..."}`.
+  `x` zählt von links (0) nach rechts (2), `y` von vorne (0) nach hinten (2).
+  Mehrere Lampen dürfen dasselbe Feld belegen. Lampen ohne Position werden bei Effekten ans Ende sortiert.
+- **Editor:** Auf der Raum-Seite gibt es **Lampen anordnen**: Lampe antippen, ein Feld des
+  3×3-Rasters antippen und die Höhe auswählen. Handytauglich, ohne Ziehen und Ablegen.
+  Positionen lassen sich wieder entfernen. Nur bestätigte Serverantworten gelten als gespeichert.
+  `room/position` speichert oder entfernt genau eine Position atomar, `rooms/list` liefert sie mit.
+- **Verteilung bei Paletten (statisch und dynamisch):** Neue Option `verteilung` mit `zufall`
+  (bisheriges Verhalten), `verlauf_links_rechts`, `verlauf_vorne_hinten` und `hoehe`
+  (Farbe 1 unten, letzte Farbe oben). Bei `hoehe` erhält `hintergrund` die kräftigste Farbe
+  der Palette, bestimmt durch die höchste HSV-Sättigung nach Umrechnung von XY nach RGB.
+  Bei gleicher Sättigung gewinnt die erste Farbe. Möbelhöhe liegt in der Mitte.
+  Die Einstellung wird in Palettenszenen gespeichert und ist auch bei `apply_palette` verfügbar.
+- **Welle bei dynamischen Szenen:** Neue boolesche Option `dynamic.welle`. Die Palette wandert
+  entlang der gewählten Verteilungsachse Schritt für Schritt durch den Raum. Beim Aktivieren
+  wird nötigenfalls links → rechts gewählt; eine Welle benötigt eine räumliche Verteilung.
+  Der ausdrückliche Szenenstart schaltet die freigegebenen Ziele wie bisher ein. Bei späteren
+  Farbwechseln werden ausgeschaltete, nicht verfügbare oder nicht mehr freigegebene Lampen nicht eingeschaltet.
+- **Stopp für Hue-Dynamik:** Der immer erreichbare Stopp-Knopf eines Raums stoppt lokale
+  Dynamik und setzt eingeschaltete freigegebene Einzellichter mit ihrer aktuellen Farbe und
+  Helligkeit per `light.turn_on` fest. Dadurch endet auch Hue-Dynamik. Ausgeschaltete Lampen,
+  nicht verfügbare Geräte und reine Switch-Deckenlichter bleiben unverändert.
+  Teilfehler werden angezeigt; ein Stopp wird nicht fälschlich als vollständig erfolgreich gemeldet.
+- **Korrekturen aus der Stufe-2-Abnahme:** Statische und dynamische Paletten schalten keine
+  `switch.*`-Entities; Snapshot-Szenen behalten den gespeicherten An/Aus-Zustand dieser Schalter.
+  Raum aus schaltet alle freigegebenen Lampen und Switch-Lichter des Raums aus.
+  Raum einschalten mit natürlichem Licht aktiviert nur die Adaptive-Lighting-Ziele und nie
+  Switch-Lichter. Sonst werden in gemischten Räumen nur die vor dem letzten Raum-Aus
+  eingeschalteten Lampen und Schalter aus dem serverseitigen Vor-Aus-Snapshot wiederhergestellt.
+  Räume ohne freigegebene `light`-Entities schalten ihre Switch-Lichter direkt ein/aus; ihr
+  An-Status richtet sich dann nach den Schaltern, in gemischten Räumen nach den Lampen.
+- **Kompatibilität:** Alte Räume brauchen keine Migration; fehlende Positionen bleiben optional.
+  Alte Szenen verwenden weiterhin `zufall` und `welle: false`. Keine zusätzlichen Requirements.
+- **Fertig wenn:** Positionen über Neuladen erhalten bleiben; beide Rasterachsen und die Höhe
+  die Farbverteilung bestimmen; die Welle sichtbar in Schritten wandert; der Raum-Stopp
+  eine dynamische Hue-Szene einfriert, ohne ausgeschaltete Lampen einzuschalten.
 
 ### Stufe 3 – Taster
 - `buttons/list`, Belegungseditor, `bindings.py` mit allen Aktionen, Szenenzyklus, Dimmen.

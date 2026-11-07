@@ -1,6 +1,6 @@
 apply_palette:
   name: Farbpalette anwenden
-  description: Wendet eine eigene Farbpalette auf zuvor freigegebene Einzellampen an.
+  description: Wendet eine eigene Farbpalette auf zuvor freigegebene Einzellampen an. Switch-Lichtschalter bleiben unverändert.
   fields:
     palette_id:
       name: Farbpalette
@@ -38,6 +38,21 @@ apply_palette:
           step: 0.1
           unit_of_measurement: s
           mode: box
+    verteilung:
+      name: Farbverteilung
+      description: Räumliche Verteilung anhand der im Raum gespeicherten Lampenpositionen.
+      default: zufall
+      selector:
+        select:
+          options:
+            - label: Zufall (bisherige Verteilung)
+              value: zufall
+            - label: Verlauf links nach rechts
+              value: verlauf_links_rechts
+            - label: Verlauf vorne nach hinten
+              value: verlauf_vorne_hinten
+            - label: Nach Höhe
+              value: hoehe
 
 apply_scene:
   name: Szene anwenden
@@ -52,7 +67,7 @@ apply_scene:
 
 toggle_room:
   name: Raum schalten
-  description: Schaltet ausschließlich die freigegebenen Einzellampen und Lichtschalter eines Bereichs.
+  description: Schaltet alle freigegebenen Raumlichter aus. Einschalten stellt vorher eingeschaltete Lampen und Switch-Lichter wieder her; reine Switch-Räume werden direkt geschaltet. Mit natürlichem Licht werden nur dessen Lampen aktiviert, nie Switch-Lichter.
   fields:
     area_id:
       name: Raum
@@ -67,7 +82,7 @@ toggle_room:
 
 stop_dynamic:
   name: Dynamische Szene stoppen
-  description: Stoppt die laufende Lichtzentrale-Palettenszene im Raum und lässt die aktuelle Lichtfarbe bestehen.
+  description: Stoppt die lokale Dynamik und hält eingeschaltete freigegebene Raumlampen mit aktueller Farbe und Helligkeit fest, auch bei Hue-Dynamik. Ausgeschaltete Lampen bleiben aus.
   fields:
     area_id:
       name: Raum

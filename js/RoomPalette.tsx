@@ -1,7 +1,7 @@
 // Geändert für Lichtzentrale
 import {useEffect, useRef, useState} from 'react';
 import {RuntimeControls} from './RuntimeControls';
-import type {ApplyResult, Hass, Palette, Room, Scene} from './types';
+import type {ApplyResult, Distribution, Hass, Palette, Room, Scene} from './types';
 export function RoomPalette({hass, palette}: {hass: Hass; palette: Palette}) {
   const api = useRef(hass); api.current = hass;
   const generation = useRef(0), lock = useRef(false);
@@ -9,6 +9,7 @@ export function RoomPalette({hass, palette}: {hass: Hass; palette: Palette}) {
   const [save, setSave] = useState(false), [dynamic, setDynamic] = useState(false), [name, setName] = useState(palette.name);
   const [brightness, setBrightness] = useState(palette.bri), [interval, setInterval] = useState(60), [transition, setTransition] = useState(10);
   const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState(''), [message, setMessage] = useState(''), [revision, setRevision] = useState(0);
+  const [distribution, setDistribution] = useState<Distribution>('zufall'), [wave, setWave] = useState(false);
   const saved = useRef<{signature: string; scene: Scene} | null>(null);
   useEffect(() => {
     const counter = generation; const id = ++counter.current;
@@ -23,7 +24,7 @@ export function RoomPalette({hass, palette}: {hass: Hass; palette: Palette}) {
     try {
       let result: ApplyResult;
       if (save || dynamic) {
-        const data = {name: name.trim(), area_id: area, kind: 'palette', palette_id: palette.id, brightness, dynamic: {enabled: dynamic, interval, transition}};
+        const data = {name: name.trim(), area_id: area, kind: 'palette', palette_id: palette.id, brightness, verteilung: distribution, dynamic: {enabled: dynamic, interval, transition, welle: dynamic && wave}};
         const signature = JSON.stringify(data);
         let scene = saved.current?.signature === signature ? saved.current.scene : null;
         if (!scene) {
@@ -34,7 +35,7 @@ export function RoomPalette({hass, palette}: {hass: Hass; palette: Palette}) {
         stored = true;
         result = await api.current.callWS<ApplyResult>({type: 'lichtzentrale/scene/apply', scene_id: scene.id});
       } else {
-        result = await api.current.callWS<ApplyResult>({type: 'lichtzentrale/palette/apply', palette_id: palette.id, entity_ids: room.lights.filter(light => light.allowed).map(light => light.entity_id), brightness, transition});
+        result = await api.current.callWS<ApplyResult>({type: 'lichtzentrale/palette/apply', palette_id: palette.id, entity_ids: room.lights.filter(light => light.allowed).map(light => light.entity_id), brightness, transition, verteilung: distribution});
       }
       if (id !== generation.current) return;
       setMessage(`${stored ? 'Szene gespeichert. ' : ''}${result.applied.length} Lampe(n) angewendet. ${result.skipped.length} übersprungen. ${result.failed?.length || 0} fehlgeschlagen.`); setRevision(value => value + 1);
@@ -47,8 +48,11 @@ export function RoomPalette({hass, palette}: {hass: Hass; palette: Palette}) {
     {loading && <p role="status">Räume werden geladen …</p>}
     <fieldset disabled={disabled}><legend>Raum und Szeneneinstellungen</legend><label>Zielraum<select className="text-input" value={area} onChange={event => {setArea(event.target.value); setMessage(''); setError('');}}><option value="">Bitte Raum wählen</option>{rooms.map(item => <option key={item.area_id} value={item.area_id} disabled={!item.available_count}>{item.name}</option>)}</select></label>
       {area && <><label className="slider">Helligkeit im Raum: {Math.round(brightness / 255 * 100)} %<input aria-label="Helligkeit im Raum" type="range" min="1" max="255" value={brightness} onChange={event => setBrightness(Number(event.target.value))}/></label>
+      <label>Farbverteilung<select className="text-input" value={distribution} onChange={event => setDistribution(event.target.value as Distribution)}><option value="zufall" disabled={dynamic && wave}>Zufällig</option><option value="verlauf_links_rechts">Verlauf von links nach rechts</option><option value="verlauf_vorne_hinten">Verlauf von vorne nach hinten</option><option value="hoehe">Nach Höhe: unten nach oben</option></select></label>
+      <p>Lampen ohne Position kommen zuletzt. Bei Höhe erhält Hintergrund die kräftigste Farbe.</p>
       <label className="check"><input type="checkbox" checked={save || dynamic} disabled={dynamic} onChange={event => setSave(event.target.checked)}/>Als Szene im Raum speichern</label>
-      <label className="check"><input type="checkbox" checked={dynamic} onChange={event => setDynamic(event.target.checked)}/>Dynamischer Farbwechsel</label>
+      <label className="check"><input type="checkbox" checked={dynamic} onChange={event => {setDynamic(event.target.checked); if (!event.target.checked) setWave(false);}}/>Dynamischer Farbwechsel</label>
+      {dynamic && <><label className="check"><input type="checkbox" checked={wave} onChange={event => {setWave(event.target.checked); if (event.target.checked && distribution === 'zufall') setDistribution('verlauf_links_rechts');}}/>Welle durch den Raum</label><p>Die Palette wandert schrittweise entlang der gewählten Farbverteilung. Ohne gewählte Achse startet die Welle von links nach rechts.</p></>}
       {dynamic && <p>Dynamische Paletten werden als Szene gespeichert. Pro Raum läuft eine dynamische Szene.</p>}
       {(save || dynamic) && <label>Name der Palettenszene<input className="text-input" maxLength={100} value={name} onChange={event => setName(event.target.value)}/></label>}
       {dynamic && <label>Farbwechsel alle (Sekunden)<input className="text-input" type="number" min="5" max="3600" value={interval} onChange={event => setInterval(Number(event.target.value))}/></label>}

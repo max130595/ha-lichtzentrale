@@ -22,7 +22,7 @@ describe('Stufe 2 Galerie', () => {
   it('applies static room palette only to approved targets', async () => {
     const callWS = mock(); render(<RoomPalette hass={{callWS} as Hass} palette={palette}/>); await selectRoom();
     fireEvent.click(screen.getByRole('button', {name: 'Im gewählten Raum anwenden'}));
-    await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/palette/apply', palette_id: palette.id, entity_ids: ['light.test_fixture'], brightness: 120, transition: 10}));
+    await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/palette/apply', palette_id: palette.id, entity_ids: ['light.test_fixture'], brightness: 120, transition: 10, verteilung: 'zufall'}));
   });
   it('saves dynamic palette then starts by saved ID and validates timing', async () => {
     const callWS = mock(); render(<RoomPalette hass={{callWS} as Hass} palette={palette}/>); await selectRoom();
@@ -33,7 +33,7 @@ describe('Stufe 2 Galerie', () => {
     fireEvent.change(screen.getByLabelText('Übergangszeit (Sekunden)'), {target: {value: '3'}});
     fireEvent.click(screen.getByRole('button', {name: 'Szene speichern und anwenden'}));
     await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/apply', scene_id: 'test_saved'}));
-    expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/save', scene: {name: palette.name, area_id: room.area_id, kind: 'palette', palette_id: palette.id, brightness: 120, dynamic: {enabled: true, interval: 5, transition: 3}}});
+    expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/save', scene: {name: palette.name, area_id: room.area_id, kind: 'palette', palette_id: palette.id, brightness: 120, verteilung: 'zufall', dynamic: {enabled: true, interval: 5, transition: 3, welle: false}}});
   });
   it('reuses saved scene after an apply failure instead of duplicating it', async () => {
     const callWS = mock(); const normal = callWS.getMockImplementation()!;

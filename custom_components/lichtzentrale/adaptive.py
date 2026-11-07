@@ -112,7 +112,7 @@ def status(hass, store):
     }
 
 
-async def _set_enabled(hass, store, area_id, entity_id, enabled, context):
+async def _set_enabled(hass, store, area_id, entity_id, enabled, context, *, turn_on_lights=False):
     lights = _validated(hass, store, area_id, entity_id)
     await hass.services.async_call(
         "switch",
@@ -135,10 +135,20 @@ async def _set_enabled(hass, store, area_id, entity_id, enabled, context):
         await hass.services.async_call(
             ADAPTIVE_DOMAIN,
             "apply",
-            {"entity_id": entity_id, "lights": lights, "turn_on_lights": False},
+            {"entity_id": entity_id, "lights": lights, "turn_on_lights": turn_on_lights},
             blocking=True,
             context=context,
         )
+
+    return lights
+
+
+async def async_turn_on_adaptive(hass, store, area_id, context=None):
+    """Room-on targets only the strictly validated AL assignment; caller holds lock."""
+    entity_id = store.data["rooms"].get(area_id, {}).get("adaptive_switch")
+    if not entity_id:
+        raise ServiceValidationError("Bitte zuerst Adaptive Lighting für diesen Raum zuordnen.")
+    return await _set_enabled(hass, store, area_id, entity_id, True, context, turn_on_lights=True)
 
 
 async def async_set_adaptive(

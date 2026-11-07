@@ -1,6 +1,7 @@
 # Geändert für Lichtzentrale
 """Original palettes and capability-aware application derived from presets.py."""
 
+import asyncio
 from copy import deepcopy
 
 from homeassistant.components.light import LightEntityFeature
@@ -9,7 +10,8 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util.color import color_RGB_to_xy
 
 from .color_temperature import find_closest_ct_match
-from .lights import validate_lights
+from .lights import entity_area_id, is_individual_light, validate_lights
+from .positions import ordered_targets, palette_indices, validate_distribution
 from .rooms import async_dispatch
 from .storage import LichtzentraleStore
 
@@ -71,8 +73,17 @@ async def async_apply_palette(
     *,
     color_offset: int = 0,
     manage: bool = True,
+    verteilung: str = "zufall",
+    welle: bool = False,
+    layout_targets: list[str] | None = None,
+    tick_area_id: str | None = None,
 ) -> dict[str, list[str]]:
     """Apply one original palette to explicitly allowed individual lamps only."""
+    validate_distribution(verteilung)
+    if type(welle) is not bool or type(color_offset) is not int:
+        raise ServiceValidationError("Ungültige Wellen-Einstellungen.")
+    if welle and verteilung == "zufall":
+        raise ServiceValidationError("Für eine Welle bitte eine räumliche Verteilung auswählen.")
     palette = next((item for item in BUILTIN_PALETTES if item["id"] == palette_id), None)
     if palette is None:
         raise ServiceValidationError("Die Farbpalette wurde nicht gefunden.")
@@ -98,9 +109,10 @@ async def async_apply_palette(
         from .adaptive import async_pause_adaptive
         from .const import DOMAIN
         from .dynamic_scenes import stop_dynamic
-        from .lights import entity_area_id
 
-        areas = sorted({entity_area_id(hass, e) for e in targets} - {None})
+        areas = sorted(
+            {entity_area_id(hass, e) for e in targets if e.startswith("light.")} - {None}
+        )
         locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
         async with AsyncExitStack() as stack:
             for area_id in areas:
@@ -118,21 +130,33 @@ async def async_apply_palette(
                 context,
                 color_offset=color_offset,
                 manage=False,
+                verteilung=verteilung,
+                welle=welle,
+                layout_targets=layout_targets,
+                tick_area_id=tick_area_id,
             )
 
-    result: dict[str, list[str]] = {"applied": [], "skipped": []}
+    skipped_switches = [e for e in targets if e.startswith("switch.")]
+    targets = [e for e in targets if e.startswith("light.")]
+    result: dict[str, list[str]] = {"applied": [], "skipped": skipped_switches}
     calls = []
-    for index, entity_id in enumerate(targets):
+    layout = layout_targets if welle and layout_targets is not None else targets
+    layout = [e for e in layout if e.startswith("light.")]
+    positions = {}
+    for entity_id in layout:
+        area_id = entity_area_id(hass, entity_id)
+        positions.update(
+            {entity_id: store.data["rooms"].get(area_id, {}).get("positions", {}).get(entity_id)}
+        )
+    indices = palette_indices(layout, positions, palette["colors"], verteilung, color_offset, welle)
+    for entity_id in ordered_targets(targets, positions, verteilung):
         state = hass.states.get(entity_id)
         if state is None or state.state in {"unknown", "unavailable"}:
             result["skipped"].append(entity_id)
             continue
-        if state.domain == "switch":
-            calls.append(("switch", "turn_on", {"entity_id": entity_id}))
-            continue
         attributes = state.attributes
         modes = set(attributes.get("supported_color_modes") or [])
-        color = palette["colors"][(index + color_offset) % len(palette["colors"])]
+        color = palette["colors"][indices[entity_id]]
         xy = (color["x"], color["y"])
         params = {"entity_id": entity_id}
         if modes.intersection({"xy", "hs", "rgb", "rgbw", "rgbww"}):
@@ -150,4 +174,35 @@ async def async_apply_palette(
         if attributes.get("supported_features", 0) & LightEntityFeature.TRANSITION:
             params["transition"] = transition
         calls.append(("light", "turn_on", params))
+    if tick_area_id is not None:
+        return await _async_dispatch_tick(
+            hass, store, tick_area_id, calls, result["skipped"], context
+        )
     return await async_dispatch(hass, calls, result["skipped"], context)
+
+
+async def _async_dispatch_tick(hass, store, area_id, calls, skipped, context):
+    """Recheck each tick target after scheduling, directly before sending its command."""
+    result = {"applied": [], "skipped": list(skipped)}
+
+    async def dispatch(domain, service, params):
+        entity_id = params["entity_id"]
+        state = hass.states.get(entity_id)
+        if (
+            state is None
+            or state.domain != "light"
+            or state.state != "on"
+            or entity_id not in store.data["settings"]["light_entity_ids"]
+            or entity_area_id(hass, entity_id) != area_id
+            or not is_individual_light(hass, state)
+        ):
+            return "skipped", entity_id
+        try:
+            await hass.services.async_call(domain, service, params, blocking=True, context=context)
+        except Exception:
+            return "failed", entity_id
+        return "applied", entity_id
+
+    for key, entity_id in await asyncio.gather(*(dispatch(*call) for call in calls)):
+        result.setdefault(key, []).append(entity_id)
+    return result
