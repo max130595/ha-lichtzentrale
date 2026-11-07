@@ -10,6 +10,16 @@ from homeassistant.helpers import config_validation as cv
 from .const import DOMAIN
 from .lights import list_lights, validate_lights
 from .palettes import async_apply_palette, list_palettes
+from .rooms import async_room_brightness, async_set_light, async_toggle_room, list_rooms
+from .scenes import (
+    async_apply_scene,
+    async_delete_scene,
+    async_reorder_scenes,
+    async_save_scene,
+    async_snapshot,
+    list_hue_scenes,
+    list_scenes,
+)
 from .storage import LichtzentraleStore
 
 LIGHT_IDS = vol.All(cv.ensure_list, [cv.entity_id], vol.Length(max=500))
@@ -41,14 +51,19 @@ def ws_palettes(hass, connection, msg):
         connection.send_error(msg["id"], "not_ready", str(error))
 
 
-@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/lights/list"})
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/lights/list",
+        vol.Optional("include_hidden", default=False): bool,
+    }
+)
 @websocket_api.require_admin
 @callback
 def ws_lights(hass, connection, msg):
     """Return runtime-discovered lights with server-side allowlist flags."""
     try:
         allowed = get_store(hass).data["settings"]["light_entity_ids"]
-        connection.send_result(msg["id"], list_lights(hass, allowed))
+        connection.send_result(msg["id"], list_lights(hass, allowed, msg["include_hidden"]))
     except HomeAssistantError as error:
         connection.send_error(msg["id"], "not_ready", str(error))
 
@@ -100,5 +115,108 @@ async def ws_apply(hass, connection, msg):
 @callback
 def async_setup_websocket_api(hass: HomeAssistant) -> None:
     """Register once; handlers look up the current store after every reload."""
-    for handler in (ws_palettes, ws_lights, ws_settings, ws_apply):
+    for handler in (ws_palettes, ws_lights, ws_settings, ws_apply, *STAGE_ONE_HANDLERS):
         websocket_api.async_register_command(hass, handler)
+
+
+# Keep command schemas explicit: unknown fields and non-admin calls never reach a service.
+AREA_FIELDS = {vol.Required("area_id"): cv.string}
+BRIGHTNESS = vol.All(int, vol.Range(min=1, max=255))
+CONTROL_FIELDS = {
+    vol.Optional("on"): bool,
+    vol.Optional("brightness"): BRIGHTNESS,
+    vol.Optional("xy"): vol.All(
+        [vol.All(vol.Coerce(float), vol.Range(min=0, max=1))], vol.Length(min=2, max=2)
+    ),
+    vol.Optional("color_temp_kelvin"): vol.All(int, vol.Range(min=1000, max=40000)),
+}
+
+
+def command(name, fields, handler):
+    """Register a uniformly authenticated, guarded async command."""
+
+    @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/{name}", **fields})
+    @websocket_api.require_admin
+    @websocket_api.async_response
+    async def wrapped(hass, connection, msg):
+        try:
+            result = await handler(hass, get_store(hass), msg, connection.context(msg))
+            connection.send_result(msg["id"], result)
+        except HomeAssistantError as error:
+            connection.send_error(msg["id"], "invalid_request", str(error))
+
+    return wrapped
+
+
+async def rooms_list(hass, store, msg, context):
+    return list_rooms(hass, store)
+
+
+async def room_toggle(hass, store, msg, context):
+    return await async_toggle_room(hass, store, msg["area_id"], msg.get("on"), context=context)
+
+
+async def room_brightness(hass, store, msg, context):
+    return await async_room_brightness(
+        hass, store, msg["area_id"], msg["brightness"], context=context
+    )
+
+
+async def light_set(hass, store, msg, context):
+    return await async_set_light(
+        hass,
+        store,
+        msg["entity_id"],
+        context=context,
+        **{key: msg[key] for key in ("on", "brightness", "xy", "color_temp_kelvin") if key in msg},
+    )
+
+
+async def scenes_list(hass, store, msg, context):
+    return list_scenes(store, msg.get("area_id"))
+
+
+async def scene_save(hass, store, msg, context):
+    return await async_save_scene(hass, store, msg["scene"])
+
+
+async def scene_delete(hass, store, msg, context):
+    await async_delete_scene(store, msg["scene_id"])
+    return {}
+
+
+async def scene_snapshot(hass, store, msg, context):
+    return await async_snapshot(hass, store, msg["area_id"], msg["name"])
+
+
+async def scene_apply(hass, store, msg, context):
+    return await async_apply_scene(hass, store, msg["scene_id"], context)
+
+
+async def scenes_reorder(hass, store, msg, context):
+    return await async_reorder_scenes(store, msg["area_id"], msg["scene_ids"])
+
+
+async def hue_scenes_list(hass, store, msg, context):
+    return list_hue_scenes(hass, store, msg.get("area_id"))
+
+
+STAGE_ONE_HANDLERS = (
+    command("rooms/list", {}, rooms_list),
+    command("room/toggle", {**AREA_FIELDS, vol.Optional("on"): bool}, room_toggle),
+    command(
+        "room/brightness", {**AREA_FIELDS, vol.Required("brightness"): BRIGHTNESS}, room_brightness
+    ),
+    command("light/set", {vol.Required("entity_id"): cv.entity_id, **CONTROL_FIELDS}, light_set),
+    command("scenes/list", {vol.Optional("area_id"): cv.string}, scenes_list),
+    command("scene/save", {vol.Required("scene"): dict}, scene_save),
+    command("scene/delete", {vol.Required("scene_id"): cv.string}, scene_delete),
+    command("scene/snapshot", {**AREA_FIELDS, vol.Required("name"): cv.string}, scene_snapshot),
+    command("scene/apply", {vol.Required("scene_id"): cv.string}, scene_apply),
+    command(
+        "scenes/reorder",
+        {**AREA_FIELDS, vol.Required("scene_ids"): vol.All([cv.string], vol.Length(max=500))},
+        scenes_reorder,
+    ),
+    command("hue_scenes/list", {vol.Optional("area_id"): cv.string}, hue_scenes_list),
+)

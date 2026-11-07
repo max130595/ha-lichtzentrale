@@ -15,7 +15,9 @@ apply_palette:
       required: true
       selector:
         entity:
-          domain: light
+          domain:
+            - light
+            - switch
           multiple: true
     brightness:
       name: Helligkeit
@@ -36,3 +38,29 @@ apply_palette:
           step: 0.1
           unit_of_measurement: s
           mode: box
+
+apply_scene:
+  name: Szene anwenden
+  description: Startet eine gespeicherte Raum-Szene und prüft erneut ihre Lampenfreigaben.
+  fields:
+    scene_id:
+      name: Szene
+      description: Kennung der in der Lichtzentrale gespeicherten Szene.
+      required: true
+      selector:
+        text:
+
+toggle_room:
+  name: Raum schalten
+  description: Schaltet ausschließlich die freigegebenen Einzellampen und Lichtschalter eines Bereichs.
+  fields:
+    area_id:
+      name: Raum
+      required: true
+      selector:
+        area:
+    "on":
+      name: Einschalten
+      description: Ohne Vorgabe wird der Raumzustand umgeschaltet.
+      selector:
+        boolean:

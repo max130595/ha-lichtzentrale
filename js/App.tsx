@@ -1,11 +1,11 @@
 // Geändert für Lichtzentrale
 import {useCallback, useEffect, useRef, useState} from 'react';
+import {Rooms} from './Rooms';
 import type {ApplyResult, Hass, Light, Palette} from './types';
 
 const tabs = ['Räume', 'Raum', 'Galerie', 'Taster', 'Zeitpläne'] as const;
 type Tab = typeof tabs[number];
-const later: Record<Exclude<Tab, 'Galerie'>, string> = {
-  Räume: 'Die Räume-Übersicht folgt in Stufe 1.', Raum: 'Raumsteuerung und gespeicherte Szenen folgen in Stufe 1.',
+const later: Record<Exclude<Tab, 'Galerie' | 'Räume' | 'Raum'>, string> = {
   Taster: 'Tasterbelegungen folgen in Stufe 3.', Zeitpläne: 'Zeitpläne folgen in Stufe 4.',
 };
 const errorText = (error: unknown) => error instanceof Error ? error.message : typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : 'Die Anfrage konnte nicht abgeschlossen werden.';
@@ -14,8 +14,11 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
   api.current = hass;
   const alive = useRef(false);
   const lock = useRef(false);
+  const loadId = useRef(0);
+  const preserveGrants = useRef(false);
+  const [showHidden, setShowHidden] = useState(false);
   const application = useRef<HTMLElement>(null);
-  const [tab, setTab] = useState<Tab>('Galerie');
+  const [tab, setTab] = useState<Tab>('Räume');
   const [palettes, setPalettes] = useState<Palette[]>([]);
   const [lights, setLights] = useState<Light[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,20 +32,20 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
   const [brightness, setBrightness] = useState(128);
   const [transition, setTransition] = useState(2);
   const load = useCallback(async () => {
-    setLoading(true); setError('');
+    const id = ++loadId.current; const keepGrants = preserveGrants.current; preserveGrants.current = false; setLoading(true); setError('');
     try {
       const [nextPalettes, nextLights] = await Promise.all([
         api.current.callWS<Palette[]>({type: 'lichtzentrale/palettes/list'}),
-        api.current.callWS<Light[]>({type: 'lichtzentrale/lights/list'}),
+        api.current.callWS<Light[]>({type: 'lichtzentrale/lights/list', include_hidden: showHidden}),
       ]);
-      if (!alive.current) return;
+      if (!alive.current || id !== loadId.current) return;
       setPalettes(nextPalettes); setLights(nextLights);
-      setGrants(nextLights.filter(light => light.allowed).map(light => light.entity_id));
+      if (!keepGrants) setGrants(nextLights.filter(light => light.allowed).map(light => light.entity_id));
       setSelected(current => current.filter(id => nextLights.some(light => light.entity_id === id && light.allowed && light.available)));
-    } catch (error) { if (alive.current) setError(`Laden fehlgeschlagen: ${errorText(error)}`); }
-    finally { if (alive.current) setLoading(false); }
-  }, []);
-  useEffect(() => { alive.current = true; void load(); return () => { alive.current = false; }; }, [load]);
+    } catch (error) { if (alive.current && id === loadId.current) setError(`Laden fehlgeschlagen: ${errorText(error)}`); }
+    finally { if (alive.current && id === loadId.current) setLoading(false); }
+  }, [showHidden]);
+  useEffect(() => { const counter = loadId; alive.current = true; void load(); return () => { alive.current = false; counter.current++; }; }, [load]);
   useEffect(() => {
     if (palette) {
       application.current?.scrollIntoView?.({block: 'start'});
@@ -67,24 +70,25 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
     try {
       const result = await api.current.callWS<ApplyResult>({type: 'lichtzentrale/palette/apply', palette_id: palette.id, entity_ids: selected, brightness, transition});
       if (!alive.current) return;
-      setMessage(`${result.applied.length} Lampe(n) angewendet. ${result.skipped.length} Lampe(n) übersprungen.${result.skipped.length ? ' Nicht alle Lampen konnten geändert werden. Verfügbarkeit und Freigaben prüfen.' : ''}`);
+      setMessage(`${result.applied.length} Lampe(n) angewendet. ${result.skipped.length} Lampe(n) übersprungen. ${result.failed?.length || 0} Lampe(n) fehlgeschlagen.${result.skipped.length || result.failed?.length ? ' Nicht alle Lampen konnten geändert werden. Verfügbarkeit und Freigaben prüfen.' : ''}`);
     } catch (error) { if (alive.current) setError(`Anwenden fehlgeschlagen: ${errorText(error)} Einzelne Lampen könnten bereits geändert worden sein. Prüfe ihren Zustand vor einem erneuten Versuch.`); }
     finally { lock.current = false; if (alive.current) setBusy(false); }
   }
   const allowed = lights.filter(light => light.allowed);
   const disabled = busy || loading;
   return <div className="app">
-    <header><button className="menu" aria-label="Seitenleiste öffnen" onClick={onMenu}>☰</button><div><h1>Lichtzentrale</h1><p>Dein Licht. Deine Farben.</p></div><span className="stage">Stufe 0</span></header>
+    <header><button className="menu" aria-label="Seitenleiste öffnen" onClick={onMenu}>☰</button><div><h1>Lichtzentrale</h1><p>Dein Licht. Deine Farben.</p></div><span className="stage">Stufe 1</span></header>
     <main>
       {error && <div role="alert" className="error">{error}</div>}
       {message && <div role="status" className="notice">{message}</div>}
-      {tab !== 'Galerie' ? <section className="empty"><h2>{tab}</h2><p>{later[tab]}</p><p>In Stufe 0 kannst du in der Galerie Farbpaletten auf freigegebene Einzellampen anwenden.</p><button onClick={() => setTab('Galerie')}>Zur Galerie</button></section> : <>
+      {(tab === 'Räume' || tab === 'Raum') && <><Rooms hass={hass} detail={tab === 'Raum'} openRoom={() => setTab('Raum')}/><button onClick={() => {setTab('Galerie'); setSettings(true);}}>Lampen freigeben</button></>}
+      {tab === 'Taster' || tab === 'Zeitpläne' ? <section className="empty"><h2>{tab}</h2><p>{later[tab]}</p><button onClick={() => setTab('Galerie')}>Zur Galerie</button></section> : tab === 'Galerie' ? <>
         <div className="section-heading"><div><h2>Galerie</h2><p>Eigene Farbpaletten, direkt aus ihren Farben.</p></div><button disabled={disabled} onClick={() => { setGrants(lights.filter(light => light.allowed).map(light => light.entity_id)); setSettings(!settings); }}>Lampen freigeben</button></div>
         {loading && <p role="status">Lampen und Paletten werden geladen …</p>}
         <button className="refresh" disabled={disabled} onClick={() => { setSettings(false); void load(); }}>Neu laden</button>
         {settings && <section className="card"><h3>Lampen freigeben</h3><p>Nur bewusst freigegebene Einzellampen sind steuerbar. Drucker-, Geräte- und andere Funktionsbeleuchtung nicht auswählen. Gruppen werden nicht angeboten.</p>
           {!lights.length && <p>Keine Einzellampen gefunden.</p>}
-          <fieldset disabled={disabled}><legend>Erlaubte Einzellampen</legend>{lights.map(light => <label className="check" key={light.entity_id}><input type="checkbox" checked={grants.includes(light.entity_id)} onChange={() => setGrants(toggle(grants, light.entity_id))}/><span>{light.name}<small>{light.area_name || 'Ohne Bereich'}{!light.available ? ' · Nicht verfügbar' : ''}</small></span></label>)}</fieldset>
+          <label className="check"><input type="checkbox" checked={showHidden} disabled={disabled} onChange={event => {preserveGrants.current = true; setShowHidden(event.target.checked);}}/>Ausgeblendete Druckerbeleuchtung anzeigen</label><fieldset disabled={disabled}><legend>Erlaubte Einzellampen und Lichtschalter</legend>{lights.map(light => <label className="check" key={light.entity_id}><input type="checkbox" checked={grants.includes(light.entity_id)} onChange={() => setGrants(toggle(grants, light.entity_id))}/><span>{light.name}<small>{light.area_name || 'Ohne Bereich'}{!light.available ? ' · Nicht verfügbar' : ''}</small></span></label>)}</fieldset>
           <button disabled={disabled} onClick={() => void saveGrants()}>Freigaben speichern</button><button className="secondary" disabled={disabled} onClick={() => setSettings(false)}>Abbrechen</button>
         </section>}
         {!loading && !allowed.length && <p className="notice">Noch keine Lampen freigegeben. Wähle zuerst unter „Lampen freigeben“ die gewünschten Einzellampen aus.</p>}
@@ -96,7 +100,7 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
           <label className="slider">Übergang: {transition} Sekunden<input aria-label="Übergang" type="range" min="0" max="60" value={transition} onChange={event => setTransition(Number(event.target.value))}/></label></fieldset>
           <button disabled={disabled || !selected.length} onClick={() => void apply()}>{busy ? 'Bitte warten …' : `Auf ${selected.length} Lampe(n) anwenden`}</button>
         </section>}
-      </>}
+      </> : null}
     </main>
     <nav aria-label="Hauptnavigation">{tabs.map(name => <button key={name} aria-current={tab === name ? 'page' : undefined} onClick={() => setTab(name)}>{name}</button>)}</nav>
   </div>;

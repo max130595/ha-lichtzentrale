@@ -1,14 +1,20 @@
 {
   "domain": "lichtzentrale",
   "name": "Lichtzentrale",
-  "codeowners": ["@max130595"],
+  "codeowners": [
+    "@max130595"
+  ],
   "config_flow": true,
-  "dependencies": ["frontend", "http", "websocket_api"],
+  "dependencies": [
+    "frontend",
+    "http",
+    "websocket_api"
+  ],
   "documentation": "https://github.com/max130595/ha-lichtzentrale",
   "integration_type": "service",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/max130595/ha-lichtzentrale/issues",
   "requirements": [],
   "single_config_entry": true,
-  "version": "0.0.1"
+  "version": "0.1.0"
 }

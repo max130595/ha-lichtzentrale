@@ -15,15 +15,28 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 # Import HA before anything that may import httpx: HA 2026.11 installs its
 # supported httpx2 alias during package initialization.
 import homeassistant  # noqa: F401
 from homeassistant.components.light import LightEntityFeature
-from homeassistant.config_entries import ConfigEntries
+from homeassistant.config_entries import (
+    STORAGE_KEY as CONFIG_STORAGE_KEY,
+)
+from homeassistant.config_entries import (
+    STORAGE_VERSION as CONFIG_STORAGE_VERSION,
+)
+from homeassistant.config_entries import (
+    STORAGE_VERSION_MINOR as CONFIG_STORAGE_VERSION_MINOR,
+)
+from homeassistant.config_entries import (
+    ConfigEntries,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry, device_registry, entity_registry
+from homeassistant.helpers.storage import Store
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -36,6 +49,14 @@ from custom_components.lichtzentrale.config_flow import LichtzentraleConfigFlow 
 from custom_components.lichtzentrale.const import STORAGE_KEY  # noqa: E402
 from custom_components.lichtzentrale.lights import list_lights, validate_lights  # noqa: E402
 from custom_components.lichtzentrale.palettes import async_apply_palette, list_palettes  # noqa: E402
+from custom_components.lichtzentrale.rooms import list_rooms  # noqa: E402
+from custom_components.lichtzentrale.scenes import (  # noqa: E402
+    async_apply_scene,
+    async_delete_scene,
+    async_save_scene,
+    async_snapshot,
+    hue_scene_targets,
+)
 from custom_components.lichtzentrale.storage import LichtzentraleStore  # noqa: E402
 from custom_components.lichtzentrale.websocket_api import APPLY_FIELDS  # noqa: E402
 
@@ -43,6 +64,35 @@ from custom_components.lichtzentrale.websocket_api import APPLY_FIELDS  # noqa: 
 async def run(config_dir: str) -> None:
     """Exercise real native objects without bootstrapping network integrations."""
     hass = HomeAssistant(config_dir)
+    # Load a synthetic config entry via the actual storage/initialization path.
+    # Never set up Hue itself: that would start network discovery.
+    config_store = Store(
+        hass, CONFIG_STORAGE_VERSION, CONFIG_STORAGE_KEY, minor_version=CONFIG_STORAGE_VERSION_MINOR
+    )
+    await config_store.async_save(
+        {
+            "entries": [
+                {
+                    "entry_id": "fixture-hue-config",
+                    "domain": "hue",
+                    "title": "Fixture bridge",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "modified_at": "2026-01-01T00:00:00+00:00",
+                    "data": {},
+                    "options": {},
+                    "disabled_by": None,
+                    "discovery_keys": {},
+                    "minor_version": 1,
+                    "pref_disable_new_entities": False,
+                    "pref_disable_polling": False,
+                    "source": "user",
+                    "subentries": [],
+                    "unique_id": "fixture-bridge",
+                    "version": 1,
+                }
+            ]
+        }
+    )
     hass.config_entries = ConfigEntries(hass, {})
     await hass.config_entries.async_initialize()
     try:
@@ -128,7 +178,131 @@ async def run(config_dir: str) -> None:
         else:
             raise AssertionError("Unapproved lamp accepted")
         assert len(calls) == 5
-        await restored.async_remove()
+        # Stage 1: real area/entity registries, synthetic state updates, native
+        # service dispatch and persisted snapshots (including a Shelly switch).
+        area = area_registry.async_get(hass).async_create("Fixture room")
+        entities = entity_registry.async_get(hass)
+        lamp = entities.async_get_or_create(
+            "light",
+            "hue",
+            "fixture-hue-light",
+            config_entry=hass.config_entries.async_get_entry("fixture-hue-config"),
+            suggested_object_id="fixture_snapshot_lamp",
+        )
+        switch = entities.async_get_or_create(
+            "switch",
+            "shelly",
+            "fixture-shelly-light",
+            original_name="Fixture Deckenlicht",
+        )
+        for entry in (lamp, switch):
+            entities.async_update_entity(entry.entity_id, area_id=area.id)
+        lamp_attrs = {
+            "supported_color_modes": ["xy"],
+            "color_mode": "xy",
+            "xy_color": [0.4, 0.3],
+            "brightness": 87,
+        }
+        hass.states.async_set(lamp.entity_id, "on", lamp_attrs)
+        hass.states.async_set(switch.entity_id, "off")
+        room_ids = [lamp.entity_id, switch.entity_id]
+        await restored.async_set_lights(room_ids)
+        assert len(list_rooms(hass, restored)) == 1
+        snapshot = (await async_snapshot(hass, restored, area.id, "Fixture evening"))["scene"]
+        assert snapshot["lights"][switch.entity_id] == {"on": False}
+        assert snapshot["lights"][lamp.entity_id] == {
+            "on": True,
+            "brightness": 87,
+            "xy": [0.4, 0.3],
+        }
+        hass.states.async_set(lamp.entity_id, "off", lamp_attrs)
+        hass.states.async_set(switch.entity_id, "on")
+
+        @callback
+        def simulate_device(call):
+            calls.append(call)
+            entity_id = call.data["entity_id"]
+            state = hass.states.get(entity_id)
+            attrs = dict(state.attributes)
+            attrs.update({key: value for key, value in call.data.items() if key != "entity_id"})
+            hass.states.async_set(entity_id, "on" if call.service == "turn_on" else "off", attrs)
+
+        for domain in ("light", "switch"):
+            for service in ("turn_on", "turn_off"):
+                hass.services.async_register(domain, service, simulate_device)
+        result = await async_apply_scene(hass, restored, snapshot["id"])
+        assert result == {"applied": room_ids, "skipped": []}
+        assert hass.states.get(lamp.entity_id).state == "on"
+        assert hass.states.get(lamp.entity_id).attributes["brightness"] == 87
+        assert list(hass.states.get(lamp.entity_id).attributes["xy_color"]) == [0.4, 0.3]
+        assert hass.states.get(switch.entity_id).state == "off"
+        assert calls[-1].domain == "switch"
+        assert calls[-1].data == {"entity_id": switch.entity_id}
+        reloaded = LichtzentraleStore(hass)
+        await reloaded.async_load()
+        assert reloaded.data == restored.data
+        assert list_rooms(hass, reloaded)[0]["last_scene_id"] == snapshot["id"]
+
+        # The config entry is native HA; only the Hue controller/resources are
+        # synthetic. This does not claim aiohue model or live-bridge coverage.
+        hue = entities.async_get_or_create(
+            "scene",
+            "hue",
+            "fixture-hue-scene",
+            config_entry=hass.config_entries.async_get_entry("fixture-hue-config"),
+        )
+        hass.states.async_set(hue.entity_id, "2026-01-01T00:00:00+00:00")
+        resource = SimpleNamespace(
+            actions=[
+                SimpleNamespace(
+                    target=SimpleNamespace(rtype="light", rid=lamp.unique_id),
+                )
+            ]
+        )
+        config = hass.config_entries.async_get_entry("fixture-hue-config")
+        config.runtime_data = SimpleNamespace(
+            api=SimpleNamespace(
+                scenes={hue.unique_id: resource},
+            )
+        )
+        assert hue_scene_targets(hass, hue.entity_id) == [lamp.entity_id]
+        imported = await async_save_scene(
+            hass,
+            reloaded,
+            {
+                "kind": "hue",
+                "area_id": area.id,
+                "name": "Fixture bridge scene",
+                "hue_scene": hue.entity_id,
+            },
+        )
+        hass.services.async_register("hue", "activate_scene", capture)
+        assert (await async_apply_scene(hass, reloaded, imported["id"]))["applied"] == [
+            lamp.entity_id
+        ]
+        assert calls[-1].domain == "hue"
+        assert calls[-1].data == {"entity_id": hue.entity_id, "dynamic": False}
+        count = len(calls)
+        await reloaded.async_set_lights([switch.entity_id])
+        try:
+            await async_apply_scene(hass, reloaded, imported["id"])
+        except ServiceValidationError:
+            pass
+        else:
+            raise AssertionError("Hue scene ignored revoked light approval")
+        resource.actions[0].target.rtype = "grouped_light"
+        try:
+            hue_scene_targets(hass, hue.entity_id)
+        except ServiceValidationError:
+            pass
+        else:
+            raise AssertionError("Hue grouped target accepted")
+        assert len(calls) == count
+        await async_delete_scene(reloaded, imported["id"])
+        final = LichtzentraleStore(hass)
+        await final.async_load()
+        assert final.data["rooms"][area.id].get("last_scene_id") is None
+        await final.async_remove()
         assert not path.exists()
     finally:
         await hass.async_stop(force=True)
@@ -142,11 +316,14 @@ def main() -> None:
     print(
         "Verified: integration imports; native registries/discovery; real Store create, "
         "reload and removal; 12 palettes/4 categories; XY, RGBWW, CT clamp, brightness, "
-        "on/off; unavailable skip; allowlist and switch/lock/group rejection; service dispatch."
+        "on/off; unavailable skip; allowlist and unrelated-switch/lock/group rejection; "
+        "area rooms; XY/brightness and Shelly on/off snapshot restore; last-scene "
+        "persistence/reload/deletion; native ConfigEntry with synthetic Hue controller, "
+        "Hue dispatch, revoked-target and grouped-target rejection."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "
-        "frontend rendering or physical devices. These are separate test scopes."
+        "frontend rendering, actual aiohue models or physical devices. These are separate test scopes."
     )
 
 
