@@ -1,3 +1,4 @@
+// Geändert für Lichtzentrale
 // @vitest-environment jsdom
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
@@ -11,6 +12,9 @@ function setup(lights: Light[] = [lamp]) {
   const callWS = vi.fn(async (request: {type: string; [key: string]: unknown}): Promise<unknown> => {
     if (request.type === 'lichtzentrale/palettes/list') return [palette];
     if (request.type === 'lichtzentrale/lights/list') return lights;
+    if (request.type === 'lichtzentrale/schedules/list') return {time_zone: 'Europe/Berlin', schedules: [], lux_sensors: [], persons: []};
+    if (request.type === 'lichtzentrale/rooms/list' || request.type === 'lichtzentrale/scenes/list') return [];
+    if (request.type === 'lichtzentrale/adaptive/status') return {available: false, rooms: []};
     if (request.type === 'lichtzentrale/settings/save') {
       lights = lights.map(light => ({...light, allowed: (request.light_entity_ids as string[]).includes(light.entity_id)}));
       return {};
@@ -23,11 +27,12 @@ function setup(lights: Light[] = [lamp]) {
 }
 afterEach(cleanup);
 describe('Galerie', () => {
-  it('loads the gallery, five tabs and honest placeholders', async () => {
+  it('loads the gallery, five tabs and schedules editor', async () => {
     setup(); await screen.findByText('Testpalette');
     expect(screen.getByRole('navigation').querySelectorAll('button')).toHaveLength(5);
     fireEvent.click(screen.getByRole('button', {name: 'Zeitpläne'}));
-    expect(screen.getByText('Zeitpläne folgen in Stufe 4.')).toBeVisible();
+    expect(await screen.findByText('Noch keine Zeitpläne.')).toBeVisible();
+    expect(screen.getByRole('button', {name: 'Zeitplan hinzufügen'})).toBeEnabled();
   });
   it('does not offer unapproved lamps as application targets', async () => {
     setup(); fireEvent.click(await screen.findByText('Testpalette'));

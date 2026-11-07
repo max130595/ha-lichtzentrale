@@ -4,6 +4,7 @@
 import asyncio
 import math
 
+from homeassistant.components.light import LightEntityFeature
 from homeassistant.core import Context, HomeAssistant, State, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry as ar
@@ -97,9 +98,33 @@ def validate_control_options(on=None, brightness=None, xy=None, color_temp_kelvi
         raise ServiceValidationError("Ausschalten kann nicht mit Farbwerten kombiniert werden.")
 
 
-def light_service_data(state: State, on=None, brightness=None, xy=None, color_temp_kelvin=None):
+def check_execution_guard(guard):
+    """Evaluate a schedule's conditions after locking, before its first side effect."""
+    if guard is not None and not guard():
+        raise ServiceValidationError("Die Bedingungen des Zeitplans sind nicht mehr erfüllt.")
+
+
+def validate_transition(transition):
+    """Schedule overrides are finite seconds; None retains the existing default."""
+    if transition is not None and (
+        type(transition) not in (int, float)
+        or not math.isfinite(transition)
+        or not 0 <= transition <= 1800
+    ):
+        raise ServiceValidationError("Der Übergang muss zwischen 0 und 1800 Sekunden liegen.")
+
+
+def light_service_data(
+    state: State, on=None, brightness=None, xy=None, color_temp_kelvin=None, *, transition=None
+):
     """Build a safe native payload; switch and on/off lamps never get color values."""
     params = {"entity_id": state.entity_id}
+    if (
+        transition is not None
+        and state.domain == "light"
+        and state.attributes.get("supported_features", 0) & LightEntityFeature.TRANSITION
+    ):
+        params["transition"] = transition
     if on is False:
         return "turn_off", params
     if state.domain == "switch":
@@ -187,12 +212,16 @@ async def async_set_light(
     )
 
 
-async def async_toggle_room(hass, store, area_id, on=None, context=None):
+async def async_toggle_room(
+    hass, store, area_id, on=None, context=None, *, transition=None, guard=None
+):
     from asyncio import Lock
 
     locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
     async with locks.setdefault(area_id, Lock()):
-        return await _toggle_room(hass, store, area_id, on, context)
+        return await _toggle_room(
+            hass, store, area_id, on, context, transition=transition, guard=guard
+        )
 
 
 def _remember_light(state):
@@ -226,9 +255,13 @@ def _remember_light(state):
     return value
 
 
-async def _toggle_room(hass, store, area_id, on=None, context=None):
+async def _toggle_room(
+    hass, store, area_id, on=None, context=None, *, transition=None, guard=None
+):
     """Restore pre-off members or AL targets; switch-only rooms toggle directly."""
+    check_execution_guard(guard)
     validate_control_options(on=on)
+    validate_transition(transition)
     room_targets(hass, store, area_id)
     from .dynamic_scenes import stop_dynamic
 
@@ -247,14 +280,14 @@ async def _toggle_room(hass, store, area_id, on=None, context=None):
 
         if not any(s["id"] == default and s["area_id"] == area_id for s in store.data["scenes"]):
             raise ServiceValidationError("Die Einschalt-Szene dieses Raums wurde nicht gefunden.")
-        result = await async_apply_scene_locked(hass, store, default, context)
+        result = await async_apply_scene_locked(hass, store, default, context, transition=transition)
         if result["applied"] and not result.get("failed") and settings.get("pre_off_pending"):
             await store.async_update_room(area_id, {"pre_off_pending": []})
         return result
     if on and default == "adaptive":
         from .adaptive import async_turn_on_adaptive
 
-        applied = await async_turn_on_adaptive(hass, store, area_id, context=context)
+        applied = await async_turn_on_adaptive(hass, store, area_id, context=context, transition=transition)
         if applied and settings.get("pre_off_pending"):
             await store.async_update_room(area_id, {"pre_off_pending": []})
         return {"applied": applied, "skipped": [e for e in targets if e not in applied]}
@@ -309,7 +342,7 @@ async def _toggle_room(hass, store, area_id, on=None, context=None):
         except ServiceValidationError:
             skipped.append(state.entity_id)
             continue
-        calls.append((state.domain, *light_service_data(state, on=on, **options)))
+        calls.append((state.domain, *light_service_data(state, on=on, transition=transition, **options)))
         prepared[state.entity_id] = state
 
     def still_allowed(entity_id):

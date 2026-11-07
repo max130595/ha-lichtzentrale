@@ -32,6 +32,7 @@ function makeApi(options: Options = {}) {
   const callWS = vi.fn(async (request: Request): Promise<unknown> => {
     switch (request.type) {
       case 'lichtzentrale/lights/list': return options.lights || [];
+      case 'lichtzentrale/schedules/list': return {time_zone: 'Europe/Berlin', schedules: [], lux_sensors: [], persons: []};
       case 'lichtzentrale/buttons/list': return options.buttons || buttons;
       case 'lichtzentrale/bindings/list': return {bindings: savedBindings, double_click_ms};
       case 'lichtzentrale/rooms/list': return savedRooms;
@@ -224,7 +225,7 @@ describe('Tasterbelegungen', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
     fireEvent.click(screen.getByRole('button', {name: 'Zeitpläne'}));
     await act(async () => finish(binding));
-    expect(screen.getByText('Zeitpläne folgen in Stufe 4.')).toBeVisible();
+    expect(await screen.findByText('Noch keine Zeitpläne.')).toBeVisible();
     expect(screen.queryByText('Belegung in Home Assistant gespeichert.')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', {name: 'Taster'}));
     await screen.findByRole('region', {name: 'Testgerät'});

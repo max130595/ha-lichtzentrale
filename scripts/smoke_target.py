@@ -77,6 +77,7 @@ from custom_components.lichtzentrale.scenes import (  # noqa: E402
     hue_scene_preview,
     hue_scene_targets,
 )
+from custom_components.lichtzentrale.schedules import ScheduleManager, next_run  # noqa: E402
 from custom_components.lichtzentrale.storage import LichtzentraleStore  # noqa: E402
 from custom_components.lichtzentrale.websocket_api import APPLY_FIELDS  # noqa: E402
 
@@ -639,6 +640,45 @@ async def run(config_dir: str) -> None:
         assert hass.states.get(lamp.entity_id).state == "off"
         assert not active.list()
         await motion.shutdown()
+        # Stage four: native scheduler dispatch and persistence, no real devices.
+        schedules = ScheduleManager(hass, final)
+        hass.data[DOMAIN]["schedules"] = schedules
+        schedules.start()
+        await hass.async_block_till_done()
+        plan = await final.async_save_schedule({
+            "name": "Synthetic scheduled fade", "enabled": False,
+            "trigger": {"type": "time", "value": "20:30"},
+            "condition": {"weekdays": list(range(7)), "person_entity_ids": [],
+                          "light_state": "any"},
+            "action": {"type": "lights", "entity_ids": [lamp.entity_id, switch.entity_id],
+                       "on": True, "brightness": 111}, "transition": 1800,
+        })
+        assert next_run(hass, plan) is not None
+        count = len(calls)
+        result = await schedules.async_test(plan["id"])
+        assert result["condition_met"] and set(result["applied"]) == {lamp.entity_id, switch.entity_id}
+        recent = calls[count:]
+        assert any(call.domain == "light" and call.data.get("brightness") == 111 for call in recent)
+        assert all(set(call.data) == {"entity_id"} for call in recent if call.domain == "switch")
+        assert not schedules.list_schedules()[0]["enabled"]
+        enabled = await final.async_set_schedule_enabled(plan["id"], True)
+        assert enabled["enabled"] and schedules.list_schedules()[0]["next_run"]
+        lux_id = "sensor.fixture_schedule_illuminance"
+        hass.states.async_set(lux_id, "20", {"device_class": "illuminance", "unit_of_measurement": "lx"})
+        lux_plan = await final.async_save_schedule({
+            **plan, "trigger": {"type": "lux", "sensor_entity_id": lux_id,
+                               "comparison": "below", "threshold": 30, "duration_seconds": 300},
+            "enabled": True,
+        })
+        assert schedules.list_schedules()[0]["next_run"]
+        await final.async_set_schedule_enabled(lux_plan["id"], False)
+        assert schedules.list_schedules()[0]["next_run"] is None
+        saved_schedules = LichtzentraleStore(hass)
+        await saved_schedules.async_load()
+        assert saved_schedules.data["schedules"][0]["trigger"]["duration_seconds"] == 300
+        await final.async_delete_schedule(plan["id"])
+        assert not schedules.list_schedules()
+        await schedules.shutdown()
         await active.shutdown()
         assert not active.list()
         await final.async_remove()
@@ -668,7 +708,9 @@ def main() -> None:
         "room-on scene, scene cycling, relative dim service payload, double release and unload cancellation; "
         "selected cross-room lamp/switch toggles, persisted pre-off color restore and selected dim; motion sensor activation, selected lamp/switch "
         "ownership, dim/restore without switch dim, manual pause, empty-room release and motion persistence; parentless adapt_lgt updates and contextless "
-        "motion-owned dynamic colors preserve vacancy shutdown."
+        "motion-owned dynamic colors preserve vacancy shutdown; schedule time calculation, manual selected-light/switch "
+        "dispatch, bounded transition selection, atomic save/enable/delete, Lux timer registration and cancellation, "
+        "schedule persistence/reload/unload."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "

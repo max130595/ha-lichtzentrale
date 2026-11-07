@@ -80,7 +80,7 @@ class DynamicSceneManager:
         for area in list(self.active):
             await self.stop(area)
 
-    async def start(self, scene, context, applied_targets=None):
+    async def start(self, scene, context, applied_targets=None, *, initial_transition=None):
         await self.stop(scene["area_id"])
         if self.closed:
             raise ServiceValidationError("Lichtzentrale ist nicht geladen.")
@@ -99,6 +99,7 @@ class DynamicSceneManager:
             "targets": targets,
             "context": context,
             "layout_targets": layout_targets,
+            "initial_transition": initial_transition or 0,
         }
 
         @callback
@@ -172,7 +173,10 @@ class DynamicSceneManager:
         try:
             offset = 1
             while True:
-                await asyncio.sleep(scene["dynamic"]["interval"])
+                await asyncio.sleep(max(
+                    scene["dynamic"]["interval"],
+                    run.get("initial_transition", 0) if offset == 1 else 0,
+                ))
                 if not await self.tick(run, offset):
                     return
                 offset += 1

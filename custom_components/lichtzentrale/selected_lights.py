@@ -8,7 +8,13 @@ from homeassistant.exceptions import ServiceValidationError
 
 from .const import DOMAIN
 from .lights import entity_area_id, is_individual_light, validate_lights
-from .rooms import async_dispatch, light_service_data, validate_control_options
+from .rooms import (
+    async_dispatch,
+    check_execution_guard,
+    light_service_data,
+    validate_control_options,
+    validate_transition,
+)
 
 
 def validate_selected_lights(hass, store, entity_ids):
@@ -71,10 +77,14 @@ async def _stop_dynamics(hass, store, targets, areas):
         raise ServiceValidationError("Die Raumzuordnung hat sich geändert. Bitte erneut versuchen.")
 
 
-async def async_control_lights(hass, store, entity_ids, on=None, context=None):
+async def async_control_lights(
+    hass, store, entity_ids, on=None, context=None, *, brightness=None, transition=None, guard=None
+):
     """Any selected on means all off; otherwise restore all selected lights."""
-    validate_control_options(on=on)
+    validate_control_options(on=on, brightness=brightness)
+    validate_transition(transition)
     async with _locked_targets(hass, store, entity_ids) as (targets, areas):
+        check_execution_guard(guard)
         await _stop_dynamics(hass, store, targets, areas)
         if on is None:
             on = not any(hass.states.get(entity_id).state == "on" for entity_id in targets)
@@ -108,21 +118,23 @@ async def async_control_lights(hass, store, entity_ids, on=None, context=None):
                 options = {key: value[key] for key in (
                     "brightness", "xy", "color_temp_kelvin"
                 ) if key in value}
+            if on and state.domain == "light" and brightness is not None:
+                options["brightness"] = brightness
             try:
                 validate_control_options(on=on, **options)
             except ServiceValidationError:
                 skipped.append(entity_id)
                 continue
-            calls.append((state.domain, *light_service_data(state, on=on, **options)))
+            calls.append((state.domain, *light_service_data(state, on=on, transition=transition, **options)))
             prepared[entity_id] = state
 
-        def guard(entity_id):
+        def still_allowed(entity_id):
             return (
                 _still_allowed(hass, store, entity_id, areas)
                 and hass.states.get(entity_id) is prepared[entity_id]
             )
 
-        return await async_dispatch(hass, calls, skipped, context=context, guard=guard)
+        return await async_dispatch(hass, calls, skipped, context=context, guard=still_allowed)
 
 
 async def async_dim_lights(hass, store, entity_ids, direction, context=None):

@@ -4,8 +4,8 @@ Eine lokale Licht-App als Custom Integration für Home Assistant. Oberfläche au
 für schmale Bildschirme ausgelegt. Kein Cloud-Konto und keine zusätzlichen
 Python-Abhängigkeiten zur Laufzeit.
 
-**Stand: Stufe 3A.** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import,
-zwölf eigene Farbpaletten, räumliche Verteilung und Wellen, dynamische Palettenszenen, optionales natürliches Licht und konfigurierbare **Taster** mit raumübergreifender Einzellampen-Auswahl. **Zeitpläne** folgen in Stufe 4.
+**Stand: Stufe 4 (Entwurf zur Abnahme).** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import,
+zwölf eigene Farbpaletten, räumliche Verteilung und Wellen, dynamische Palettenszenen, optionales natürliches Licht und konfigurierbare **Taster** mit raumübergreifender Einzellampen-Auswahl. Bewegungsautomatik und **Zeitpläne** sind serverseitig gespeichert.
 Der weitere Ausbau ist in [docs/BAUPLAN.md](docs/BAUPLAN.md) beschrieben.
 
 ## Installation über HACS
@@ -204,3 +204,29 @@ Revision `b53280c76f6a94ea68f313c53865c3922d40b2d7`, und wurden für die neue Do
 und den Stufe-0-Umfang angepasst. Details: [NOTICE](NOTICE), [LICENSE](LICENSE).
 Die ursprünglichen Presets, Hue-Szenennamen, Bilder und Logos sind nicht enthalten.
 Vorschaubilder entstehen direkt als Farbverläufe aus den eigenen Palettenfarben.
+
+
+## Zeitpläne (Stufe 4)
+
+Im Reiter **Zeitpläne** lassen sich Pläne erstellen, bearbeiten, deaktivieren und löschen.
+Neue Pläne starten ausgeschaltet. Änderungen gelten erst nach bestätigter Serverantwort.
+
+- Auslöser: lokale HA-Uhrzeit, Sonnenaufgang/-untergang mit Minutenversatz oder ein zur
+  Laufzeit ausgewählter Illuminanzsensor (`lx`) über/unter einer Schwelle. Lux benötigt eine
+  ununterbrochene Mindestdauer (standardmäßig fünf Minuten); ein dauerhafter Wert löst nur
+  einmal aus. Nach Neustart beginnt die Mindestdauer neu.
+- Bedingungen: Wochentage, mindestens eine ausgewählte Person zu Hause, Ziele bereits an
+  (mindestens eines) oder aus (alle). Unbekannte Zustände werden sicher blockiert.
+- Aktionen: gespeicherte Szene einschließlich Dynamik, Natürliches Licht an/aus, Raum aus,
+  freigegebene Lampenauswahl an/aus mit optionaler Helligkeit oder Raum-Bewegungsautomatik an/aus.
+- Optionaler Übergang: 0–1800 Sekunden für unterstützende Lampen. Switch-Lichtschalter
+  erhalten ausschließlich Ein/Aus. Ein langer Startübergang verzögert den ersten Farbwechsel
+  dynamischer Paletten. Natürliches Licht schaltet die Automatik um; ausgeschaltete Lampen
+  bleiben aus. Dafür wird die vorhandene optionale Adaptive-Lighting-Zuordnung verwendet.
+- Die Liste zeigt die nächste geplante Uhrzeit in der HA-Zeitzone. Für Lux ist sie erst während
+  der laufenden Mindestdauer bekannt. Bedingungen werden erst bei der Ausführung geprüft.
+- **Jetzt testen** führt die echte Aktion einmal aus, auch bei ausgeschaltetem Plan. Bedingungen
+  bleiben wirksam. Es ist keine Simulation. Automatisierte Entwicklungstests verwenden nur
+  synthetische Geräte; die Prüfung am echten System übernimmt Claude nach der Übergabe.
+
+Details und Abnahmefälle: [Stufe-4-Testplan](docs/STUFE_4_TESTPLAN.md).

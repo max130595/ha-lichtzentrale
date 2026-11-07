@@ -293,7 +293,7 @@ class LichtzentraleStore:
             self._refresh_motion(area_id)
             return deepcopy(config)
 
-    async def async_set_motion_enabled(self, area_id: str, enabled: bool) -> dict:
+    async def async_set_motion_enabled(self, area_id: str, enabled: bool, *, guard=None) -> dict:
         """Disable even stale setups; enabling revalidates every selected resource."""
         from .motion_config import validate_motion
 
@@ -308,6 +308,8 @@ class LichtzentraleStore:
                 config = validate_motion(self._hass, self, area_id, config)
             updated = deepcopy(self._data)
             updated["rooms"][area_id]["motion"] = config
+            if guard is not None and not guard():
+                raise ServiceValidationError("Die Bedingungen des Zeitplans sind nicht mehr erfüllt.")
             await self._store.async_save(updated)
             self._data = updated
             self._refresh_motion(area_id)
@@ -316,6 +318,60 @@ class LichtzentraleStore:
     def _refresh_motion(self, area_id: str) -> None:
         if manager := self._hass.data.get(DOMAIN, {}).get("motion"):
             manager.refresh_config(area_id)
+
+    async def async_save_schedule(self, raw: dict) -> dict:
+        """Validate and commit one plan atomically, rejecting stale editor IDs."""
+        from .schedule_config import validate_schedule
+
+        async with self._lock:
+            schedule = validate_schedule(self._hass, self, raw)
+            updated = deepcopy(self._data)
+            index = next((i for i, item in enumerate(updated["schedules"])
+                          if item["id"] == schedule["id"]), None)
+            if index is None:
+                updated["schedules"].append(schedule)
+            else:
+                updated["schedules"][index] = schedule
+            await self._store.async_save(updated)
+            self._data = updated
+            self._refresh_schedules(schedule["id"])
+            return deepcopy(schedule)
+
+    async def async_set_schedule_enabled(self, schedule_id: str, enabled: bool) -> dict:
+        """Always allow stale plans to be disabled; revalidate before enabling."""
+        from .schedule_config import validate_schedule
+
+        if type(enabled) is not bool:
+            raise ServiceValidationError("Bitte einen Ein/Aus-Wert angeben.")
+        async with self._lock:
+            updated = deepcopy(self._data)
+            schedule = next((item for item in updated["schedules"]
+                             if item["id"] == schedule_id), None)
+            if schedule is None:
+                raise ServiceValidationError("Der Zeitplan wurde nicht gefunden. Bitte neu laden.")
+            schedule["enabled"] = enabled
+            if enabled:
+                validate_schedule(self._hass, self, schedule)
+            await self._store.async_save(updated)
+            self._data = updated
+            self._refresh_schedules(schedule_id)
+            return deepcopy(schedule)
+
+    async def async_delete_schedule(self, schedule_id: str) -> None:
+        """Remove exactly one saved plan and retire outstanding work after commit."""
+        async with self._lock:
+            if not any(item["id"] == schedule_id for item in self._data["schedules"]):
+                raise ServiceValidationError("Der Zeitplan wurde nicht gefunden. Bitte neu laden.")
+            updated = deepcopy(self._data)
+            updated["schedules"] = [item for item in updated["schedules"]
+                                    if item["id"] != schedule_id]
+            await self._store.async_save(updated)
+            self._data = updated
+            self._refresh_schedules(schedule_id)
+
+    def _refresh_schedules(self, schedule_id: str) -> None:
+        if manager := self._hass.data.get(DOMAIN, {}).get("schedules"):
+            manager.refresh_config(schedule_id)
 
     async def async_remove(self) -> None:
         """Remove integration data when its config entry is deleted."""

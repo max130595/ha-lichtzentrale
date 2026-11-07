@@ -102,3 +102,11 @@ describe('Bewegungsautomatik', () => {
     setup(response(null)); await screen.findByText('Bewegungsautomatik bearbeiten'); expect(screen.getByLabelText('Bewegungsautomatik eingeschaltet')).toBeDisabled();
   });
 });
+
+it('saves switch-only motion with null brightness and no dimmer', async () => {
+  const saved = config(); saved.windows[0].action = {type: 'lights', entity_ids: ['switch.test_two'], brightness: null};
+  const {callWS} = setup(response(saved)); await edit();
+  expect(screen.queryByLabelText('Fenster 1 Helligkeit')).not.toBeInTheDocument(); expect(saveButton()).toBeEnabled();
+  fireEvent.click(saveButton()); await screen.findByText('Bewegungsautomatik in Home Assistant gespeichert.');
+  expect((mutations(callWS)[0][0].config as MotionConfig).windows[0].action).toEqual({type: 'lights', entity_ids: ['switch.test_two'], brightness: null});
+});

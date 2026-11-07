@@ -15,6 +15,7 @@ from .motion import MotionManager
 from .palettes import async_apply_palette
 from .rooms import async_toggle_room
 from .scenes import async_apply_scene
+from .schedules import ScheduleManager
 from .storage import LichtzentraleStore
 from .view import async_remove_view, async_setup_view
 from .websocket_api import ADAPTIVE_FIELDS, APPLY_FIELDS, async_setup_websocket_api, get_store
@@ -110,6 +111,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     runtime["motion"].start()
     runtime["bindings"] = BindingManager(hass, store)
     runtime["bindings"].start()
+    runtime["schedules"] = ScheduleManager(hass, store)
+    runtime["schedules"].start()
 
     async def next_scene_service(call: ServiceCall):
         return await hass.data[DOMAIN]["bindings"].async_next_scene(
@@ -129,6 +132,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload without removing persisted user settings."""
+    if schedules := hass.data[DOMAIN].pop("schedules", None):
+        await schedules.shutdown()
     if motion := hass.data[DOMAIN].pop("motion", None):
         await motion.shutdown()
     if bindings := hass.data[DOMAIN].pop("bindings", None):

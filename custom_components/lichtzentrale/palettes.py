@@ -12,7 +12,7 @@ from homeassistant.util.color import color_RGB_to_xy
 from .color_temperature import find_closest_ct_match
 from .lights import entity_area_id, is_individual_light, validate_lights
 from .positions import ordered_targets, palette_indices, validate_distribution
-from .rooms import async_dispatch
+from .rooms import async_dispatch, validate_transition
 from .storage import LichtzentraleStore
 
 # Original names and color choices; no upstream presets or image assets.
@@ -77,6 +77,7 @@ async def async_apply_palette(
     welle: bool = False,
     layout_targets: list[str] | None = None,
     tick_area_id: str | None = None,
+    schedule_transition: bool = False,
 ) -> dict[str, list[str]]:
     """Apply one original palette to explicitly allowed individual lamps only."""
     validate_distribution(verteilung)
@@ -99,7 +100,8 @@ async def async_apply_palette(
         or not 1 <= brightness <= 255
     ):
         raise ServiceValidationError("Die Helligkeit muss zwischen 1 und 255 liegen.")
-    if type(transition) not in (int, float) or not 0 <= transition <= 60:
+    validate_transition(transition)
+    if transition is None or (not schedule_transition and transition > 60):
         raise ServiceValidationError("Der Übergang muss zwischen 0 und 60 Sekunden liegen.")
 
     if manage:
@@ -134,6 +136,7 @@ async def async_apply_palette(
                 welle=welle,
                 layout_targets=layout_targets,
                 tick_area_id=tick_area_id,
+                schedule_transition=schedule_transition,
             )
 
     skipped_switches = [e for e in targets if e.startswith("switch.")]

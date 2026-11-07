@@ -22,7 +22,14 @@ from .dynamic_scenes import manager, stop_dynamic, validate_dynamic
 from .lights import entity_area_id, validate_lights
 from .palettes import async_apply_palette, list_palettes
 from .positions import validate_distribution
-from .rooms import async_dispatch, light_service_data, room_targets, validate_control_options
+from .rooms import (
+    async_dispatch,
+    check_execution_guard,
+    light_service_data,
+    room_targets,
+    validate_control_options,
+    validate_transition,
+)
 from .storage import LichtzentraleStore
 
 
@@ -330,17 +337,22 @@ async def async_reorder_scenes(store, area_id, scene_ids):
 
 
 async def async_apply_scene(
-    hass: HomeAssistant, store: LichtzentraleStore, scene_id: str, context: Context | None = None
+    hass: HomeAssistant, store: LichtzentraleStore, scene_id: str, context: Context | None = None,
+    *, transition=None, guard=None
 ):
     """Serialize recalls per room; dispatch each recall's individual lamps in parallel."""
     initial = _scene(store, scene_id)
     locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
     async with locks.setdefault(initial["area_id"], Lock()):
-        return await async_apply_scene_locked(hass, store, scene_id, context)
+        return await async_apply_scene_locked(
+            hass, store, scene_id, context, transition=transition, guard=guard
+        )
 
 
-async def async_apply_scene_locked(hass, store, scene_id, context=None):
+async def async_apply_scene_locked(hass, store, scene_id, context=None, *, transition=None, guard=None):
     """Recall while the caller holds this room's scene lock (including room-on)."""
+    check_execution_guard(guard)
+    validate_transition(transition)
     scene = _scene(store, scene_id)
     area_id = scene["area_id"]
     _area(hass, area_id)
@@ -376,7 +388,8 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None):
             manage=False,
             verteilung=scene.get("verteilung", "zufall"),
             welle=scene.get("dynamic", {}).get("welle", False),
-            transition=scene["dynamic"]["transition"],
+            transition=scene["dynamic"]["transition"] if transition is None else transition,
+            schedule_transition=transition is not None,
         )
     elif scene["kind"] == "hue":
         entity_id = scene["hue_scene"]
@@ -391,7 +404,11 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None):
             "hue",
             "activate_scene",
             # Dynamische Hue-Szenen auch dynamisch starten (Farben wandern weiter).
-            {"entity_id": entity_id, "dynamic": bool(state.attributes.get("is_dynamic"))},
+            {
+                "entity_id": entity_id,
+                "dynamic": bool(state.attributes.get("is_dynamic")),
+                **({"transition": transition} if transition is not None else {}),
+            },
             blocking=True,
             context=context,
         )
@@ -413,7 +430,7 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None):
                 continue
             value = scene["lights"][entity_id]
             validate_control_options(**value)
-            payload = light_service_data(state, **value)
+            payload = light_service_data(state, transition=transition, **value)
             if payload is None:
                 skipped.append(entity_id)
             else:
@@ -442,5 +459,7 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None):
         and not result.get("failed")
     ):
         if active := manager(hass):
-            await active.start(scene, context, result["applied"])
+            await active.start(
+                scene, context, result["applied"], initial_transition=transition
+            )
     return result

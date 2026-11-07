@@ -127,6 +127,7 @@ def async_setup_websocket_api(hass: HomeAssistant) -> None:
         *STAGE_TWO_HANDLERS,
         *STAGE_THREE_HANDLERS,
         *MOTION_HANDLERS,
+        *SCHEDULE_HANDLERS,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -371,4 +372,51 @@ MOTION_HANDLERS = (
     command("motion/get", AREA_FIELDS, motion_get),
     command("motion/save", {**AREA_FIELDS, vol.Required("config"): dict}, motion_save),
     command("motion/set_enabled", {**AREA_FIELDS, vol.Required("enabled"): bool}, motion_set_enabled),
+)
+
+
+async def schedules_list(hass, store, msg, context):
+    from .motion_config import list_lux_sensors
+    from .schedule_config import list_persons
+
+    manager = hass.data.get(DOMAIN, {}).get("schedules")
+    return {
+        "schedules": manager.list_schedules() if manager else [
+            {**item, "next_run": None, "last_error": None} for item in store.data["schedules"]
+        ],
+        "lux_sensors": list_lux_sensors(hass), "persons": list_persons(hass),
+        "time_zone": hass.config.time_zone,
+    }
+
+
+async def schedule_save(hass, store, msg, context):
+    await store.async_save_schedule(msg["schedule"])
+    return await schedules_list(hass, store, msg, context)
+
+
+async def schedule_delete(hass, store, msg, context):
+    await store.async_delete_schedule(msg["schedule_id"])
+    return await schedules_list(hass, store, msg, context)
+
+
+async def schedule_set_enabled(hass, store, msg, context):
+    await store.async_set_schedule_enabled(msg["schedule_id"], msg["enabled"])
+    return await schedules_list(hass, store, msg, context)
+
+
+async def schedule_test(hass, store, msg, context):
+    manager = hass.data.get(DOMAIN, {}).get("schedules")
+    if manager is None:
+        raise HomeAssistantError("Zeitpläne sind nicht geladen.")
+    return await manager.async_test(msg["schedule_id"], context)
+
+
+SCHEDULE_HANDLERS = (
+    command("schedules/list", {}, schedules_list),
+    command("schedule/save", {vol.Required("schedule"): dict}, schedule_save),
+    command("schedule/delete", {vol.Required("schedule_id"): cv.string}, schedule_delete),
+    command("schedule/set_enabled", {
+        vol.Required("schedule_id"): cv.string, vol.Required("enabled"): bool,
+    }, schedule_set_enabled),
+    command("schedule/test", {vol.Required("schedule_id"): cv.string}, schedule_test),
 )
