@@ -10,6 +10,7 @@ from homeassistant.util.color import color_RGB_to_xy
 
 from .color_temperature import find_closest_ct_match
 from .lights import validate_lights
+from .rooms import async_dispatch
 from .storage import LichtzentraleStore
 
 # Original names and color choices; no upstream presets or image assets.
@@ -84,14 +85,18 @@ async def async_apply_palette(
         or not 1 <= brightness <= 255
     ):
         raise ServiceValidationError("Die Helligkeit muss zwischen 1 und 255 liegen.")
-    if not 0 <= transition <= 60:
+    if type(transition) not in (int, float) or not 0 <= transition <= 60:
         raise ServiceValidationError("Der Übergang muss zwischen 0 und 60 Sekunden liegen.")
 
     result: dict[str, list[str]] = {"applied": [], "skipped": []}
+    calls = []
     for index, entity_id in enumerate(targets):
         state = hass.states.get(entity_id)
         if state is None or state.state in {"unknown", "unavailable"}:
             result["skipped"].append(entity_id)
+            continue
+        if state.domain == "switch":
+            calls.append(("switch", "turn_on", {"entity_id": entity_id}))
             continue
         attributes = state.attributes
         modes = set(attributes.get("supported_color_modes") or [])
@@ -112,6 +117,5 @@ async def async_apply_palette(
             params["brightness"] = brightness if brightness is not None else palette["bri"]
         if attributes.get("supported_features", 0) & LightEntityFeature.TRANSITION:
             params["transition"] = transition
-        await hass.services.async_call("light", "turn_on", params, blocking=True, context=context)
-        result["applied"].append(entity_id)
-    return result
+        calls.append(("light", "turn_on", params))
+    return await async_dispatch(hass, calls, result["skipped"], context)

@@ -4,8 +4,8 @@ Eine lokale Licht-App als Custom Integration für Home Assistant. Oberfläche au
 für schmale Bildschirme ausgelegt. Kein Cloud-Konto und keine zusätzlichen
 Python-Abhängigkeiten zur Laufzeit.
 
-**Stand: Stufe 0.** Die Galerie enthält zwölf eigene Farbpaletten in vier Kategorien.
-Die Reiter **Räume**, **Raum**, **Taster** und **Zeitpläne** sind bewusst Platzhalter.
+**Stand: Stufe 1.** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import
+und zwölf eigene Farbpaletten in vier Kategorien. **Taster** und **Zeitpläne** bleiben Platzhalter.
 Der weitere Ausbau ist in [docs/BAUPLAN.md](docs/BAUPLAN.md) beschrieben.
 
 ## Installation über HACS
@@ -28,7 +28,8 @@ Frontend-Dateien direkt verwenden; Node.js wird auf dem HA-System nicht benötig
 ## Erste Farbpalette anwenden
 
 1. In der Galerie **Lampen freigeben** öffnen und ausschließlich die gewünschten
-   **Einzellampen** auswählen. Drucker- und sonstige Nutzbeleuchtung nicht freigeben.
+   **Einzellampen und als Licht genutzte Shelly-Schalter** auswählen. Druckerbeleuchtung
+   wird standardmäßig ausgeblendet und nur über eine ausdrückliche Anzeigeoption angeboten.
    Zunächst ist keine Lampe freigegeben.
 2. Freigabe speichern. Sie wird serverseitig in Home Assistant gespeichert.
 3. Eine Palette und eine oder mehrere freigegebene Lampen wählen.
@@ -40,17 +41,43 @@ Gerätegrenzen gewählt. Dimmbare Lampen erhalten nur Helligkeit, reine An/Aus-L
 nur den Einschaltbefehl. Nicht erreichbare oder unbekannte Lampen werden übersprungen
 und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
 
-Stufe 0 steuert ausschließlich `light.*`. Die spätere Unterstützung ausgewählter
-Deckenlicht-Schalter, Räume, Szenen, Taster und Zeitpläne ist noch nicht implementiert.
-Auch automatische Anpassungen anderer Integrationen werden in Stufe 0 nicht pausiert.
-Adaptive Lighting muss nicht installiert sein.
+## Räume und Szenen
+
+- Räume entsprechen Home-Assistant-Bereichen, unabhängig von Etagen. Eine direkte
+  Bereichszuordnung der Entity hat Vorrang vor der Gerätezuordnung. Nur Räume mit
+  freigegebenen Lampen erscheinen; auch reine Lichtschalter-Räume werden unterstützt.
+- Raum und Einzellampen ein-/ausschalten, dimmbare Lampen regeln, Farbe oder Weißton wählen.
+  Raumhelligkeit ändert nur eingeschaltete dimmbare Lampen. Lichtschalter erhalten niemals
+  Farb- oder Helligkeitswerte. Die einzelnen Service-Aufrufe starten parallel.
+- **Aktuellen Zustand als Szene speichern** sichert Ein/Aus und die aktive Helligkeit/Farbe
+  jeder erreichbaren Lampe. Nicht verfügbare Lampen fehlen im Snapshot; die Oberfläche
+  meldet dies ausdrücklich. Szene anwenden, löschen, mit Pfeilen sortieren oder favorisieren.
+- **Hue-Szene importieren** bietet native Hue-Bridge-Szenen an. Vor Import und jedem Start
+  werden die tatsächlichen Hue-Ziele gegen Raum und Freigaben geprüft. Unbekannte Ziele,
+  nicht freigegebene Lampen, Gruppen- und Smart-Szenen werden sicher abgelehnt. Start erfolgt
+  über `hue.activate_scene`, ohne Dynamik. Dafür wird der geladene Hue-V2-Ressourcencontroller
+  verwendet; wenn dessen Ziele nicht auslesbar sind, wird kein unkontrollierter Aufruf gesendet.
+- Die **zuletzt über Lichtzentrale gestartete Szene** bleibt pro Raum im Store erhalten,
+  erscheint in Übersicht und Raum und lässt sich mit einem Tipp neu starten. Nur vollständig
+  erfolgreiche Starts aktualisieren sie; Teilfehler erhalten den bisherigen Eintrag. Löschen
+  entfernt die Referenz. Dies ist ein Startverlauf, keine Erkennung externer Aktivierungen.
+  Die Referenz ist typenunabhängig; dynamische Starts kommen mit Stufe 2 dazu.
+- Zur Laufzeit angebotene Shelly-Schalter benötigen eine Beleuchtungsbezeichnung am Gerät
+  oder an der Entity (etwa „Deckenlicht“). Andere Switch-Integrationen und alle anderen
+  Steuerdomains bleiben gesperrt. Die zusätzliche explizite Freigabe ist immer erforderlich.
+
+Adaptive Lighting und dynamische Szenen folgen in Stufe 2. Automatische Anpassungen anderer
+Integrationen werden noch nicht pausiert. Adaptive Lighting muss nicht installiert sein.
+Services für Automationen: `lichtzentrale.apply_palette`, `lichtzentrale.apply_scene` und
+`lichtzentrale.toggle_room`. Alle verwenden dieselben Administrator- und Zielprüfungen wie das Panel.
 
 ## Daten und Sicherheit
 
 - Datenmodell: Home-Assistant-`Store`, Schlüssel `lichtzentrale.data`, Version 1.
 - Vorbereitet sind `scenes`, `palettes`, `rooms`, `bindings`, `schedules`, `settings`.
-  Eigene Szenen/Paletten sind noch nicht editierbar; die zwölf eingebauten Paletten
-  werden aus eigenen Farbcodes erzeugt.
+  Raum-Szenen, Reihenfolge, Favoriten und der letzte Szenenstart werden gespeichert.
+  Die zwölf eingebauten Paletten werden aus eigenen Farbcodes erzeugt; ein eigener
+  Paletteneditor folgt später.
 - Keine Datenhaltung in Browser-LocalStorage. Lampen werden zur Laufzeit ermittelt,
   Bereiche über `area_id`, ohne vorausgesetzte Etagen.
 - Lampenfreigabe und API sind auf Administratoren beschränkt. Der Service
@@ -94,7 +121,7 @@ uv pip install --python .venv-target/bin/python -r requirements-ha2026.11.txt
 
 Der GitHub-Workflow prüft TypeScript, ESLint, Frontend-Tests, Bundle-Aktualität,
 Python-Tests, hassfest und HACS. Die lokale und manuelle Prüfliste steht in
-[docs/STUFE_0_TESTPLAN.md](docs/STUFE_0_TESTPLAN.md).
+[docs/STUFE_1_TESTPLAN.md](docs/STUFE_1_TESTPLAN.md).
 
 ## Herkunft und Lizenz
 

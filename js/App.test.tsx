@@ -18,6 +18,7 @@ function setup(lights: Light[] = [lamp]) {
     return {applied: [lamp.entity_id], skipped: []};
   });
   render(<App hass={{callWS} as Hass}/>);
+  fireEvent.click(screen.getByRole('button', {name: 'Galerie'}));
   return callWS;
 }
 afterEach(cleanup);
@@ -36,7 +37,7 @@ describe('Galerie', () => {
   it('saves explicit grants on the server before allowing selection', async () => {
     const callWS = setup(); await screen.findByText('Testpalette');
     fireEvent.click(screen.getByRole('button', {name: 'Lampen freigeben'}));
-    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getAllByRole('checkbox').at(-1)!);
     fireEvent.click(screen.getByRole('button', {name: 'Freigaben speichern'}));
     await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/settings/save', light_entity_ids: ['light.test_fixture']}));
     await screen.findByText('Lampenfreigaben wurden in Home Assistant gespeichert.');
@@ -46,7 +47,7 @@ describe('Galerie', () => {
   it('applies only explicit selection and prevents repeated clicks while pending', async () => {
     const callWS = setup([{...lamp, allowed: true}]);
     fireEvent.click(await screen.findByText('Testpalette'));
-    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getAllByRole('checkbox').at(-1)!);
     let resolve: (value: unknown) => void = () => {};
     callWS.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
     const button = screen.getByRole('button', {name: 'Auf 1 Lampe(n) anwenden'});
@@ -62,8 +63,10 @@ describe('Galerie', () => {
     expect(screen.getByRole('checkbox')).toBeDisabled();
   });
   it('shows loading errors and retries explicitly', async () => {
-    const callWS = vi.fn().mockRejectedValueOnce(new Error('Verbindung getrennt')).mockResolvedValue([]);
-    render(<App hass={{callWS}}/>);
+    let failed = false;
+    const callWS = vi.fn(async (request: {type: string}) => {if (!failed && request.type.endsWith('palettes/list')) {failed = true; throw new Error('Verbindung getrennt');} return [];});
+    render(<App hass={{callWS} as Hass}/>);
+    fireEvent.click(screen.getByRole('button', {name: 'Galerie'}));
     expect(await screen.findByRole('alert')).toHaveTextContent('Verbindung getrennt');
     fireEvent.click(screen.getByRole('button', {name: 'Neu laden'}));
     await screen.findByText('Keine Paletten verfügbar. Lade die Daten erneut.');
@@ -71,18 +74,18 @@ describe('Galerie', () => {
   });
   it('shows application failures without claiming success', async () => {
     const callWS = setup([{...lamp, allowed: true}]);
-    fireEvent.click(await screen.findByText('Testpalette')); fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(await screen.findByText('Testpalette')); fireEvent.click(screen.getAllByRole('checkbox').at(-1)!);
     callWS.mockRejectedValueOnce({message: 'Nicht erlaubt'});
     fireEvent.click(screen.getByRole('button', {name: 'Auf 1 Lampe(n) anwenden'}));
     expect(await screen.findByRole('alert')).toHaveTextContent('Anwenden fehlgeschlagen: Nicht erlaubt');
   });
   it('does not persist browser selection across remount', async () => {
-    setup([{...lamp, allowed: true}]); fireEvent.click(await screen.findByText('Testpalette')); fireEvent.click(screen.getByRole('checkbox'));
+    setup([{...lamp, allowed: true}]); fireEvent.click(await screen.findByText('Testpalette')); fireEvent.click(screen.getAllByRole('checkbox').at(-1)!);
     cleanup(); setup([{...lamp, allowed: true}]); fireEvent.click(await screen.findByText('Testpalette'));
     expect(screen.getByRole('checkbox')).not.toBeChecked();
   });
   it('clears selected lamps when their grants are revoked on reload', async () => {
-    const callWS = setup([{...lamp, allowed: true}]); fireEvent.click(await screen.findByText('Testpalette')); fireEvent.click(screen.getByRole('checkbox'));
+    const callWS = setup([{...lamp, allowed: true}]); fireEvent.click(await screen.findByText('Testpalette')); fireEvent.click(screen.getAllByRole('checkbox').at(-1)!);
     callWS.mockImplementation(async request => request.type.endsWith('palettes/list') ? [palette] : [lamp]);
     fireEvent.click(screen.getByRole('button', {name: 'Neu laden'}));
     await waitFor(() => expect(screen.queryByRole('checkbox')).not.toBeInTheDocument());
@@ -91,15 +94,15 @@ describe('Galerie', () => {
   it('keeps unsaved grants when saving fails', async () => {
     const callWS = setup(); await screen.findByText('Testpalette');
     fireEvent.click(screen.getByRole('button', {name: 'Lampen freigeben'}));
-    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getAllByRole('checkbox').at(-1)!);
     callWS.mockRejectedValueOnce(new Error('Speicher nicht erreichbar'));
     fireEvent.click(screen.getByRole('button', {name: 'Freigaben speichern'}));
     expect(await screen.findByRole('alert')).toHaveTextContent('Speichern fehlgeschlagen');
-    expect(screen.getByRole('checkbox')).toBeChecked();
+    expect(screen.getAllByRole('checkbox').at(-1)).toBeChecked();
   });
   it('ignores a late application response after unmount', async () => {
     const callWS = setup([{...lamp, allowed: true}]);
-    fireEvent.click(await screen.findByText('Testpalette')); fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(await screen.findByText('Testpalette')); fireEvent.click(screen.getAllByRole('checkbox').at(-1)!);
     let resolve: (value: unknown) => void = () => {};
     callWS.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
     fireEvent.click(screen.getByRole('button', {name: 'Auf 1 Lampe(n) anwenden'}));
@@ -116,5 +119,31 @@ describe('Galerie', () => {
     element.remove(); document.body.append(element);
     await waitFor(() => expect(element.shadowRoot?.textContent).toContain('Galerie'));
     element.remove();
+  });
+});
+
+describe('Freigaben und Teilergebnisse', () => {
+  it('shows failed palette targets explicitly', async () => {
+    const callWS = setup([{...lamp, allowed: true}]);
+    fireEvent.click(await screen.findByText('Testpalette')); fireEvent.click(screen.getByRole('checkbox'));
+    callWS.mockResolvedValueOnce({applied: [], skipped: [], failed: [lamp.entity_id]});
+    fireEvent.click(screen.getByRole('button', {name: 'Auf 1 Lampe(n) anwenden'}));
+    expect(await screen.findByRole('status')).toHaveTextContent('1 Lampe(n) fehlgeschlagen. Nicht alle Lampen');
+  });
+  it('explicitly requests hidden printer lights without discarding unsaved grants', async () => {
+    const printer = {...lamp, entity_id: 'light.test_printer', name: 'Testdrucker', hidden_by_default: true};
+    const approvedPrinter = {...printer, entity_id: 'light.test_approved_printer', name: 'Freigegebener Testdrucker', allowed: true};
+    const callWS = vi.fn(async (req: {type: string; [key: string]: unknown}): Promise<unknown> => req.type.endsWith('lights/list') ? [lamp, approvedPrinter, ...(req.include_hidden ? [printer] : [])] : []);
+    render(<App hass={{callWS} as Hass}/>); fireEvent.click(screen.getByRole('button', {name: 'Galerie'}));
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Lampen freigeben'})).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', {name: 'Lampen freigeben'}));
+    expect(screen.queryByText('Testdrucker')).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', {name: /Freigegebener Testdrucker/})).toBeChecked();
+    fireEvent.click(screen.getByRole('checkbox', {name: /Testlampe/}));
+    fireEvent.click(screen.getByRole('checkbox', {name: 'Ausgeblendete Druckerbeleuchtung anzeigen'}));
+    await screen.findByText('Testdrucker');
+    expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/lights/list', include_hidden: true});
+    expect(screen.getByRole('checkbox', {name: /Testlampe/})).toBeChecked();
+    expect(screen.getByRole('checkbox', {name: /Freigegebener Testdrucker/})).toBeChecked();
   });
 });

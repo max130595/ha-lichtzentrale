@@ -31,6 +31,8 @@ async def test_setup_unload_reload_remove(hass, hass_storage):
         assert register.call_count == 1
         assert hass.data[DATA_PANELS][DOMAIN].require_admin is True
         assert hass.services.has_service(DOMAIN, "apply_palette")
+        assert hass.services.has_service(DOMAIN, "apply_scene")
+        assert hass.services.has_service(DOMAIN, "toggle_room")
         await hass.data[DOMAIN]["store"].async_set_lights(["light.fixture_a"])
         original_store = hass.data[DOMAIN]["store"]
         command_calls = register_command.call_count
@@ -45,6 +47,8 @@ async def test_setup_unload_reload_remove(hass, hass_storage):
         assert await hass.config_entries.async_unload(entry.entry_id)
         assert DOMAIN not in hass.data[DATA_PANELS]
         assert not hass.services.has_service(DOMAIN, "apply_palette")
+        assert not hass.services.has_service(DOMAIN, "apply_scene")
+        assert not hass.services.has_service(DOMAIN, "toggle_room")
         assert "store" not in hass.data[DOMAIN]
         assert STORAGE_KEY in hass_storage
         await async_remove_entry(hass, entry)

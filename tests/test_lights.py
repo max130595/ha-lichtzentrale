@@ -79,3 +79,72 @@ async def test_entity_area_overrides_device_then_falls_back(hass):
 async def test_unregistered_light_has_no_area(hass):
     hass.states.async_set("light.fixture_a", "on")
     assert list_lights(hass, [])[0]["area_id"] is None
+
+
+@pytest.mark.parametrize(
+    "platform,name,expected",
+    [
+        ("shelly", "Deckenlicht", True),
+        ("shelly", "Flurlicht", True),
+        ("shelly", "Heating relay", False),
+        ("synthetic", "Ceiling light", False),
+    ],
+)
+async def test_only_registered_shelly_lighting_switches(hass, platform, name, expected):
+    entry = er.async_get(hass).async_get_or_create(
+        "switch",
+        platform,
+        "fixture-relay",
+        original_name=name,
+    )
+    hass.states.async_set(entry.entity_id, "on")
+    assert bool(list_lights(hass, [])) is expected
+    if expected:
+        assert validate_lights(hass, [entry.entity_id]) == [entry.entity_id]
+        item = list_lights(hass, [])[0]
+        assert item["domain"] == "switch"
+        assert item["brightness"] is None
+        assert item["supported_color_modes"] == []
+    else:
+        with pytest.raises(ServiceValidationError):
+            validate_lights(hass, [entry.entity_id])
+
+
+@pytest.mark.parametrize("platform,manufacturer", [("bambu_lab", None), ("synthetic", "Bambu Lab")])
+async def test_printer_hidden_unless_requested_or_already_approved(hass, platform, manufacturer):
+    config = MockConfigEntry(domain=platform)
+    config.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=config.entry_id,
+        identifiers={(platform, "fixture-printer")},
+        manufacturer=manufacturer,
+    )
+    entity = er.async_get(hass).async_get_or_create(
+        "light",
+        platform,
+        "fixture-chamber",
+        device_id=device.id,
+    )
+    hass.states.async_set(entity.entity_id, "off")
+    assert list_lights(hass, []) == []
+    assert list_lights(hass, [], include_hidden=True)[0]["hidden_by_default"]
+    assert list_lights(hass, [entity.entity_id])[0]["allowed"]
+
+
+async def test_shelly_lighting_device_metadata_is_used(hass):
+    config = MockConfigEntry(domain="shelly")
+    config.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=config.entry_id,
+        identifiers={("shelly", "fixture-relay-device")},
+        name="Fixture Flurlicht",
+    )
+    entry = er.async_get(hass).async_get_or_create(
+        "switch",
+        "shelly",
+        "fixture-relay",
+        device_id=device.id,
+        original_name="Relay 0",
+    )
+    hass.states.async_set(entry.entity_id, "off")
+    assert list_lights(hass, [])[0]["entity_id"] == entry.entity_id

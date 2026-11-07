@@ -129,3 +129,35 @@ async def test_unknown_palette_or_empty_targets(hass, store, light_calls, palett
     with pytest.raises(ServiceValidationError):
         await async_apply_palette(hass, store, palette, targets)
     assert not light_calls
+
+
+async def test_parallel_palette_switch_payload_and_failure(hass, store):
+    import asyncio
+
+    from homeassistant.helpers import entity_registry as er
+
+    entry = er.async_get(hass).async_get_or_create(
+        "switch",
+        "shelly",
+        "fixture-ceiling",
+        original_name="Fixture Deckenlicht",
+    )
+    ids = ["light.fixture_a", entry.entity_id]
+    hass.states.async_set(ids[0], "on", {"supported_color_modes": ["xy"]})
+    hass.states.async_set(ids[1], "off")
+    await store.async_set_lights(ids)
+    calls = []
+    ready = asyncio.Event()
+
+    async def call(domain, service, data, **kwargs):
+        calls.append((domain, service, data))
+        if len(calls) == 2:
+            ready.set()
+        await asyncio.wait_for(ready.wait(), 1)
+        if domain == "light":
+            raise RuntimeError("Synthetic device failure")
+
+    with patch.object(type(hass.services), "async_call", side_effect=call):
+        result = await async_apply_palette(hass, store, PALETTE, ids)
+    assert calls[1] == ("switch", "turn_on", {"entity_id": ids[1]})
+    assert result == {"applied": [ids[1]], "skipped": [], "failed": [ids[0]]}

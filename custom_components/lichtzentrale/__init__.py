@@ -9,6 +9,8 @@ from homeassistant.helpers.service import async_register_admin_service
 
 from .const import DOMAIN, SERVICE_APPLY_PALETTE
 from .palettes import async_apply_palette
+from .rooms import async_toggle_room
+from .scenes import async_apply_scene
 from .storage import LichtzentraleStore
 from .view import async_remove_view, async_setup_view
 from .websocket_api import APPLY_FIELDS, async_setup_websocket_api, get_store
@@ -50,6 +52,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=vol.Schema(APPLY_FIELDS),
         supports_response=SupportsResponse.OPTIONAL,
     )
+
+    async def apply_scene_service(call: ServiceCall):
+        return await async_apply_scene(hass, get_store(hass), call.data["scene_id"], call.context)
+
+    async def toggle_room_service(call: ServiceCall):
+        return await async_toggle_room(
+            hass, get_store(hass), call.data["area_id"], call.data.get("on"), context=call.context
+        )
+
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        "apply_scene",
+        apply_scene_service,
+        schema=vol.Schema({vol.Required("scene_id"): cv.string}),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        "toggle_room",
+        toggle_room_service,
+        schema=vol.Schema({vol.Required("area_id"): cv.string, vol.Optional("on"): bool}),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     return True
 
 
@@ -57,6 +84,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload without removing persisted user settings."""
     await async_remove_view(hass)
     hass.services.async_remove(DOMAIN, SERVICE_APPLY_PALETTE)
+    hass.services.async_remove(DOMAIN, "apply_scene")
+    hass.services.async_remove(DOMAIN, "toggle_room")
     hass.data[DOMAIN].pop("store", None)
     return True
 
