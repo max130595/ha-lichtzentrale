@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.storage import Store
 
-from .const import STORAGE_KEY, STORAGE_VERSION
+from .const import DOMAIN, STORAGE_KEY, STORAGE_VERSION
 
 
 def empty_data() -> dict[str, Any]:
@@ -152,6 +152,94 @@ class LichtzentraleStore:
             await self._store.async_save(updated)
             self._data = updated
             return deepcopy(position)
+
+    async def async_save_binding(self, binding: dict, *, is_update: bool = False) -> dict:
+        """Validate and persist one unique button/event action atomically."""
+        from .bindings import validate_binding
+
+        async with self._lock:
+            binding = validate_binding(self._hass, self, binding)
+            updated = deepcopy(self._data)
+            index = next(
+                (i for i, item in enumerate(updated["bindings"]) if item["id"] == binding["id"]),
+                None,
+            )
+            if is_update and index is None:
+                raise ServiceValidationError("Die Belegung wurde inzwischen gelöscht. Bitte neu laden.")
+            if any(
+                item["id"] != binding["id"]
+                and item["event_entity"] == binding["event_entity"]
+                and item["event_type"] == binding["event_type"]
+                for item in updated["bindings"]
+            ):
+                raise ServiceValidationError("Für dieses Ereignis gibt es bereits eine Belegung.")
+            if index is None:
+                updated["bindings"].append(deepcopy(binding))
+            else:
+                updated["bindings"][index] = deepcopy(binding)
+            await self._store.async_save(updated)
+            self._data = updated
+            self._refresh_bindings()
+            return deepcopy(binding)
+
+    def _refresh_bindings(self) -> None:
+        """Invalidate delayed work immediately after the changed binding commits."""
+        if manager := self._hass.data.get(DOMAIN, {}).get("bindings"):
+            manager.refresh_bindings()
+
+    async def async_delete_binding(self, binding_id: str) -> None:
+        """Remove one binding without losing concurrent room or scene writes."""
+        async with self._lock:
+            updated = deepcopy(self._data)
+            updated["bindings"] = [item for item in updated["bindings"] if item["id"] != binding_id]
+            await self._store.async_save(updated)
+            self._data = updated
+            self._refresh_bindings()
+
+    async def async_set_double_click(self, milliseconds: int) -> dict:
+        """Persist a bounded global recognition window; never browser-local."""
+        if type(milliseconds) is not int or not 200 <= milliseconds <= 1000:
+            raise ServiceValidationError("Das Doppelklick-Fenster muss 200–1000 ms betragen.")
+        async with self._lock:
+            updated = deepcopy(self._data)
+            updated["settings"]["double_click_ms"] = milliseconds
+            await self._store.async_save(updated)
+            self._data = updated
+            return {"double_click_ms": milliseconds}
+
+    async def async_set_room_settings(self, area_id: str, changes: dict) -> dict:
+        """Configure only same-room cycle/default references under the Store lock."""
+        from .adaptive import _validated
+        from .rooms import room_targets
+
+        if not changes or set(changes) - {"cycle", "default_on"}:
+            raise ServiceValidationError("Bitte Szenenzyklus oder Einschaltregel angeben.")
+        async with self._lock:
+            if not room_targets(self._hass, self, area_id):
+                raise ServiceValidationError("Bitte zuerst Lampen für diesen Raum freigeben.")
+            scene_ids = {scene["id"] for scene in self._data["scenes"] if scene["area_id"] == area_id}
+            if "cycle" in changes:
+                cycle = changes["cycle"]
+                if (
+                    not isinstance(cycle, list)
+                    or len(cycle) > 500
+                    or any(not isinstance(item, str) or item not in scene_ids for item in cycle)
+                    or len(set(cycle)) != len(cycle)
+                ):
+                    raise ServiceValidationError("Der Szenenzyklus darf nur Szenen dieses Raums enthalten.")
+            if "default_on" in changes:
+                default = changes["default_on"]
+                if not isinstance(default, str) or default not in {"last", "adaptive", *scene_ids}:
+                    raise ServiceValidationError("Bitte eine Einschaltregel für diesen Raum auswählen.")
+                if default == "adaptive":
+                    switch = self._data["rooms"].get(area_id, {}).get("adaptive_switch")
+                    _validated(self._hass, self, area_id, switch)
+            updated = deepcopy(self._data)
+            room = updated["rooms"].setdefault(area_id, {})
+            room.update(deepcopy(changes))
+            await self._store.async_save(updated)
+            self._data = updated
+            return {"cycle": list(room.get("cycle", [])), "default_on": room.get("default_on", "last")}
 
     async def async_remove(self) -> None:
         """Remove integration data when its config entry is deleted."""

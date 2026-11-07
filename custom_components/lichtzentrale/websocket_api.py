@@ -125,6 +125,7 @@ def async_setup_websocket_api(hass: HomeAssistant) -> None:
         ws_apply,
         *STAGE_ONE_HANDLERS,
         *STAGE_TWO_HANDLERS,
+        *STAGE_THREE_HANDLERS,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -283,4 +284,58 @@ STAGE_TWO_HANDLERS = (
     command("dynamic/stop", AREA_FIELDS, dynamic_stop),
     command("adaptive/status", {}, adaptive_status),
     command("adaptive/set", ADAPTIVE_FIELDS, adaptive_set),
+)
+
+
+async def buttons_list(hass, store, msg, context):
+    from .bindings import list_buttons
+
+    return list_buttons(hass)
+
+
+async def bindings_list(hass, store, msg, context):
+    data = store.data
+    return {"bindings": data["bindings"], "double_click_ms": data["settings"].get("double_click_ms", 500)}
+
+
+async def binding_save(hass, store, msg, context):
+    from .bindings import async_save_binding
+
+    return await async_save_binding(hass, store, msg["binding"])
+
+
+async def binding_delete(hass, store, msg, context):
+    await store.async_delete_binding(msg["binding_id"])
+    return {}
+
+
+async def binding_settings(hass, store, msg, context):
+    return await store.async_set_double_click(msg["double_click_ms"])
+
+
+async def room_settings(hass, store, msg, context):
+    return await store.async_set_room_settings(
+        msg["area_id"], {key: msg[key] for key in ("cycle", "default_on") if key in msg}
+    )
+
+
+STAGE_THREE_HANDLERS = (
+    command("buttons/list", {}, buttons_list),
+    command("bindings/list", {}, bindings_list),
+    command("binding/save", {vol.Required("binding"): dict}, binding_save),
+    command("binding/delete", {vol.Required("binding_id"): cv.string}, binding_delete),
+    command(
+        "binding/settings",
+        {vol.Required("double_click_ms"): vol.All(int, vol.Range(min=200, max=1000))},
+        binding_settings,
+    ),
+    command(
+        "room/settings",
+        {
+            **AREA_FIELDS,
+            vol.Optional("cycle"): vol.All([cv.string], vol.Length(max=500)),
+            vol.Optional("default_on"): cv.string,
+        },
+        room_settings,
+    ),
 )

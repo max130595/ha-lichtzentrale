@@ -4,8 +4,8 @@ Eine lokale Licht-App als Custom Integration für Home Assistant. Oberfläche au
 für schmale Bildschirme ausgelegt. Kein Cloud-Konto und keine zusätzlichen
 Python-Abhängigkeiten zur Laufzeit.
 
-**Stand: Stufe 2b.** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import,
-zwölf eigene Farbpaletten, räumliche Verteilung und Wellen, dynamische Palettenszenen und optionales natürliches Licht. **Taster** und **Zeitpläne** bleiben Platzhalter.
+**Stand: Stufe 3.** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import,
+zwölf eigene Farbpaletten, räumliche Verteilung und Wellen, dynamische Palettenszenen, optionales natürliches Licht und konfigurierbare **Taster**. **Zeitpläne** folgen in Stufe 4.
 Der weitere Ausbau ist in [docs/BAUPLAN.md](docs/BAUPLAN.md) beschrieben.
 
 ## Installation über HACS
@@ -100,7 +100,7 @@ und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
   Szenen bleiben erhalten; laufende Aufgaben und Listener werden beim Entladen beendet.
 
 Services für Automationen: `lichtzentrale.apply_palette`, `lichtzentrale.apply_scene`,
-`lichtzentrale.toggle_room`, `lichtzentrale.stop_dynamic`, `lichtzentrale.set_adaptive`.
+`lichtzentrale.toggle_room`, `lichtzentrale.next_scene`, `lichtzentrale.stop_dynamic`, `lichtzentrale.set_adaptive`.
 Alle verwenden dieselben Administrator- und Zielprüfungen wie das Panel.
 
 ## Lampenpositionen und räumliche Effekte
@@ -119,6 +119,30 @@ Alle verwenden dieselben Administrator- und Zielprüfungen wie das Panel.
   gelten auch nach Neuladen.
 - Die konkrete Wirkung auf einer echten Hue Bridge und die Handy-Abnahme stehen in
   [Stufe-2b-Testplan](docs/STUFE_2B_TESTPLAN.md) für Claudes Prüfung.
+
+## Taster
+
+- Unter **Taster** werden Event-Entities nach Gerät gruppiert, mit den vom Gerät gemeldeten Ereignissen.
+  Pro Taste und Ereignis eine Aktion und einen Zielraum wählen. Es werden keine privaten Gerätekennungen
+  vorausgesetzt; vorhandene Hue- und Shelly-Taster werden zur Laufzeit ermittelt.
+- Aktionen: Raum an/aus, einschalten, ausschalten, nächste Szene, bestimmte Szene, heller/dunkler,
+  natürliches Licht an/aus (nur mit Adaptive Lighting) und Dynamik stoppen.
+- Für **Nächste Szene** im Raumzyklus Szenen auswählen und sortieren. Nach zehn Minuten ohne
+  erfolgreichen Zykluswechsel beginnt die Folge wieder bei der ersten Szene, ebenso nach Neustart.
+  Gelöschte oder nicht mehr zulässige Szenen werden übersprungen. Fehlerhafte Ausführungen
+  setzen den Zyklus nicht weiter.
+- Dimmen ändert eingeschaltete dimmbare Einzellichter relativ um 10 % je Ereignis, auch bei
+  `repeat` und Tap-Dial-Drehen. Ausgeschaltete Lampen und Switch-Lichter bleiben unverändert.
+- Für Hue ist **Doppelklick** ein zusätzliches Ereignis aus zwei `short_release` im gewählten
+  Zeitfenster (500 ms, einstellbar von 200 bis 1000 ms). Nur bei belegtem Doppelklick wird die
+  Einfachaktion verzögert. Shelly bietet `double_push` direkt an.
+- Unter den Raumeinstellungen auf der Taster-Seite die Einschaltregel wählen: vorheriger Zustand,
+  optional natürliches Licht oder eine bestimmte gespeicherte Szene dieses Raums.
+- Alle Änderungen gelten erst nach bestätigter Serverantwort und bleiben über Neuladen erhalten.
+  Fehlende Tasterbelegungen lassen sich bereinigen. Neustart, Wiederherstellung, Verfügbarkeits-
+  und reine Attributänderungen werden nicht als Tastendruck ausgeführt; beim Entladen werden
+  wartende Klicks und Aufgaben beendet. Fehler einer Tasteraktion stehen im HA-Log.
+- Der [Stufe-3-Testplan](docs/STUFE_3_TESTPLAN.md) beschreibt die manuelle Geräte- und Handy-Abnahme.
 
 ## Daten und Sicherheit
 
@@ -170,7 +194,7 @@ uv pip install --python .venv-target/bin/python -r requirements-ha2026.11.txt
 
 Der GitHub-Workflow prüft TypeScript, ESLint, Frontend-Tests, Bundle-Aktualität,
 Python-Tests, hassfest und HACS. Die lokale und manuelle Prüfliste steht in
-[docs/STUFE_2B_TESTPLAN.md](docs/STUFE_2B_TESTPLAN.md).
+[docs/STUFE_3_TESTPLAN.md](docs/STUFE_3_TESTPLAN.md).
 
 ## Herkunft und Lizenz
 

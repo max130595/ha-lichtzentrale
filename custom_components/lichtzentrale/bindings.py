@@ -1,0 +1,498 @@
+# Geändert für Lichtzentrale
+"""Runtime event buttons and narrowly scoped, cancellable room actions."""
+
+import asyncio
+import logging
+from copy import deepcopy
+from time import monotonic
+from uuid import uuid4
+
+from homeassistant.const import EVENT_STATE_CHANGED, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import Context, CoreState, HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.util.dt import parse_datetime
+
+from .adaptive import async_set_adaptive
+from .const import DOMAIN
+from .dynamic_scenes import async_stop_room, validate_dynamic
+from .lights import entity_area_id, is_individual_light
+from .palettes import list_palettes
+from .positions import validate_distribution
+from .rooms import (
+    async_dispatch,
+    async_toggle_room,
+    light_service_data,
+    room_targets,
+    validate_control_options,
+)
+from .scenes import _targets, async_apply_scene, hue_scene_targets
+from .storage import LichtzentraleStore
+
+_LOGGER = logging.getLogger(__name__)
+DOUBLE_RELEASE = "double_short_release"
+ACTIONS = frozenset(
+    {
+        "toggle_room",
+        "turn_on_room",
+        "turn_off_room",
+        "next_scene",
+        "scene",
+        "dim_up",
+        "dim_down",
+        "adaptive_on",
+        "adaptive_off",
+        "stop_dynamic",
+    }
+)
+CYCLE_RESET_SECONDS = 600
+
+
+@callback
+def list_buttons(hass: HomeAssistant) -> list[dict]:
+    """Discover loaded event entities without installation-specific identifiers."""
+    entities, devices = er.async_get(hass), dr.async_get(hass)
+    result = []
+    for state in hass.states.async_all("event"):
+        entry = entities.async_get(state.entity_id)
+        if entry and entry.disabled_by is not None:
+            continue
+        advertised = state.attributes.get("event_types")
+        if not isinstance(advertised, (list, tuple)):
+            continue
+        event_types = list(
+            dict.fromkeys(
+                value
+                for value in advertised
+                if isinstance(value, str) and value and value != DOUBLE_RELEASE
+            )
+        )
+        if "short_release" in event_types:
+            event_types.append(DOUBLE_RELEASE)
+        if not event_types:
+            continue
+        device = devices.async_get(entry.device_id) if entry and entry.device_id else None
+        result.append(
+            {
+                "entity_id": state.entity_id,
+                "name": state.name,
+                "device_id": entry.device_id if entry else None,
+                "device_name": (device.name_by_user or device.name or state.name)
+                if device
+                else state.name,
+                "area_id": entity_area_id(hass, state.entity_id),
+                "event_types": event_types,
+                # An event entity is unknown until its first press, not necessarily offline.
+                "available": state.state != STATE_UNAVAILABLE
+                and not state.attributes.get("restored"),
+            }
+        )
+    return sorted(
+        result,
+        key=lambda item: (
+            (item["device_name"] or "").casefold(),
+            item["name"].casefold(),
+            item["entity_id"],
+        ),
+    )
+
+
+def _scene_for_room(store, scene_id, area_id):
+    if not isinstance(scene_id, str):
+        raise ServiceValidationError("Bitte eine Szene dieses Raums auswählen.")
+    scene = next((s for s in store.data["scenes"] if s.get("id") == scene_id), None)
+    if scene is None or scene.get("area_id") != area_id:
+        raise ServiceValidationError("Bitte eine vorhandene Szene dieses Raums auswählen.")
+    return scene
+
+
+def validate_binding(hass, store, raw) -> dict:
+    """Normalize a closed schema without writing or calling any HA service."""
+    if not isinstance(raw, dict) or set(raw) - {
+        "id",
+        "event_entity",
+        "event_type",
+        "action",
+        "area_id",
+        "params",
+    }:
+        raise ServiceValidationError("Ungültige Tasterbelegung.")
+    binding_id = raw.get("id")
+    if binding_id is not None and (
+        not isinstance(binding_id, str) or not binding_id or len(binding_id) > 256
+    ):
+        raise ServiceValidationError("Ungültige Kennung der Tasterbelegung.")
+    if binding_id is not None and not any(
+        item.get("id") == binding_id for item in store.data["bindings"]
+    ):
+        raise ServiceValidationError("Die Tasterbelegung wurde nicht gefunden. Bitte neu laden.")
+    button = next(
+        (b for b in list_buttons(hass) if b["entity_id"] == raw.get("event_entity")), None
+    )
+    event_type, action, area_id = raw.get("event_type"), raw.get("action"), raw.get("area_id")
+    if button is None or not isinstance(event_type, str) or event_type not in button["event_types"]:
+        raise ServiceValidationError("Bitte ein verfügbares Taster-Ereignis auswählen.")
+    if not isinstance(action, str) or action not in ACTIONS:
+        raise ServiceValidationError("Diese Tasteraktion ist nicht erlaubt.")
+    if not isinstance(area_id, str) or not room_targets(hass, store, area_id):
+        raise ServiceValidationError("Bitte einen Raum mit freigegebenen Lampen auswählen.")
+    params = raw.get("params", {})
+    if not isinstance(params, dict) or set(params) != (
+        {"scene_id"} if action == "scene" else set()
+    ):
+        raise ServiceValidationError("Ungültige Parameter der Tasteraktion.")
+    if action == "scene":
+        _scene_for_room(store, params["scene_id"], area_id)
+    return {
+        "id": binding_id or str(uuid4()),
+        "event_entity": button["entity_id"],
+        "event_type": event_type,
+        "action": action,
+        "area_id": area_id,
+        "params": deepcopy(params),
+    }
+
+
+async def async_save_binding(hass, store, raw):
+    """The Store validates inside its write lock to reject stale editor updates."""
+    if not isinstance(raw, dict):
+        raise ServiceValidationError("Ungültige Tasterbelegung.")
+    return await store.async_save_binding(raw, is_update=bool(raw.get("id")))
+
+
+def _check_scene(hass, store, scene_id, area_id):
+    """Skip obsolete cycle entries before a recall can pause or stop anything."""
+    scene = _scene_for_room(store, scene_id, area_id)
+    kind = scene.get("kind")
+    if kind not in {"snapshot", "palette", "hue"}:
+        raise ServiceValidationError("Ungültiger Szenentyp.")
+    dynamic = validate_dynamic(scene.get("dynamic", {}), kind)
+    distribution = validate_distribution(scene.get("verteilung", "zufall"))
+    if dynamic["welle"] and distribution == "zufall":
+        raise ServiceValidationError("Für eine Welle bitte eine räumliche Verteilung auswählen.")
+    if kind == "snapshot":
+        values = scene.get("lights")
+        if not isinstance(values, dict):
+            raise ServiceValidationError("Ungültige Lampen der Szene.")
+        _targets(hass, store, area_id, values)
+        for entity_id, value in values.items():
+            if (
+                not isinstance(value, dict)
+                or set(value) - {"on", "brightness", "xy", "color_temp_kelvin"}
+                or type(value.get("on")) is not bool
+                or (entity_id.startswith("switch.") and set(value) != {"on"})
+            ):
+                raise ServiceValidationError("Ungültige Lampeneinstellung.")
+            validate_control_options(**value)
+    elif kind == "hue":
+        hue_id = scene.get("hue_scene")
+        if not isinstance(hue_id, str):
+            raise ServiceValidationError("Bitte eine Hue-Szene auswählen.")
+        _targets(hass, store, area_id, hue_scene_targets(hass, hue_id))
+    else:
+        if scene.get("palette_id") not in {p["id"] for p in list_palettes()}:
+            raise ServiceValidationError("Die Farbpalette wurde nicht gefunden.")
+        validate_control_options(brightness=scene.get("brightness"))
+        _targets(hass, store, area_id, room_targets(hass, store, area_id))
+    return scene
+
+
+class BindingManager:
+    """Own the state listener, click windows, queued actions and cycle cursors."""
+
+    def __init__(self, hass: HomeAssistant, store: LichtzentraleStore):
+        self.hass, self.store = hass, store
+        self.closed = False
+        self._unsubscribe = None
+        self._pending = {}
+        self._tasks = set()
+        self._task_bindings = {}
+        self._locks = {}
+        self._cycles = {}
+
+    @callback
+    def start(self):
+        """Register once; adding or editing a binding needs no listener rebuild."""
+        if self.closed:
+            raise ServiceValidationError("Lichtzentrale ist nicht geladen.")
+        if self._unsubscribe is None:
+            self._unsubscribe = self.hass.bus.async_listen(EVENT_STATE_CHANGED, self._changed)
+
+    def _lock(self, area_id):
+        return self._locks.setdefault(area_id, asyncio.Lock())
+
+    @callback
+    def _cancel_pending(self, entity_id):
+        if pending := self._pending.pop(entity_id, None):
+            pending["cancel"]()
+        return pending
+
+    @callback
+    def refresh_bindings(self):
+        """Cancel obsolete work immediately after a successful Store commit."""
+        current = self.store.data["bindings"]
+        for task, binding in list(self._task_bindings.items()):
+            if binding not in current:
+                task.cancel()
+        for entity_id, pending in list(self._pending.items()):
+            if pending["bindings"] != self._bindings(entity_id, "short_release") or pending[
+                "doubles"
+            ] != self._bindings(entity_id, DOUBLE_RELEASE):
+                self._cancel_pending(entity_id)
+
+    @callback
+    def _task_done(self, task):
+        self._tasks.discard(task)
+        self._task_bindings.pop(task, None)
+
+    def _bindings(self, entity_id, event_type):
+        return [
+            b
+            for b in self.store.data["bindings"]
+            if b.get("event_entity") == entity_id and b.get("event_type") == event_type
+        ]
+
+    @callback
+    def _queue(self, bindings, context):
+        for binding in bindings:
+            task = self.hass.async_create_task(
+                self._execute(binding, context), "Lichtzentrale Tasteraktion"
+            )
+            self._tasks.add(task)
+            self._task_bindings[task] = binding
+            task.add_done_callback(self._task_done)
+
+    @callback
+    def _changed(self, event):
+        entity_id = event.data.get("entity_id", "")
+        if self.closed or not entity_id.startswith("event."):
+            return
+        old, new = event.data.get("old_state"), event.data.get("new_state")
+        if (
+            self.hass.state is not CoreState.running
+            or new is None
+            or old is None
+            or new.state in {STATE_UNAVAILABLE, STATE_UNKNOWN}
+            or old.state == STATE_UNAVAILABLE
+            or new.attributes.get("restored")
+            or old.attributes.get("restored")
+        ):
+            self._cancel_pending(entity_id)
+            return
+        if old.state == new.state:
+            return  # Attribute-only updates (including event_type) are not a press.
+        stamp = parse_datetime(new.state)
+        previous = parse_datetime(old.state)
+        if (
+            stamp is None
+            or stamp.tzinfo is None
+            or (previous is not None and (previous.tzinfo is None or stamp <= previous))
+        ):
+            return
+        button = next((b for b in list_buttons(self.hass) if b["entity_id"] == entity_id), None)
+        event_type = new.attributes.get("event_type")
+        if (
+            not button
+            or not button["available"]
+            or not isinstance(event_type, str)
+            or event_type not in button["event_types"]
+            or event_type == DOUBLE_RELEASE
+        ):
+            return
+        bindings = self._bindings(entity_id, event_type)
+        doubles = self._bindings(entity_id, DOUBLE_RELEASE)
+        if event_type != "short_release" or not doubles:
+            # A removed double binding must not leave a stale delayed single behind.
+            if event_type == "short_release":
+                if pending := self._cancel_pending(entity_id):
+                    self._queue(pending["bindings"], pending["context"])
+            self._queue(bindings, event.context)
+            return
+        now = monotonic()
+        pending = self._pending.get(entity_id)
+        if pending and now <= pending["deadline"] and pending["doubles"] == doubles:
+            self._cancel_pending(entity_id)
+            self._queue(doubles, event.context)
+            return
+        if pending := self._cancel_pending(entity_id):
+            self._queue(pending["bindings"], pending["context"])
+        milliseconds = self.store.data["settings"].get("double_click_ms", 500)
+        if type(milliseconds) is not int or not 200 <= milliseconds <= 1000:
+            milliseconds = 500
+        pending = {
+            "bindings": bindings,
+            "doubles": doubles,
+            "context": event.context,
+            "deadline": now + milliseconds / 1000,
+        }
+
+        @callback
+        def release_single():
+            if self._pending.get(entity_id) is pending:
+                self._pending.pop(entity_id)
+                if not self.closed:
+                    self._queue(pending["bindings"], pending["context"])
+
+        pending["cancel"] = self.hass.loop.call_later(milliseconds / 1000, release_single).cancel
+        self._pending[entity_id] = pending
+
+    async def _execute(self, binding, context):
+        """Recheck queued binding identity, grants and runtime state after locking."""
+        try:
+            async with self._lock(binding["area_id"]):
+                if self.closed or binding not in self.store.data["bindings"]:
+                    return
+                state = self.hass.states.get(binding["event_entity"])
+                if state is None or state.state in {STATE_UNAVAILABLE, STATE_UNKNOWN}:
+                    return
+                checked = validate_binding(self.hass, self.store, binding)
+                result = await self._action(checked, context)
+                if isinstance(result, dict):
+                    failed, skipped = len(result.get("failed", [])), len(result.get("skipped", []))
+                    if failed:
+                        _LOGGER.warning(
+                            "Tasteraktion teilweise fehlgeschlagen: %s Fehler, %s übersprungen",
+                            failed,
+                            skipped,
+                        )
+                    elif skipped:
+                        # Off lamps and binary switches are expected skips while dimming.
+                        _LOGGER.debug("Tasteraktion: %s Ziele übersprungen", skipped)
+                return result
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _LOGGER.warning("Eine Tasteraktion konnte nicht ausgeführt werden", exc_info=True)
+
+    async def _action(self, binding, context):
+        area_id, action = binding["area_id"], binding["action"]
+        if action in {"toggle_room", "turn_on_room", "turn_off_room"}:
+            return await async_toggle_room(
+                self.hass,
+                self.store,
+                area_id,
+                on={"toggle_room": None, "turn_on_room": True, "turn_off_room": False}[action],
+                context=context,
+            )
+        if action == "next_scene":
+            return await self._next_scene(area_id, context)
+        if action == "scene":
+            scene = _check_scene(self.hass, self.store, binding["params"]["scene_id"], area_id)
+            return await async_apply_scene(self.hass, self.store, scene["id"], context=context)
+        if action in {"dim_up", "dim_down"}:
+            return await self._dim(area_id, 1 if action == "dim_up" else -1, context)
+        if action in {"adaptive_on", "adaptive_off"}:
+            return await async_set_adaptive(
+                self.hass, self.store, area_id, enabled=action == "adaptive_on", context=context
+            )
+        if action == "stop_dynamic":
+            return await async_stop_room(self.hass, self.store, area_id, context=context)
+        raise ServiceValidationError("Diese Tasteraktion ist nicht erlaubt.")
+
+    async def _dim(self, area_id, direction, context):
+        # Serialize with manual scenes and room controls as well as other button actions.
+        locks = self.hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
+        async with locks.setdefault(area_id, asyncio.Lock()):
+            calls, skipped = [], []
+            for entity_id in room_targets(self.hass, self.store, area_id):
+                state = self.hass.states.get(entity_id)
+                brightness = state.attributes.get("brightness")
+                if (
+                    state.domain != "light"
+                    or state.state != "on"
+                    or type(brightness) is not int
+                    or not 1 <= brightness <= 255
+                    or light_service_data(state, brightness=brightness) is None
+                ):
+                    skipped.append(entity_id)
+                    continue
+                # Use the native relative-step service without computing one room-wide brightness.
+                calls.append(
+                    (
+                        "light",
+                        "turn_on",
+                        {
+                            "entity_id": entity_id,
+                            "brightness_step_pct": direction * 10,
+                        },
+                    )
+                )
+
+            def still_allowed(entity_id):
+                state = self.hass.states.get(entity_id)
+                return bool(
+                    entity_id in self.store.data["settings"]["light_entity_ids"]
+                    and entity_area_id(self.hass, entity_id) == area_id
+                    and state is not None
+                    and state.domain == "light"
+                    and state.state == "on"
+                    and is_individual_light(self.hass, state)
+                    and light_service_data(state, brightness=1) is not None
+                )
+
+            return await async_dispatch(
+                self.hass, calls, skipped, context=context, guard=still_allowed
+            )
+
+    async def async_next_scene(self, area_id, context: Context | None = None):
+        """Cycle through persisted room order with a ten-minute runtime reset."""
+        if not isinstance(area_id, str):
+            raise ServiceValidationError("Ungültiger Raum.")
+        if self.closed:
+            raise ServiceValidationError("Lichtzentrale ist nicht geladen.")
+
+        async def cycle():
+            async with self._lock(area_id):
+                if self.closed:
+                    raise ServiceValidationError("Lichtzentrale ist nicht geladen.")
+                return await self._next_scene(area_id, context)
+
+        task = self.hass.async_create_task(cycle(), "Lichtzentrale Szenenzyklus")
+        self._tasks.add(task)
+        task.add_done_callback(self._task_done)
+        return await task
+
+    async def _next_scene(self, area_id, context):
+        room_targets(self.hass, self.store, area_id)
+        cycle = self.store.data["rooms"].get(area_id, {}).get("cycle", [])
+        if not isinstance(cycle, list) or any(not isinstance(s, str) for s in cycle):
+            raise ServiceValidationError("Ungültiger Szenenzyklus.")
+        cycle = list(dict.fromkeys(cycle))
+        cursor = self._cycles.get(area_id)
+        start = 0
+        if cursor and monotonic() - cursor[1] < CYCLE_RESET_SECONDS and cursor[0] in cycle:
+            start = (cycle.index(cursor[0]) + 1) % len(cycle)
+        for scene_id in cycle[start:] + cycle[:start]:
+            try:
+                scene = _check_scene(self.hass, self.store, scene_id, area_id)
+            except ServiceValidationError:
+                continue
+            result = await async_apply_scene(self.hass, self.store, scene_id, context=context)
+            incomplete = [
+                e
+                for e in result.get("skipped", [])
+                if scene["kind"] != "palette" or not e.startswith("switch.")
+            ]
+            if result.get("applied") and not result.get("failed") and not incomplete:
+                self._cycles[area_id] = (scene_id, monotonic())
+            return {**result, "scene_id": scene_id}
+        raise ServiceValidationError("Für diesen Raum ist keine gültige Zyklus-Szene vorhanden.")
+
+    async def shutdown(self):
+        """Unsubscribe first, then cancel timers and queued/in-flight button work."""
+        self.closed = True
+        if self._unsubscribe is not None:
+            self._unsubscribe()
+            self._unsubscribe = None
+        for entity_id in list(self._pending):
+            self._cancel_pending(entity_id)
+        tasks = list(self._tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
+        self._task_bindings.clear()
+        self._cycles.clear()
+        self._locks.clear()

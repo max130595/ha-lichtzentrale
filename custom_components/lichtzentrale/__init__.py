@@ -8,6 +8,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service import async_register_admin_service
 
 from .adaptive import async_set_adaptive
+from .bindings import BindingManager
 from .const import DOMAIN, SERVICE_APPLY_PALETTE
 from .dynamic_scenes import DynamicSceneManager, async_stop_room
 from .palettes import async_apply_palette
@@ -104,11 +105,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=vol.Schema(ADAPTIVE_FIELDS),
         supports_response=SupportsResponse.OPTIONAL,
     )
+    runtime["bindings"] = BindingManager(hass, store)
+    runtime["bindings"].start()
+
+    async def next_scene_service(call: ServiceCall):
+        return await hass.data[DOMAIN]["bindings"].async_next_scene(
+            call.data["area_id"], call.context
+        )
+
+    async_register_admin_service(
+        hass,
+        DOMAIN,
+        "next_scene",
+        next_scene_service,
+        schema=vol.Schema({vol.Required("area_id"): cv.string}),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload without removing persisted user settings."""
+    if bindings := hass.data[DOMAIN].pop("bindings", None):
+        await bindings.shutdown()
     if active := hass.data[DOMAIN].pop("dynamic", None):
         await active.shutdown()
     await async_remove_view(hass)
@@ -117,6 +136,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "toggle_room")
     hass.services.async_remove(DOMAIN, "stop_dynamic")
     hass.services.async_remove(DOMAIN, "set_adaptive")
+    hass.services.async_remove(DOMAIN, "next_scene")
     hass.data[DOMAIN].pop("store", None)
     return True
 

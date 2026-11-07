@@ -41,6 +41,8 @@ def list_rooms(hass: HomeAssistant, store: LichtzentraleStore) -> list[dict]:
                 "brightness": round(sum(brightness) / len(brightness)) if brightness else None,
                 "available_count": sum(item["available"] for item in members),
                 "last_scene_id": store.data["rooms"].get(area.id, {}).get("last_scene_id"),
+                "cycle": store.data["rooms"].get(area.id, {}).get("cycle", []),
+                "default_on": store.data["rooms"].get(area.id, {}).get("default_on", "last"),
                 "positions": {
                     item["entity_id"]: position
                     for item in members
@@ -222,7 +224,17 @@ async def _toggle_room(hass, store, area_id, on=None, context=None):
     if on is None:
         on = not any(state.state == "on" for state in (light_states or states))
     settings = store.data["rooms"].get(area_id, {})
-    if on and settings.get("default_on") == "adaptive":
+    default = settings.get("default_on", "last")
+    if on and default not in {"adaptive", "last"}:
+        from .scenes import async_apply_scene_locked
+
+        if not any(s["id"] == default and s["area_id"] == area_id for s in store.data["scenes"]):
+            raise ServiceValidationError("Die Einschalt-Szene dieses Raums wurde nicht gefunden.")
+        result = await async_apply_scene_locked(hass, store, default, context)
+        if result["applied"] and not result.get("failed") and settings.get("pre_off_pending"):
+            await store.async_update_room(area_id, {"pre_off_pending": []})
+        return result
+    if on and default == "adaptive":
         from .adaptive import async_turn_on_adaptive
 
         applied = await async_turn_on_adaptive(hass, store, area_id, context=context)
