@@ -167,7 +167,24 @@ async def async_set_light(
     payload = light_service_data(state, on, brightness, xy, color_temp_kelvin)
     if state.state in {"unknown", "unavailable"} or payload is None:
         return {"applied": [], "skipped": [entity_id]}
-    return await async_dispatch(hass, [(state.domain, *payload)], context=context)
+    if on is False:
+        captured = await store.async_remember_light_states([entity_id])
+        # Do not switch off using a snapshot invalidated while storage yielded.
+        if hass.states.get(entity_id) is not captured[entity_id]:
+            return {"applied": [], "skipped": [entity_id]}
+
+    def still_allowed(target):
+        if target not in store.data["settings"]["light_entity_ids"]:
+            return False
+        try:
+            validate_lights(hass, [target])
+        except ServiceValidationError:
+            return False
+        return hass.states.get(target) is state
+
+    return await async_dispatch(
+        hass, [(state.domain, *payload)], context=context, guard=still_allowed
+    )
 
 
 async def async_toggle_room(hass, store, area_id, on=None, context=None):
@@ -241,6 +258,7 @@ async def _toggle_room(hass, store, area_id, on=None, context=None):
         if applied and settings.get("pre_off_pending"):
             await store.async_update_room(area_id, {"pre_off_pending": []})
         return {"applied": applied, "skipped": [e for e in targets if e not in applied]}
+    captured = {state.entity_id: state for state in states}
     if not on:
         snapshot = {
             state.entity_id: _remember_light(state)
@@ -271,10 +289,12 @@ async def _toggle_room(hass, store, area_id, on=None, context=None):
         targets = room_targets(hass, store, area_id)
         states = [hass.states.get(entity_id) for entity_id in targets]
     saved = settings.get("pre_off_lights", {})
-    calls, skipped = [], []
+    calls, skipped, prepared = [], [], {}
     for state in states:
         value = saved.get(state.entity_id, {}) if isinstance(saved, dict) else {}
         if state.state not in {"on", "off"} or (
+            not on and state is not captured.get(state.entity_id)
+        ) or (
             on and not switch_only and value.get("on") is not True
         ):
             skipped.append(state.entity_id)
@@ -290,6 +310,7 @@ async def _toggle_room(hass, store, area_id, on=None, context=None):
             skipped.append(state.entity_id)
             continue
         calls.append((state.domain, *light_service_data(state, on=on, **options)))
+        prepared[state.entity_id] = state
 
     def still_allowed(entity_id):
         if (
@@ -301,7 +322,7 @@ async def _toggle_room(hass, store, area_id, on=None, context=None):
             validate_lights(hass, [entity_id])
         except ServiceValidationError:
             return False
-        return hass.states.get(entity_id).state in {"on", "off"}
+        return hass.states.get(entity_id) is prepared[entity_id]
 
     result = await async_dispatch(hass, calls, skipped, context, guard=still_allowed)
     if on and result["applied"] and settings.get("pre_off_pending"):

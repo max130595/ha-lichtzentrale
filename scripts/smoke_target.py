@@ -518,6 +518,50 @@ async def run(config_dir: str) -> None:
         assert len(calls) == count  # Unload cancels the pending single.
         await final.async_delete_binding(single["id"])
         assert len(final.data["bindings"]) == 2
+        # Stage 3A: explicit cross-room light and switch selection, persisted
+        # pre-off values and optional per-light dim through native button events.
+        entities.async_update_entity(switch.entity_id, area_id=switch_area.id)
+        hass.states.async_set(lamp.entity_id, "on", lamp_attrs)
+        hass.states.async_set(switch.entity_id, "off")
+        selected = await final.async_save_binding({
+            "event_entity": button.entity_id, "event_type": "short_release",
+            "action": "toggle_lights", "area_id": None,
+            "params": {"entity_ids": [lamp.entity_id, switch.entity_id]},
+        })
+        assert selected["area_id"] is None
+        selected_manager = BindingManager(hass, final)
+        for binding in final.data["bindings"]:
+            if binding["id"] != selected["id"]:
+                await final.async_delete_binding(binding["id"])
+        hass.data[DOMAIN]["bindings"] = selected_manager
+        selected_manager.start()
+        hass.states.async_set(button.entity_id, "2026-01-01T00:00:06+00:00", attributes)
+        await hass.async_block_till_done()
+        assert hass.states.get(lamp.entity_id).state == "off"
+        assert hass.states.get(switch.entity_id).state == "off"
+        off_store = LichtzentraleStore(hass)
+        await off_store.async_load()
+        assert off_store.data["settings"]["last_light_states"][lamp.entity_id]["brightness"] == 87
+        hass.states.async_set(lamp.entity_id, "off", {"supported_color_modes": ["xy"]})
+        hass.states.async_set(button.entity_id, "2026-01-01T00:00:07+00:00", attributes)
+        await hass.async_block_till_done()
+        assert hass.states.get(lamp.entity_id).state == "on"
+        assert hass.states.get(lamp.entity_id).attributes["brightness"] == 87
+        assert list(hass.states.get(lamp.entity_id).attributes["xy_color"]) == [0.4, 0.3]
+        assert hass.states.get(switch.entity_id).state == "on"
+        await final.async_save_binding({
+            "event_entity": button.entity_id, "event_type": "clock_wise",
+            "action": "dim_up", "area_id": None,
+            "params": {"entity_ids": [lamp.entity_id, switch.entity_id]},
+        })
+        count = len(calls)
+        hass.states.async_set(button.entity_id, "2026-01-01T00:00:08+00:00", {
+            **attributes, "event_type": "clock_wise",
+        })
+        await hass.async_block_till_done()
+        assert len(calls) == count + 1
+        assert calls[-1].data == {"entity_id": lamp.entity_id, "brightness_step_pct": 10}
+        await selected_manager.shutdown()
         await active.shutdown()
         assert not active.list()
         await final.async_remove()
@@ -544,7 +588,8 @@ def main() -> None:
         "room commands/status, adaptive subset-only on, "
         "current-color freeze with and without local run, no off-lamp wake; runtime event "
         "discovery, binding/cycle/default persistence, native timestamp event dispatch, "
-        "room-on scene, scene cycling, relative dim service payload, double release and unload cancellation."
+        "room-on scene, scene cycling, relative dim service payload, double release and unload cancellation; "
+        "selected cross-room lamp/switch toggles, persisted pre-off color restore and selected dim."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "

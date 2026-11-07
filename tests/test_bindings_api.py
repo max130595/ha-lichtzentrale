@@ -187,3 +187,15 @@ async def test_next_scene_service_authorization_and_result(
     assert result["applied"] == [lamp]
     assert light_calls[0].context.user_id == hass_admin_user.id
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("action", ["toggle_lights", "turn_on_lights", "turn_off_lights", "dim_up", "dim_down"])
+async def test_selected_binding_api_roundtrip(client, setup, store, action):
+    _, lamp, _, original = setup
+    binding = {**original, "action": action, "area_id": None, "params": {"entity_ids": [lamp]}}
+    result = await request(client, "binding/save", binding=binding)
+    assert result["success"]
+    assert result["result"]["params"] == {"entity_ids": [lamp]}
+    assert result["result"]["area_id"] is None
+    assert (await request(client, "bindings/list"))["result"]["bindings"] == [result["result"]]
+    assert store.data["bindings"] == [result["result"]]

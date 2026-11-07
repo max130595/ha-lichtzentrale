@@ -398,11 +398,17 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None):
         result = {"applied": targets, "skipped": []}
     else:
         targets = _targets(hass, store, area_id, scene["lights"])
+        off_targets = [entity_id for entity_id in targets if scene["lights"][entity_id]["on"] is False]
+        captured = await store.async_remember_light_states(off_targets) if off_targets else {}
+        targets = _targets(hass, store, area_id, scene["lights"])
         commands = []
         skipped = []
+        prepared = {}
         for entity_id in targets:
             state = hass.states.get(entity_id)
-            if state.state in {"unknown", "unavailable"}:
+            if state.state in {"unknown", "unavailable"} or (
+                entity_id in captured and state is not captured[entity_id]
+            ):
                 skipped.append(entity_id)
                 continue
             value = scene["lights"][entity_id]
@@ -412,7 +418,16 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None):
                 skipped.append(entity_id)
             else:
                 commands.append((state.domain, *payload))
-        result = await async_dispatch(hass, commands, skipped, context)
+                prepared[entity_id] = state
+
+        def still_allowed(entity_id):
+            try:
+                _targets(hass, store, area_id, [entity_id])
+            except ServiceValidationError:
+                return False
+            return hass.states.get(entity_id) is prepared[entity_id]
+
+        result = await async_dispatch(hass, commands, skipped, context, guard=still_allowed)
     # Palette switches are intentionally excluded, not incomplete light recalls.
     incomplete = [
         e

@@ -185,6 +185,16 @@ diese Taste überhaupt ein Doppelklick belegt ist.
 - `buttons/list`, Belegungseditor, `bindings.py` mit allen Aktionen, Szenenzyklus, Dimmen.
 - **Fertig wenn:** ein Hue Tap Dial: Taste 1 an/aus, Taste 2 nächste Szene, Drehen dimmt.
 
+### Stufe 3A – Einzellampen am Taster
+- `toggle_lights`, `turn_on_lights`, `turn_off_lights` mit einer nicht leeren Liste
+  `params.entity_ids` freigegebener Einzellampen und Lichtschalter, auch raumübergreifend.
+- Ist mindestens ein ausgewähltes Ziel an, schaltet Toggle alle aus, sonst alle ein.
+  Vor-Aus-Werte für Helligkeit/Farbe werden serverseitig gespeichert und wiederhergestellt.
+- `dim_up` / `dim_down` optional mit derselben Auswahl; ohne Liste unverändert raumweise.
+  Switch-Lichter werden beim Dimmen immer übersprungen und erhalten keinen Serviceaufruf.
+- Tastereditor mit Mehrfachauswahl gruppiert nach Raum, inklusive „Ohne Raum“.
+- Details, Sicherheitsregeln und Abnahme: [STUFE_3A_TESTPLAN.md](STUFE_3A_TESTPLAN.md).
+
 ### Stufe 4 – Zeitpläne
 - Auslöser Uhrzeit, Sonnenauf-/-untergang mit Versatz, Außenhelligkeit unter Schwelle
   (ein in den Einstellungen wählbarer Lux-Sensor), Bedingungen, Wochentage.

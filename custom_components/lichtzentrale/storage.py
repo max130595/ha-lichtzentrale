@@ -122,6 +122,24 @@ class LichtzentraleStore:
         async with self._lock:
             updated = deepcopy(self._data)
             updated["rooms"].setdefault(area_id, {}).update(deepcopy(changes))
+            if "pre_off_lights" in changes:
+                from .lights import entity_area_id, is_individual_light
+                from .rooms import _remember_light
+
+                # Share the newest room-off values with explicit-target recalls.
+                # Pending/off peers retain their own previous useful last state.
+                values = {
+                    entity_id: _remember_light(state)
+                    for entity_id in changes["pre_off_lights"]
+                    if entity_id in self._data["settings"]["light_entity_ids"]
+                    and entity_area_id(self._hass, entity_id) == area_id
+                    and (state := self._hass.states.get(entity_id)) is not None
+                    and state.domain == "light"
+                    and state.state == "on"
+                    and is_individual_light(self._hass, state)
+                }
+                if values:
+                    updated["settings"].setdefault("last_light_states", {}).update(values)
             await self._store.async_save(updated)
             self._data = updated
 
@@ -152,6 +170,27 @@ class LichtzentraleStore:
             await self._store.async_save(updated)
             self._data = updated
             return deepcopy(position)
+
+    async def async_remember_light_states(self, entity_ids):
+        """Capture approved, currently-on lights under the persistence lock."""
+        from .rooms import _remember_light
+        from .selected_lights import validate_selected_lights
+
+        async with self._lock:
+            targets = validate_selected_lights(self._hass, self, entity_ids)
+            captured = {entity_id: self._hass.states.get(entity_id) for entity_id in targets}
+            values = {
+                entity_id: _remember_light(state)
+                for entity_id, state in captured.items()
+                if state.domain == "light" and state.state == "on"
+            }
+            # Already-off or unavailable lights never erase a useful last state.
+            if values:
+                updated = deepcopy(self._data)
+                updated["settings"].setdefault("last_light_states", {}).update(values)
+                await self._store.async_save(updated)
+                self._data = updated
+            return captured
 
     async def async_save_binding(self, binding: dict, *, is_update: bool = False) -> dict:
         """Validate and persist one unique button/event action atomically."""

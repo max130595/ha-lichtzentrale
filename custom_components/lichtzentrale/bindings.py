@@ -28,12 +28,20 @@ from .rooms import (
     validate_control_options,
 )
 from .scenes import _targets, async_apply_scene, hue_scene_targets
+from .selected_lights import (
+    async_control_lights,
+    async_dim_lights,
+    validate_selected_lights,
+)
 from .storage import LichtzentraleStore
 
 _LOGGER = logging.getLogger(__name__)
 DOUBLE_RELEASE = "double_short_release"
 ACTIONS = frozenset(
     {
+        "toggle_lights",
+        "turn_on_lights",
+        "turn_off_lights",
         "toggle_room",
         "turn_on_room",
         "turn_off_room",
@@ -135,13 +143,25 @@ def validate_binding(hass, store, raw) -> dict:
         raise ServiceValidationError("Bitte ein verfügbares Taster-Ereignis auswählen.")
     if not isinstance(action, str) or action not in ACTIONS:
         raise ServiceValidationError("Diese Tasteraktion ist nicht erlaubt.")
-    if not isinstance(area_id, str) or not room_targets(hass, store, area_id):
-        raise ServiceValidationError("Bitte einen Raum mit freigegebenen Lampen auswählen.")
     params = raw.get("params", {})
-    if not isinstance(params, dict) or set(params) != (
-        {"scene_id"} if action == "scene" else set()
-    ):
+    selected_action = action in {"toggle_lights", "turn_on_lights", "turn_off_lights"}
+    dim_action = action in {"dim_up", "dim_down"}
+    if not isinstance(params, dict):
         raise ServiceValidationError("Ungültige Parameter der Tasteraktion.")
+    expected = {"scene_id"} if action == "scene" else (
+        {"entity_ids"} if selected_action or (dim_action and "entity_ids" in params) else set()
+    )
+    if set(params) != expected:
+        raise ServiceValidationError("Ungültige Parameter der Tasteraktion.")
+    params = deepcopy(params)
+    if "entity_ids" in params:
+        params["entity_ids"] = validate_selected_lights(hass, store, params["entity_ids"])
+        # Explicit targets are independent of the button's or an editor's room.
+        if area_id is not None and not isinstance(area_id, str):
+            raise ServiceValidationError("Ungültiger Raum.")
+        area_id = None
+    elif not isinstance(area_id, str) or not room_targets(hass, store, area_id):
+        raise ServiceValidationError("Bitte einen Raum mit freigegebenen Lampen auswählen.")
     if action == "scene":
         _scene_for_room(store, params["scene_id"], area_id)
     return {
@@ -375,12 +395,23 @@ class BindingManager:
                 on={"toggle_room": None, "turn_on_room": True, "turn_off_room": False}[action],
                 context=context,
             )
+        if action in {"toggle_lights", "turn_on_lights", "turn_off_lights"}:
+            return await async_control_lights(
+                self.hass, self.store, binding["params"]["entity_ids"],
+                on={"toggle_lights": None, "turn_on_lights": True, "turn_off_lights": False}[action],
+                context=context,
+            )
         if action == "next_scene":
             return await self._next_scene(area_id, context)
         if action == "scene":
             scene = _check_scene(self.hass, self.store, binding["params"]["scene_id"], area_id)
             return await async_apply_scene(self.hass, self.store, scene["id"], context=context)
         if action in {"dim_up", "dim_down"}:
+            if "entity_ids" in binding["params"]:
+                return await async_dim_lights(
+                    self.hass, self.store, binding["params"]["entity_ids"],
+                    1 if action == "dim_up" else -1, context=context,
+                )
             return await self._dim(area_id, 1 if action == "dim_up" else -1, context)
         if action in {"adaptive_on", "adaptive_off"}:
             return await async_set_adaptive(
