@@ -1,0 +1,15 @@
+{
+  "title": "Lichtzentrale",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Lichtzentrale einrichten",
+        "description": "Die Lichtzentrale arbeitet lokal. Wähle anschließend in der Galerie ausdrücklich die Lampen aus, die gesteuert werden dürfen."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Es ist nur eine Lichtzentrale erlaubt.",
+      "already_configured": "Die Lichtzentrale ist bereits eingerichtet."
+    }
+  }
+}
