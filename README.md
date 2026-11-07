@@ -4,8 +4,8 @@ Eine lokale Licht-App als Custom Integration für Home Assistant. Oberfläche au
 für schmale Bildschirme ausgelegt. Kein Cloud-Konto und keine zusätzlichen
 Python-Abhängigkeiten zur Laufzeit.
 
-**Stand: Stufe 1.** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import
-und zwölf eigene Farbpaletten in vier Kategorien. **Taster** und **Zeitpläne** bleiben Platzhalter.
+**Stand: Stufe 2.** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import,
+zwölf eigene Farbpaletten, dynamische Palettenszenen und optionales natürliches Licht. **Taster** und **Zeitpläne** bleiben Platzhalter.
 Der weitere Ausbau ist in [docs/BAUPLAN.md](docs/BAUPLAN.md) beschrieben.
 
 ## Installation über HACS
@@ -62,16 +62,34 @@ und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
   erscheint in Übersicht und Raum und lässt sich mit einem Tipp neu starten. Nur vollständig
   erfolgreiche Starts aktualisieren sie; Teilfehler erhalten den bisherigen Eintrag. Löschen
   entfernt die Referenz. Dies ist ein Startverlauf, keine Erkennung externer Aktivierungen.
-  Die Referenz ist typenunabhängig und gilt auch für dynamische Hue-Szenen; eigene dynamische
-  Szenen der Lichtzentrale kommen mit Stufe 2 dazu.
+  Die Referenz ist typenunabhängig und gilt auch für dynamische Szenen.
 - Zur Laufzeit angebotene Shelly-Schalter benötigen eine Beleuchtungsbezeichnung am Gerät
   oder an der Entity (etwa „Deckenlicht“). Andere Switch-Integrationen und alle anderen
   Steuerdomains bleiben gesperrt. Die zusätzliche explizite Freigabe ist immer erforderlich.
 
-Adaptive Lighting und eigene dynamische Szenen der Lichtzentrale (aus Paletten) folgen in Stufe 2. Automatische Anpassungen anderer
-Integrationen werden noch nicht pausiert. Adaptive Lighting muss nicht installiert sein.
-Services für Automationen: `lichtzentrale.apply_palette`, `lichtzentrale.apply_scene` und
-`lichtzentrale.toggle_room`. Alle verwenden dieselben Administrator- und Zielprüfungen wie das Panel.
+## Dynamik und natürliches Licht
+
+- In der Galerie eine Palette und einen Raum wählen, als Raumszene speichern und
+  optional **dynamisch** anwenden. Intervall: 5–3600 Sekunden; Übergang: 0–60 Sekunden,
+  höchstens so lang wie das Intervall. Je Raum läuft höchstens eine dynamische Szene.
+- Laufende Lichtzentrale-Palettenszenen sind mit einer Stopp-Aktion sichtbar. Stoppen hält die aktuelle Farbe.
+  Raum ausschalten stoppt die Dynamik. Eine neue Szene ersetzt die bisherige.
+  Ausgeschaltete Lampen werden bei späteren Farbwechseln nicht wieder eingeschaltet.
+- Native dynamische Hue-Szenen bleiben in der Hue Bridge. Die lokale Dynamikliste und
+  ihre Stopp-Aktion verwalten nur Lichtzentrale-Palettenszenen, nicht den Bridge-Effekt.
+- **Adaptive Lighting ist optional.** Ohne die Integration bleiben die entsprechenden
+  Bedienelemente verborgen. Mit installierter Integration wird im Raum ein passender
+  Adaptive-Lighting-Schalter zugeordnet. Es werden nur geprüfte, freigegebene Ziele
+  dieses Raums verwendet, keine beliebigen Switch-Entities.
+- Farbszenen pausieren natürliches Licht. Bei Raum-Einstellung **Beim Einschalten:
+  Natürliches Licht** wird es nach Raum aus/an wieder aktiviert. Diese Einstellung
+  und die Zuordnung bleiben serverseitig gespeichert.
+- Dynamik startet nach einem Home-Assistant-Neustart nicht von selbst. Die gespeicherten
+  Szenen bleiben erhalten; laufende Aufgaben und Listener werden beim Entladen beendet.
+
+Services für Automationen: `lichtzentrale.apply_palette`, `lichtzentrale.apply_scene`,
+`lichtzentrale.toggle_room`, `lichtzentrale.stop_dynamic`, `lichtzentrale.set_adaptive`.
+Alle verwenden dieselben Administrator- und Zielprüfungen wie das Panel.
 
 ## Daten und Sicherheit
 
@@ -123,7 +141,7 @@ uv pip install --python .venv-target/bin/python -r requirements-ha2026.11.txt
 
 Der GitHub-Workflow prüft TypeScript, ESLint, Frontend-Tests, Bundle-Aktualität,
 Python-Tests, hassfest und HACS. Die lokale und manuelle Prüfliste steht in
-[docs/STUFE_1_TESTPLAN.md](docs/STUFE_1_TESTPLAN.md).
+[docs/STUFE_2_TESTPLAN.md](docs/STUFE_2_TESTPLAN.md).
 
 ## Herkunft und Lizenz
 

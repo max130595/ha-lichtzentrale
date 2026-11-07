@@ -115,7 +115,14 @@ async def ws_apply(hass, connection, msg):
 @callback
 def async_setup_websocket_api(hass: HomeAssistant) -> None:
     """Register once; handlers look up the current store after every reload."""
-    for handler in (ws_palettes, ws_lights, ws_settings, ws_apply, *STAGE_ONE_HANDLERS):
+    for handler in (
+        ws_palettes,
+        ws_lights,
+        ws_settings,
+        ws_apply,
+        *STAGE_ONE_HANDLERS,
+        *STAGE_TWO_HANDLERS,
+    ):
         websocket_api.async_register_command(hass, handler)
 
 
@@ -173,7 +180,7 @@ async def light_set(hass, store, msg, context):
 
 
 async def scenes_list(hass, store, msg, context):
-    return list_scenes(store, msg.get("area_id"))
+    return list_scenes(store, msg.get("area_id"), hass)
 
 
 async def scene_save(hass, store, msg, context):
@@ -181,7 +188,7 @@ async def scene_save(hass, store, msg, context):
 
 
 async def scene_delete(hass, store, msg, context):
-    await async_delete_scene(store, msg["scene_id"])
+    await async_delete_scene(store, msg["scene_id"], hass)
     return {}
 
 
@@ -219,4 +226,49 @@ STAGE_ONE_HANDLERS = (
         scenes_reorder,
     ),
     command("hue_scenes/list", {vol.Optional("area_id"): cv.string}, hue_scenes_list),
+)
+
+
+async def dynamic_list(hass, store, msg, context):
+    from .dynamic_scenes import manager
+
+    active = manager(hass)
+    return active.list() if active else []
+
+
+async def dynamic_stop(hass, store, msg, context):
+    from .dynamic_scenes import async_stop_room
+
+    return await async_stop_room(hass, store, msg["area_id"])
+
+
+async def adaptive_status(hass, store, msg, context):
+    from .adaptive import status
+
+    return status(hass, store)
+
+
+async def adaptive_set(hass, store, msg, context):
+    from .adaptive import async_set_adaptive
+
+    return await async_set_adaptive(
+        hass,
+        store,
+        msg["area_id"],
+        context=context,
+        **{k: msg[k] for k in ("enabled", "adaptive_switch", "default_on") if k in msg},
+    )
+
+
+ADAPTIVE_FIELDS = {
+    **AREA_FIELDS,
+    vol.Optional("enabled"): bool,
+    vol.Optional("adaptive_switch"): vol.Any(None, cv.entity_id),
+    vol.Optional("default_on"): vol.In(["adaptive", "last"]),
+}
+STAGE_TWO_HANDLERS = (
+    command("dynamic/list", {}, dynamic_list),
+    command("dynamic/stop", AREA_FIELDS, dynamic_stop),
+    command("adaptive/status", {}, adaptive_status),
+    command("adaptive/set", ADAPTIVE_FIELDS, adaptive_set),
 )

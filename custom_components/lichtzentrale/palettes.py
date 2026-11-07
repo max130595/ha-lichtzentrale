@@ -68,6 +68,9 @@ async def async_apply_palette(
     brightness: int | None = None,
     transition: float = 1,
     context: Context | None = None,
+    *,
+    color_offset: int = 0,
+    manage: bool = True,
 ) -> dict[str, list[str]]:
     """Apply one original palette to explicitly allowed individual lamps only."""
     palette = next((item for item in BUILTIN_PALETTES if item["id"] == palette_id), None)
@@ -88,6 +91,35 @@ async def async_apply_palette(
     if type(transition) not in (int, float) or not 0 <= transition <= 60:
         raise ServiceValidationError("Der Übergang muss zwischen 0 und 60 Sekunden liegen.")
 
+    if manage:
+        from asyncio import Lock
+        from contextlib import AsyncExitStack
+
+        from .adaptive import async_pause_adaptive
+        from .const import DOMAIN
+        from .dynamic_scenes import stop_dynamic
+        from .lights import entity_area_id
+
+        areas = sorted({entity_area_id(hass, e) for e in targets} - {None})
+        locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
+        async with AsyncExitStack() as stack:
+            for area_id in areas:
+                await stack.enter_async_context(locks.setdefault(area_id, Lock()))
+            for area_id in areas:
+                await stop_dynamic(hass, area_id)
+                await async_pause_adaptive(hass, store, area_id, context=context)
+            return await async_apply_palette(
+                hass,
+                store,
+                palette_id,
+                targets,
+                brightness,
+                transition,
+                context,
+                color_offset=color_offset,
+                manage=False,
+            )
+
     result: dict[str, list[str]] = {"applied": [], "skipped": []}
     calls = []
     for index, entity_id in enumerate(targets):
@@ -100,7 +132,7 @@ async def async_apply_palette(
             continue
         attributes = state.attributes
         modes = set(attributes.get("supported_color_modes") or [])
-        color = palette["colors"][index % len(palette["colors"])]
+        color = palette["colors"][(index + color_offset) % len(palette["colors"])]
         xy = (color["x"], color["y"])
         params = {"entity_id": entity_id}
         if modes.intersection({"xy", "hs", "rgb", "rgbw", "rgbww"}):

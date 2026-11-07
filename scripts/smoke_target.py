@@ -1,3 +1,4 @@
+# Geändert für Lichtzentrale
 """Native HA compatibility smoke test, not a replacement for the pytest suite.
 
 Run with the target Home Assistant installed:
@@ -20,6 +21,9 @@ from types import SimpleNamespace
 # Import HA before anything that may import httpx: HA 2026.11 installs its
 # supported httpx2 alias during package initialization.
 import homeassistant  # noqa: F401
+from aiohue.v2.models.feature import ColorFeatureBase, ColorPoint, OnFeature
+from aiohue.v2.models.resource import ResourceIdentifier, ResourceTypes
+from aiohue.v2.models.scene import Action, ActionAction, Scene, SceneMetadata
 from homeassistant.components.light import LightEntityFeature
 from homeassistant.config_entries import (
     STORAGE_KEY as CONFIG_STORAGE_KEY,
@@ -45,16 +49,24 @@ from custom_components.lichtzentrale import (  # noqa: E402
     async_setup_entry,
     async_unload_entry,
 )
+from custom_components.lichtzentrale.adaptive import (  # noqa: E402
+    async_set_adaptive,
+)
+from custom_components.lichtzentrale.adaptive import (
+    status as adaptive_status,
+)
 from custom_components.lichtzentrale.config_flow import LichtzentraleConfigFlow  # noqa: E402
-from custom_components.lichtzentrale.const import STORAGE_KEY  # noqa: E402
+from custom_components.lichtzentrale.const import DOMAIN, STORAGE_KEY  # noqa: E402
+from custom_components.lichtzentrale.dynamic_scenes import DynamicSceneManager  # noqa: E402
 from custom_components.lichtzentrale.lights import list_lights, validate_lights  # noqa: E402
 from custom_components.lichtzentrale.palettes import async_apply_palette, list_palettes  # noqa: E402
-from custom_components.lichtzentrale.rooms import list_rooms  # noqa: E402
+from custom_components.lichtzentrale.rooms import async_toggle_room, list_rooms  # noqa: E402
 from custom_components.lichtzentrale.scenes import (  # noqa: E402
     async_apply_scene,
     async_delete_scene,
     async_save_scene,
     async_snapshot,
+    hue_scene_preview,
     hue_scene_targets,
 )
 from custom_components.lichtzentrale.storage import LichtzentraleStore  # noqa: E402
@@ -73,8 +85,8 @@ async def run(config_dir: str) -> None:
         {
             "entries": [
                 {
-                    "entry_id": "fixture-hue-config",
-                    "domain": "hue",
+                    "entry_id": f"fixture-{domain}-config",
+                    "domain": domain,
                     "title": "Fixture bridge",
                     "created_at": "2026-01-01T00:00:00+00:00",
                     "modified_at": "2026-01-01T00:00:00+00:00",
@@ -87,9 +99,10 @@ async def run(config_dir: str) -> None:
                     "pref_disable_polling": False,
                     "source": "user",
                     "subentries": [],
-                    "unique_id": "fixture-bridge",
+                    "unique_id": f"fixture-{domain}",
                     "version": 1,
                 }
+                for domain in ("hue", "adaptive_lighting")
             ]
         }
     )
@@ -243,8 +256,8 @@ async def run(config_dir: str) -> None:
         assert reloaded.data == restored.data
         assert list_rooms(hass, reloaded)[0]["last_scene_id"] == snapshot["id"]
 
-        # The config entry is native HA; only the Hue controller/resources are
-        # synthetic. This does not claim aiohue model or live-bridge coverage.
+        # Native HA config entry and aiohue 4.9.0 resource/action models.
+        # The controller is synthetic: no bridge or external network is contacted.
         hue = entities.async_get_or_create(
             "scene",
             "hue",
@@ -252,12 +265,17 @@ async def run(config_dir: str) -> None:
             config_entry=hass.config_entries.async_get_entry("fixture-hue-config"),
         )
         hass.states.async_set(hue.entity_id, "2026-01-01T00:00:00+00:00")
-        resource = SimpleNamespace(
-            actions=[
-                SimpleNamespace(
-                    target=SimpleNamespace(rtype="light", rid=lamp.unique_id),
-                )
-            ]
+        resource = Scene(
+            id=hue.unique_id,
+            metadata=SceneMetadata(name="Fixture colors"),
+            group=ResourceIdentifier(rid="fixture-group", rtype=ResourceTypes.ROOM),
+            actions=[Action(
+                target=ResourceIdentifier(rtype=ResourceTypes.LIGHT, rid=lamp.unique_id),
+                action=ActionAction(on=OnFeature(on=True), color=ColorFeatureBase(
+                    xy=ColorPoint(x=0.55, y=0.35)
+                )),
+            )],
+            speed=0.5,
         )
         config = hass.config_entries.async_get_entry("fixture-hue-config")
         config.runtime_data = SimpleNamespace(
@@ -266,6 +284,7 @@ async def run(config_dir: str) -> None:
             )
         )
         assert hue_scene_targets(hass, hue.entity_id) == [lamp.entity_id]
+        assert hue_scene_preview(hass, hue.entity_id)[0].startswith("#")
         imported = await async_save_scene(
             hass,
             reloaded,
@@ -302,6 +321,47 @@ async def run(config_dir: str) -> None:
         final = LichtzentraleStore(hass)
         await final.async_load()
         assert final.data["rooms"][area.id].get("last_scene_id") is None
+        # Stage 2: optional bridge, room defaults and local palette runtime.
+        await final.async_set_lights(room_ids)
+        assert adaptive_status(hass, final)["available"] is False
+        al_entry = hass.config_entries.async_get_entry("fixture-adaptive_lighting-config")
+        al = entities.async_get_or_create(
+            "switch", "adaptive_lighting", "fixture-adaptive-primary", config_entry=al_entry,
+        )
+        hass.states.async_set(al.entity_id, "on")
+        hass.data["adaptive_lighting"] = {
+            al_entry.entry_id: {"switch": SimpleNamespace(entity_id=al.entity_id, lights=[lamp.entity_id])}
+        }
+        for service in ("apply", "set_manual_control"):
+            hass.services.async_register("adaptive_lighting", service, capture)
+        await async_set_adaptive(
+            hass, final, area.id, adaptive_switch=al.entity_id, default_on="adaptive"
+        )
+        active = DynamicSceneManager(hass, final)
+        hass.data.setdefault(DOMAIN, {}).update(store=final, dynamic=active)
+        dynamic = await async_save_scene(hass, final, {
+            "name": "Fixture dynamic", "area_id": area.id, "kind": "palette",
+            "palette_id": "kupfernest", "dynamic": {"enabled": True, "interval": 5, "transition": 2},
+        })
+        await async_apply_scene(hass, final, dynamic["id"])
+        assert hass.states.get(al.entity_id).state == "off"
+        assert active.list()[0]["scene_id"] == dynamic["id"]
+        before_color = hass.states.get(lamp.entity_id).attributes["xy_color"]
+        await asyncio.sleep(5.1)
+        assert hass.states.get(lamp.entity_id).attributes["xy_color"] != before_color
+        await async_toggle_room(hass, final, area.id, False)
+        assert not active.list()
+        assert hass.states.get(lamp.entity_id).state == "off"
+        await async_toggle_room(hass, final, area.id, True)
+        assert hass.states.get(al.entity_id).state == "on"
+        assert calls[-1].domain == "adaptive_lighting" and calls[-1].service == "apply"
+        assert calls[-1].data["turn_on_lights"] is False
+        assert calls[-1].data["lights"] == [lamp.entity_id]
+        restored_defaults = LichtzentraleStore(hass)
+        await restored_defaults.async_load()
+        assert restored_defaults.data["rooms"][area.id]["default_on"] == "adaptive"
+        await active.shutdown()
+        assert not active.list()
         await final.async_remove()
         assert not path.exists()
     finally:
@@ -318,12 +378,14 @@ def main() -> None:
         "reload and removal; 12 palettes/4 categories; XY, RGBWW, CT clamp, brightness, "
         "on/off; unavailable skip; allowlist and unrelated-switch/lock/group rejection; "
         "area rooms; XY/brightness and Shelly on/off snapshot restore; last-scene "
-        "persistence/reload/deletion; native ConfigEntry with synthetic Hue controller, "
-        "Hue dispatch, revoked-target and grouped-target rejection."
+        "persistence/reload/deletion; aiohue 4.9.0 scene/action models, color previews and "
+        "synthetic Hue controller dispatch; revoked-target and grouped-target rejection; "
+        "dynamic timer/color rotation/room-off stop; Adaptive Lighting absence, validated "
+        "mapping, scene pause, off/on resume and persisted room defaults."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "
-        "frontend rendering, actual aiohue models or physical devices. These are separate test scopes."
+        "frontend rendering, live Adaptive Lighting integration or physical devices. These are separate test scopes."
     )
 
 

@@ -1,5 +1,6 @@
 // Geändert für Lichtzentrale
 import {useCallback, useEffect, useRef, useState} from 'react';
+import {RoomPalette} from './RoomPalette';
 import {Rooms} from './Rooms';
 import type {ApplyResult, Hass, Light, Palette} from './types';
 
@@ -19,6 +20,8 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
   const [showHidden, setShowHidden] = useState(false);
   const application = useRef<HTMLElement>(null);
   const [tab, setTab] = useState<Tab>('Räume');
+  const [roomName, setRoomName] = useState('');
+  const [roomArea, setRoomArea] = useState('');
   const [palettes, setPalettes] = useState<Palette[]>([]);
   const [lights, setLights] = useState<Light[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,11 +80,11 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
   const allowed = lights.filter(light => light.allowed);
   const disabled = busy || loading;
   return <div className="app">
-    <header><button className="menu" aria-label="Seitenleiste öffnen" onClick={onMenu}>☰</button><div><h1>Lichtzentrale</h1><p>Dein Licht. Deine Farben.</p></div><span className="stage">Stufe 1</span></header>
+    <header><button className="menu" aria-label="Seitenleiste öffnen" onClick={onMenu}>☰</button><div><h1>{tab === 'Raum' && roomName ? roomName : 'Lichtzentrale'}</h1><p>Dein Licht. Deine Farben.</p></div><span className="stage">Stufe 2</span></header>
     <main>
       {error && <div role="alert" className="error">{error}</div>}
       {message && <div role="status" className="notice">{message}</div>}
-      {(tab === 'Räume' || tab === 'Raum') && <><Rooms hass={hass} detail={tab === 'Raum'} openRoom={() => setTab('Raum')}/><button onClick={() => {setTab('Galerie'); setSettings(true);}}>Lampen freigeben</button></>}
+      {(tab === 'Räume' || tab === 'Raum') && <><Rooms hass={hass} detail={tab === 'Raum'} openRoom={() => setTab('Raum')} initialArea={roomArea} onRoomChange={(name, area) => {setRoomName(name); setRoomArea(area);}}/><button onClick={() => {setTab('Galerie'); setSettings(true);}}>Lampen freigeben</button></>}
       {tab === 'Taster' || tab === 'Zeitpläne' ? <section className="empty"><h2>{tab}</h2><p>{later[tab]}</p><button onClick={() => setTab('Galerie')}>Zur Galerie</button></section> : tab === 'Galerie' ? <>
         <div className="section-heading"><div><h2>Galerie</h2><p>Eigene Farbpaletten, direkt aus ihren Farben.</p></div><button disabled={disabled} onClick={() => { setGrants(lights.filter(light => light.allowed).map(light => light.entity_id)); setSettings(!settings); }}>Lampen freigeben</button></div>
         {loading && <p role="status">Lampen und Paletten werden geladen …</p>}
@@ -94,7 +97,8 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
         {!loading && !allowed.length && <p className="notice">Noch keine Lampen freigegeben. Wähle zuerst unter „Lampen freigeben“ die gewünschten Einzellampen aus.</p>}
         {!loading && !palettes.length && <p>Keine Paletten verfügbar. Lade die Daten erneut.</p>}
         {[...new Set(palettes.map(item => item.category))].map(category => <section key={category}><h3>{category}</h3><div className="grid">{palettes.filter(item => item.category === category).map(item => <button className="palette" disabled={disabled} key={item.id} aria-pressed={palette?.id === item.id} onClick={() => { setPalette(item); setBrightness(item.bri); setMessage(''); }}><span className="gradient" style={{background: `linear-gradient(120deg, ${item.preview.join(', ')})`}}/><span className="palette-name">{item.name}</span></button>)}</div></section>)}
-        {palette && <section className="card" aria-label="Palette anwenden" ref={application} tabIndex={-1}><h3>{palette.name} anwenden</h3><p>Wähle freigegebene Lampen. Farblose Lampen erhalten nur die Helligkeit, reine Ein/Aus-Lampen werden eingeschaltet.</p>
+        {palette && <section ref={application} tabIndex={-1}><RoomPalette key={palette.id} hass={hass} palette={palette}/></section>}
+        {palette && <section className="card" aria-label="Palette anwenden"><h3>{palette.name} anwenden</h3><p>Wähle freigegebene Lampen. Farblose Lampen erhalten nur die Helligkeit, reine Ein/Aus-Lampen werden eingeschaltet.</p>
           <fieldset disabled={disabled}><legend>Lampen auswählen</legend>{allowed.length === 0 && <p>Bitte zuerst Lampen freigeben.</p>}{allowed.map(light => <label className="check" key={light.entity_id}><input type="checkbox" disabled={!light.available} checked={selected.includes(light.entity_id)} onChange={() => setSelected(toggle(selected, light.entity_id))}/><span>{light.name}<small>{light.area_name || 'Ohne Bereich'}{!light.available ? ' · Nicht verfügbar' : ''}</small></span></label>)}
           <label className="slider">Helligkeit: {Math.round(brightness / 255 * 100)} %<input aria-label="Helligkeit" type="range" min="1" max="255" value={brightness} onChange={event => setBrightness(Number(event.target.value))}/></label>
           <label className="slider">Übergang: {transition} Sekunden<input aria-label="Übergang" type="range" min="0" max="60" value={transition} onChange={event => setTransition(Number(event.target.value))}/></label></fieldset>

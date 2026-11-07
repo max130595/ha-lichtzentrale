@@ -1,6 +1,7 @@
 # Geändert für Lichtzentrale
 """Room scenes with validated targets, parallel recall and private persistence."""
 
+import math
 from asyncio import Lock
 from copy import deepcopy
 from uuid import uuid4
@@ -9,9 +10,15 @@ from homeassistant.core import Context, HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
-from homeassistant.util.color import color_hs_to_xy, color_RGB_to_xy, color_xy_to_RGB
+from homeassistant.util.color import (
+    color_hs_to_xy,
+    color_RGB_to_xy,
+    color_temperature_to_rgb,
+    color_xy_to_RGB,
+)
 
 from .const import DOMAIN
+from .dynamic_scenes import manager, stop_dynamic, validate_dynamic
 from .lights import entity_area_id, validate_lights
 from .palettes import async_apply_palette, list_palettes
 from .rooms import async_dispatch, light_service_data, room_targets, validate_control_options
@@ -71,7 +78,7 @@ def hue_scene_targets(hass: HomeAssistant, entity_id: str) -> list[str]:
     controller = getattr(api, "scenes", None)
     try:
         resource = controller.get(entry.unique_id) if controller is not None else None
-    except (KeyError, AttributeError):
+    except KeyError, AttributeError:
         resource = None
     actions = getattr(resource, "actions", None)
     if not actions:
@@ -89,6 +96,40 @@ def hue_scene_targets(hass: HomeAssistant, entity_id: str) -> list[str]:
             _error("Eine Lampe der Hue-Szene wurde nicht gefunden.")
         targets.append(target_id)
     return list(dict.fromkeys(targets))
+
+
+@callback
+def hue_scene_preview(hass: HomeAssistant, entity_id: str) -> list[str]:
+    """Generate swatches from native Hue action colors, never from Hue images."""
+    entry = er.async_get(hass).async_get(entity_id)
+    if entry is None or entry.platform != "hue":
+        return []
+    config = hass.config_entries.async_get_entry(entry.config_entry_id)
+    controller = getattr(
+        getattr(getattr(config, "runtime_data", None), "api", None), "scenes", None
+    )
+    try:
+        resource = controller.get(entry.unique_id) if controller is not None else None
+    except KeyError, AttributeError:
+        return []
+    colors = []
+    for item in getattr(resource, "actions", []) or []:
+        action = getattr(item, "action", None)
+        xy = getattr(getattr(action, "color", None), "xy", None)
+        mirek = getattr(getattr(action, "color_temperature", None), "mirek", None)
+        if getattr(getattr(action, "on", None), "on", None) is False:
+            rgb = (41, 50, 56)
+        elif xy is not None and all(
+            type(v) in (int, float) and math.isfinite(v) and 0 <= v <= 1
+            for v in (getattr(xy, "x", None), getattr(xy, "y", None))
+        ):
+            rgb = color_xy_to_RGB(xy.x, xy.y)
+        elif type(mirek) in (int, float) and math.isfinite(mirek) and mirek > 0:
+            rgb = color_temperature_to_rgb(max(1000, min(40000, 1_000_000 / mirek)))
+        else:
+            continue
+        colors.append("#%02x%02x%02x" % tuple(round(v) for v in rgb))
+    return colors[:8]
 
 
 @callback
@@ -118,17 +159,22 @@ def list_hue_scenes(hass: HomeAssistant, store: LichtzentraleStore, area_id=None
                 "area_id": scene_area,
                 "available": error is None and state.state != "unavailable",
                 "reason": error,
+                "preview": hue_scene_preview(hass, state.entity_id) if error is None else [],
             }
         )
     return sorted(result, key=lambda item: item["name"].casefold())
 
 
-def _decorate(scene):
+def _decorate(scene, hass=None):
     result = deepcopy(scene)
     colors = []
     if scene["kind"] == "palette":
         palette = next((p for p in list_palettes() if p["id"] == scene.get("palette_id")), None)
         colors = palette["preview"] if palette else []
+    elif scene["kind"] == "hue":
+        colors = (hue_scene_preview(hass, scene["hue_scene"]) if hass else []) or scene.get(
+            "hue_preview", []
+        )
     else:
         for value in scene.get("lights", {}).values():
             if not value.get("on"):
@@ -145,9 +191,9 @@ def _decorate(scene):
 
 
 @callback
-def list_scenes(store: LichtzentraleStore, area_id=None) -> list[dict]:
+def list_scenes(store: LichtzentraleStore, area_id=None, hass=None) -> list[dict]:
     return [
-        _decorate(s)
+        _decorate(s, hass)
         for s in sorted(store.data["scenes"], key=lambda s: s.get("order", 0))
         if area_id is None or s["area_id"] == area_id
     ]
@@ -179,8 +225,7 @@ async def async_save_scene(hass, store, scene):
     if not isinstance(favorite, bool) or type(order) is not int or order < 0:
         _error("Ungültige Favoriten- oder Sortierangabe.")
     dynamic = scene.get("dynamic", {"enabled": False, "interval": 60, "transition": 10})
-    if not isinstance(dynamic, dict) or dynamic.get("enabled", False) is not False:
-        _error("Dynamische Szenen folgen in Stufe 2.")
+    dynamic = validate_dynamic(dynamic, kind)
     result = {
         "id": existing["id"] if existing else str(uuid4()),
         "name": _name(scene.get("name")),
@@ -192,7 +237,7 @@ async def async_save_scene(hass, store, scene):
         "hue_scene": None,
         "favorite": favorite,
         "order": order,
-        "dynamic": {"enabled": False, "interval": 60, "transition": 10},
+        "dynamic": dynamic,
     }
     if kind == "snapshot":
         lights = scene.get("lights")
@@ -223,6 +268,7 @@ async def async_save_scene(hass, store, scene):
             _error("Bitte eine Hue-Szene auswählen.")
         _targets(hass, store, area_id, hue_scene_targets(hass, hue_id))
         result["hue_scene"] = hue_id
+        result["hue_preview"] = hue_scene_preview(hass, hue_id)
     await store.async_save_scene(result, is_update=existing is not None)
     return _decorate(result)
 
@@ -258,9 +304,19 @@ async def async_snapshot(hass, store, area_id, name):
     return {"scene": scene, "skipped": skipped}
 
 
-async def async_delete_scene(store, scene_id):
-    _scene(store, scene_id)
-    await store.async_delete_scene(scene_id)
+async def async_delete_scene(store, scene_id, hass=None):
+    scene = _scene(store, scene_id)
+    if hass is None:
+        await store.async_delete_scene(scene_id)
+        return
+    area_id = scene["area_id"]
+    locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
+    async with locks.setdefault(area_id, Lock()):
+        await store.async_delete_scene(scene_id)
+        if active := manager(hass):
+            run = active.active.get(area_id)
+            if run and run["scene"]["id"] == scene_id:
+                await active.stop(area_id)
 
 
 async def async_reorder_scenes(store, area_id, scene_ids):
@@ -278,8 +334,24 @@ async def async_apply_scene(
         scene = _scene(store, scene_id)
         area_id = scene["area_id"]
         _area(hass, area_id)
-        if scene.get("dynamic", {}).get("enabled"):
-            _error("Dynamische Szenen folgen in Stufe 2.")
+        from .adaptive import async_pause_adaptive
+
+        validate_dynamic(scene.get("dynamic", {}), scene["kind"])
+        # Validate all targets before pausing another integration or replacing a loop.
+        checked = (
+            hue_scene_targets(hass, scene["hue_scene"])
+            if scene["kind"] == "hue"
+            else scene["lights"]
+            if scene["kind"] == "snapshot"
+            else room_targets(hass, store, area_id)
+        )
+        _targets(hass, store, area_id, checked)
+        if scene["kind"] == "snapshot":
+            for value in scene["lights"].values():
+                validate_control_options(**value)
+        await stop_dynamic(hass, area_id)
+        if scene["kind"] in {"palette", "hue"} or any("xy" in v for v in scene["lights"].values()):
+            await async_pause_adaptive(hass, store, area_id, context=context)
         if scene["kind"] == "palette":
             result = await async_apply_palette(
                 hass,
@@ -288,6 +360,8 @@ async def async_apply_scene(
                 room_targets(hass, store, area_id),
                 brightness=scene.get("brightness"),
                 context=context,
+                manage=False,
+                transition=scene["dynamic"]["transition"],
             )
         elif scene["kind"] == "hue":
             entity_id = scene["hue_scene"]
@@ -326,4 +400,11 @@ async def async_apply_scene(
             result = await async_dispatch(hass, commands, skipped, context)
         if not result.get("skipped") and not result.get("failed") and result["applied"]:
             await store.async_set_last_scene(area_id, scene_id)
+        if (
+            scene.get("dynamic", {}).get("enabled")
+            and result["applied"]
+            and not result.get("failed")
+        ):
+            if active := manager(hass):
+                await active.start(scene, context, result["applied"])
         return result
