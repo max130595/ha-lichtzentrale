@@ -104,7 +104,17 @@ def validate_schedule(hass, store, raw):
         result["trigger"] = validate_boundary(trigger)
     condition = raw["condition"]
     _require(isinstance(condition, dict)
-             and set(condition) == {"weekdays", "person_entity_ids", "light_state"})
+             and set(condition) in ({"weekdays", "person_entity_ids", "light_state"},
+                                   {"weekdays", "person_entity_ids", "light_state", "time_window"}))
+    window = condition.get("time_window")
+    if window is not None:
+        _require(isinstance(window, dict) and set(window) == {"after", "before"},
+                 "Das Zeitfenster benötigt Beginn und Ende; leere Grenzen bleiben offen.")
+        window = {key: validate_boundary(value) if value is not None else None
+                  for key, value in window.items()}
+        if all(value is None for value in window.values()):
+            window = None
+    result["condition"]["time_window"] = window
     days, persons = condition["weekdays"], condition["person_entity_ids"]
     _require(isinstance(days, list) and all(type(d) is int and 0 <= d <= 6 for d in days))
     _require(isinstance(persons, list) and all(isinstance(p, str) and p in {

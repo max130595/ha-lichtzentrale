@@ -113,9 +113,10 @@ def status(hass, store):
     }
 
 
-async def _set_enabled(hass, store, area_id, entity_id, enabled, context, *, turn_on_lights=False, transition=None):
+async def _set_enabled(hass, store, area_id, entity_id, enabled, context, *, turn_on_lights=False, transition=None, dispatch_guard=None):
     validate_transition(transition)
     lights = _validated(hass, store, area_id, entity_id)
+    check_execution_guard(dispatch_guard)
     await hass.services.async_call(
         "switch",
         "turn_on" if enabled else "turn_off",
@@ -126,6 +127,7 @@ async def _set_enabled(hass, store, area_id, entity_id, enabled, context, *, tur
     if enabled:
         # Recheck after each await: the allowlist or area assignment may change.
         lights = _validated(hass, store, area_id, entity_id)
+        check_execution_guard(dispatch_guard)
         await hass.services.async_call(
             ADAPTIVE_DOMAIN,
             "set_manual_control",
@@ -138,6 +140,7 @@ async def _set_enabled(hass, store, area_id, entity_id, enabled, context, *, tur
         # AL may start its configured initial fade on already-on lights during
         # those earlier calls; its own transition timer protects this final fade
         # from interval adaptation. Off lights are first lit by this apply.
+        check_execution_guard(dispatch_guard)
         await hass.services.async_call(
             ADAPTIVE_DOMAIN,
             "apply",
@@ -152,18 +155,18 @@ async def _set_enabled(hass, store, area_id, entity_id, enabled, context, *, tur
     return lights
 
 
-async def async_turn_on_adaptive(hass, store, area_id, context=None, *, transition=None, guard=None):
+async def async_turn_on_adaptive(hass, store, area_id, context=None, *, transition=None, guard=None, dispatch_guard=None):
     """Room-on targets only the strictly validated AL assignment; caller holds lock."""
     check_execution_guard(guard)
     entity_id = store.data["rooms"].get(area_id, {}).get("adaptive_switch")
     if not entity_id:
         raise ServiceValidationError("Bitte zuerst Adaptive Lighting für diesen Raum zuordnen.")
-    return await _set_enabled(hass, store, area_id, entity_id, True, context, turn_on_lights=True, transition=transition)
+    return await _set_enabled(hass, store, area_id, entity_id, True, context, turn_on_lights=True, transition=transition, dispatch_guard=dispatch_guard)
 
 
 async def async_set_adaptive(
     hass, store, area_id, enabled=None, adaptive_switch=UNSET, default_on=None, context=None,
-    *, transition=None, guard=None
+    *, transition=None, guard=None, dispatch_guard=None
 ):
     """Serialize settings and adaptive operations with scenes and room toggles."""
     if not isinstance(area_id, str):
@@ -171,13 +174,13 @@ async def async_set_adaptive(
     locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
     async with locks.setdefault(area_id, Lock()):
         return await _async_set_adaptive(
-            hass, store, area_id, enabled, adaptive_switch, default_on, context, transition=transition, guard=guard
+            hass, store, area_id, enabled, adaptive_switch, default_on, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard
         )
 
 
 async def _async_set_adaptive(
     hass, store, area_id, enabled=None, adaptive_switch=UNSET, default_on=None, context=None,
-    *, transition=None, guard=None
+    *, transition=None, guard=None, dispatch_guard=None
 ):
     """Validate optional mapping/settings before persistence or device actions."""
     check_execution_guard(guard)
@@ -221,17 +224,17 @@ async def _async_set_adaptive(
 
         await stop_dynamic(hass, area_id)
     if enabled is not None:
-        await _set_enabled(hass, store, area_id, entity_id, enabled, context, transition=transition)
+        await _set_enabled(hass, store, area_id, entity_id, enabled, context, transition=transition, dispatch_guard=dispatch_guard)
     if changes:
         await store.async_update_room(area_id, changes)
     return status(hass, store)
 
 
-async def async_pause_adaptive(hass, store, area_id, context=None):
+async def async_pause_adaptive(hass, store, area_id, context=None, *, dispatch_guard=None):
     """Pause a configured room before a color scene; absent integration is optional."""
     entity_id = store.data["rooms"].get(area_id, {}).get("adaptive_switch")
     if entity_id and hass.data.get(ADAPTIVE_DOMAIN):
-        await _set_enabled(hass, store, area_id, entity_id, False, context)
+        await _set_enabled(hass, store, area_id, entity_id, False, context, dispatch_guard=dispatch_guard)
 
 
 async def async_resume_adaptive(hass, store, area_id, context=None):

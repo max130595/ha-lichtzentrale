@@ -72,3 +72,50 @@ async def test_lux_validation_and_revocation(hass, store, schedule):
     await store.async_set_lights([])
     with pytest.raises(ServiceValidationError):
         validate_schedule(hass, store, schedule)
+
+
+@pytest.mark.parametrize("window", [
+    None, {"after": None, "before": None},
+    {"after": {"type": "time", "value": "23:00"}, "before": None},
+    {"after": None, "before": {"type": "sun", "event": "sunrise", "offset_min": -1440}},
+    {"after": {"type": "sun", "event": "sunset", "offset_min": 1440},
+     "before": {"type": "time", "value": "05:30"}},
+])
+async def test_time_window_normalizes_without_mutating_input(hass, store, schedule, window):
+    schedule["condition"]["time_window"] = deepcopy(window)
+    original = deepcopy(schedule)
+    normalized = validate_schedule(hass, store, schedule)
+    expected = None if window == {"after": None, "before": None} else window
+    assert normalized["condition"]["time_window"] == expected
+    assert schedule == original
+    if expected:
+        key = next(key for key, value in expected.items() if value is not None)
+        normalized["condition"]["time_window"][key]["type"] = "changed"
+        assert schedule == original
+
+
+async def test_legacy_condition_normalizes_to_unrestricted(hass, store, schedule):
+    assert "time_window" not in schedule["condition"]
+    assert validate_schedule(hass, store, schedule)["condition"]["time_window"] is None
+    assert "time_window" not in schedule["condition"]
+
+
+@pytest.mark.parametrize("window", [
+    False, 0, "", [], {},
+    {"after": None}, {"before": None},
+    {"after": None, "before": None, "extra": True},
+    {"after": [], "before": None},
+    {"after": {"type": "time", "value": "24:00"}, "before": None},
+    {"after": None, "before": {"type": "time", "value": "7:00"}},
+    {"after": {"type": "time", "value": "07:00", "extra": 1}, "before": None},
+    {"after": {"type": "sun", "event": "noon", "offset_min": 0}, "before": None},
+    {"after": {"type": "sun", "event": "sunset", "offset_min": True}, "before": None},
+    {"after": None, "before": {"type": "sun", "event": "sunrise", "offset_min": 1441}},
+    {"after": None, "before": {"type": "sun", "event": "sunrise", "offset_min": -1441}},
+    {"after": {"type": "sun", "event": "sunset", "offset_min": 1.5}, "before": None},
+    {"after": {"type": "lux", "threshold": 50}, "before": None},
+])
+async def test_time_window_rejects_malformed_values(hass, store, schedule, window):
+    schedule["condition"]["time_window"] = window
+    with pytest.raises(ServiceValidationError):
+        validate_schedule(hass, store, schedule)

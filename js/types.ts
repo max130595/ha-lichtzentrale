@@ -22,6 +22,6 @@ export interface MotionResponse {config: MotionConfig | null; status: {paused: b
 
 export type ScheduleTrigger = MotionBoundary | {type: 'lux'; sensor_entity_id: string; comparison: 'below' | 'above'; threshold: number; duration_seconds: number};
 export type ScheduleAction = {type: 'scene'; scene_id: string} | {type: 'adaptive' | 'motion'; area_id: string; enabled: boolean} | {type: 'room_off'; area_id: string} | {type: 'lights'; entity_ids: string[]; on: boolean; brightness: number | null};
-export interface Schedule {id: string; name: string; enabled: boolean; trigger: ScheduleTrigger; condition: {weekdays: number[]; person_entity_ids: string[]; light_state: 'any' | 'on' | 'off'}; action: ScheduleAction; transition: number | null}
+export interface Schedule {id: string; name: string; enabled: boolean; trigger: ScheduleTrigger; condition: {weekdays: number[]; person_entity_ids: string[]; light_state: 'any' | 'on' | 'off'; time_window?: {after: MotionBoundary | null; before: MotionBoundary | null} | null}; action: ScheduleAction; transition: number | null}
 export interface ScheduleEntry extends Schedule {next_run: string | null; last_error: string | null}
 export interface SchedulesResponse {time_zone: string; schedules: ScheduleEntry[]; lux_sensors: MotionSensor[]; persons: {entity_id: string; name: string; available: boolean}[]}

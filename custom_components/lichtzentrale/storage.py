@@ -40,15 +40,29 @@ class LichtzentraleStore:
 
     async def async_load(self) -> None:
         """Load data, filling missing keys without discarding saved fields."""
-        saved = await self._store.async_load()
-        if saved is not None:
-            self._data.update(saved)
-            self._data["settings"] = {
-                "light_entity_ids": [],
-                **saved.get("settings", {}),
-            }
-        else:
-            await self._store.async_save(self._data)
+        async with self._lock:
+            saved = await self._store.async_load()
+            updated = empty_data()
+            migrated = False
+            if saved is not None:
+                updated.update(deepcopy(saved))
+                updated["settings"] = {
+                    "light_entity_ids": [],
+                    **deepcopy(saved.get("settings", {})),
+                }
+                # Do not revalidate runtime references while loading: stale plans
+                # must remain visible and removable. Preserve every other field.
+                for schedule in updated["schedules"]:
+                    if not isinstance(schedule, dict):
+                        continue
+                    condition = schedule.get("condition")
+                    if isinstance(condition, dict) and "time_window" not in condition:
+                        condition["time_window"] = None
+                        migrated = True
+            if saved is None or migrated:
+                await self._store.async_save(updated)
+            # Publish only after a necessary migration has reached disk.
+            self._data = updated
 
     async def async_set_lights(self, entity_ids: list[str]) -> None:
         """Commit an explicit allowlist, keeping memory unchanged on failure."""
@@ -357,6 +371,22 @@ class LichtzentraleStore:
             self._refresh_schedules(schedule_id)
             return deepcopy(schedule)
 
+    async def async_claim_schedule_day(self, schedule_id: str, day: str) -> bool:
+        """Persist a daily execution claim before dispatch, including across restarts."""
+        async with self._lock:
+            schedule = next((item for item in self._data["schedules"]
+                             if item["id"] == schedule_id), None)
+            if schedule is None or not schedule["enabled"]:
+                return False
+            claims = self._data["settings"].get("schedule_last_run_dates", {})
+            if claims.get(schedule_id) == day:
+                return False
+            updated = deepcopy(self._data)
+            updated["settings"].setdefault("schedule_last_run_dates", {})[schedule_id] = day
+            await self._store.async_save(updated)
+            self._data = updated
+            return True
+
     async def async_delete_schedule(self, schedule_id: str) -> None:
         """Remove exactly one saved plan and retire outstanding work after commit."""
         async with self._lock:
@@ -365,6 +395,7 @@ class LichtzentraleStore:
             updated = deepcopy(self._data)
             updated["schedules"] = [item for item in updated["schedules"]
                                     if item["id"] != schedule_id]
+            updated["settings"].get("schedule_last_run_dates", {}).pop(schedule_id, None)
             await self._store.async_save(updated)
             self._data = updated
             self._refresh_schedules(schedule_id)

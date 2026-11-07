@@ -284,6 +284,20 @@ diese Taste überhaupt ein Doppelklick belegt ist.
   Bedingungen eingehalten werden, Schalter nur Ein/Aus erhalten und gespeicherte Pläne nach
   Neuladen unverändert vorhanden sind.
 
+### Stufe 4a – Zeitfenster-Bedingung
+
+- Optionales `condition.time_window` für alle Zeitpläne mit `after` und `before`,
+  jeweils Uhrzeit, Sonnenereignis mit Versatz oder `null` für eine offene Grenze.
+  Beginn inklusive, Ende exklusive; Mitternacht und lokale Zeitumstellungen werden unterstützt.
+- Lux-Auslöser behalten eine vor dem Fenster erfüllte Mindestdauer und prüfen zum
+  Fensterstart erneut. Höchstens eine automatische Ausführung pro lokalem Tag wird
+  vor der Aktion dauerhaft reserviert; auch Neustarts erlauben keine Wiederholung.
+  Ohne Fenster bleibt die bisherige Lux-Auslöselogik unverändert.
+- Bestehende Zeitpläne werden im Store einmalig um `time_window: null` ergänzt.
+- Deutscher Editor und Übersicht mit Uhrzeit/Sonnenstand, Versatz und offenen Grenzen.
+- Prüfung und genaue Grenzsemantik: [STUFE_4A_TESTPLAN.md](STUFE_4A_TESTPLAN.md).
+  Keine echten Geräteaktionen; nach dem Draft-PR sofort stoppen, auch CI-Überwachung.
+
 ## Tests
 
 - Python: `pytest-homeassistant-custom-component` für Store, Szenen-Snapshot/Anwenden,

@@ -208,3 +208,56 @@ async def test_position_checks_membership_after_waiting_for_lock(hass, store, ch
     with pytest.raises(ServiceValidationError):
         await task
     assert area not in store.data["rooms"]
+
+
+async def test_schedule_window_migration_preserves_nested_data_and_runs_once(hass, hass_storage):
+    saved = empty_data()
+    saved.update({
+        "schedules": [
+            {"id": "synthetic-legacy", "condition": {
+                "weekdays": [1, 4], "person_entity_ids": [], "light_state": "on",
+                "future_condition": {"nested": [1, 2]}},
+             "action": {"type": "lights", "entity_ids": ["light.synthetic_migration"]},
+             "future_schedule": {"nested": [3]}},
+            {"id": "synthetic-current", "condition": {"time_window": {
+                "after": {"type": "time", "value": "18:00"}, "before": None}}},
+        ],
+        "rooms": {"synthetic-room": {"positions": {"light.synthetic_migration": {
+            "cell": [0, 2], "height": "boden"}}, "motion": {"windows": []}}},
+        "scenes": [{"id": "synthetic-scene", "lights": {"light.synthetic_migration": {"on": True}}}],
+        "bindings": [{"id": "synthetic-binding", "params": {"entity_ids": ["light.synthetic_migration"]}}],
+        "settings": {"light_entity_ids": ["light.synthetic_migration"], "future": {"nested": [4]}},
+        "future": {"nested": [5]},
+    })
+    original = deepcopy(saved)
+    hass_storage[STORAGE_KEY] = {"version": 1, "data": deepcopy(saved)}
+    expected = deepcopy(saved)
+    expected["schedules"][0]["condition"]["time_window"] = None
+    store = LichtzentraleStore(hass)
+    with patch.object(store._store, "async_save", wraps=store._store.async_save) as save:
+        await store.async_load()
+        save.assert_awaited_once_with(expected)
+    assert store.data == expected == hass_storage[STORAGE_KEY]["data"]
+    assert saved == original
+    reloaded = LichtzentraleStore(hass)
+    with patch.object(reloaded._store, "async_save", wraps=reloaded._store.async_save) as save:
+        await reloaded.async_load()
+        save.assert_not_awaited()
+    assert reloaded.data == expected
+
+
+async def test_schedule_window_failed_migration_is_atomic_and_retryable(hass, hass_storage):
+    saved = empty_data()
+    saved["schedules"] = [{"id": "synthetic-legacy", "condition": {"weekdays": [0]}}]
+    hass_storage[STORAGE_KEY] = {"version": 1, "data": deepcopy(saved)}
+    store = LichtzentraleStore(hass)
+    before = store.data
+    with patch.object(store._store, "async_save", AsyncMock(side_effect=HomeAssistantError("disk"))):
+        with pytest.raises(HomeAssistantError):
+            await store.async_load()
+    assert store.data == before
+    assert hass_storage[STORAGE_KEY]["data"] == saved
+    await store.async_load()
+    expected = deepcopy(saved)
+    expected["schedules"][0]["condition"]["time_window"] = None
+    assert store.data == expected == hass_storage[STORAGE_KEY]["data"]
