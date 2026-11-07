@@ -74,7 +74,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         DOMAIN,
         "toggle_room",
         toggle_room_service,
-        schema=vol.Schema({vol.Required("area_id"): cv.string, vol.Optional("on"): bool}),
+        schema=vol.Schema({vol.Required("area_id"): cv.string, vol.Optional("on"): cv.boolean}),
         supports_response=SupportsResponse.OPTIONAL,
     )
     return True

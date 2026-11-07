@@ -71,7 +71,7 @@ def hue_scene_targets(hass: HomeAssistant, entity_id: str) -> list[str]:
     controller = getattr(api, "scenes", None)
     try:
         resource = controller.get(entry.unique_id) if controller is not None else None
-    except KeyError, AttributeError:
+    except (KeyError, AttributeError):
         resource = None
     actions = getattr(resource, "actions", None)
     if not actions:
@@ -301,7 +301,8 @@ async def async_apply_scene(
             await hass.services.async_call(
                 "hue",
                 "activate_scene",
-                {"entity_id": entity_id, "dynamic": False},
+                # Dynamische Hue-Szenen auch dynamisch starten (Farben wandern weiter).
+                {"entity_id": entity_id, "dynamic": bool(state.attributes.get("is_dynamic"))},
                 blocking=True,
                 context=context,
             )

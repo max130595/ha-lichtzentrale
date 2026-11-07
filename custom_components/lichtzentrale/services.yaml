@@ -59,7 +59,7 @@ toggle_room:
       required: true
       selector:
         area:
-    on:
+    "on":
       name: Einschalten
       description: Ohne Vorgabe wird der Raumzustand umgeschaltet.
       selector:
