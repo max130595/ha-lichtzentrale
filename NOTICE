@@ -1,0 +1,21 @@
+Lichtzentrale
+
+This product includes software derived from hass-scene_presets by Hypfer:
+https://github.com/Hypfer/hass-scene_presets
+Upstream revision: b53280c76f6a94ea68f313c53865c3922d40b2d7
+License: Apache License, Version 2.0 (see LICENSE).
+
+The configuration flow, integration setup, panel registration, WebSocket setup,
+capability-aware palette application, color-temperature approximation, React
+custom-element bridge and webpack build are adapted from the upstream project.
+Changed source files are marked "Geändert für Lichtzentrale".
+
+The upstream presets, preset names, photos, logos and custom icon assets are not
+included. Lichtzentrale's twelve palette names, color combinations and generated
+gradient previews are original. Dynamic scenes and upstream custom-preset file
+handling are deliberately not imported in stage 0.
+
+The frontend includes React, React DOM and Scheduler (MIT). Their complete
+license texts and extracted bundle notices are distributed in
+custom_components/lichtzentrale/frontend/THIRD_PARTY_LICENSES.txt and
+custom_components/lichtzentrale/frontend/lichtzentrale_panel.js.LICENSE.txt.

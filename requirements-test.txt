@@ -1,0 +1,6 @@
+# Test-only dependencies; the integration itself has no extra requirements.
+# This fixture release tests against Home Assistant 2026.10.4.
+pytest-homeassistant-custom-component==0.13.375
+ruff==0.17.4
+
+home-assistant-frontend==20260930.5

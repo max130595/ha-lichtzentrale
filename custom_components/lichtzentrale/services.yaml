@@ -1,0 +1,38 @@
+apply_palette:
+  name: Farbpalette anwenden
+  description: Wendet eine eigene Farbpalette auf zuvor freigegebene Einzellampen an.
+  fields:
+    palette_id:
+      name: Farbpalette
+      description: Kennung einer mitgelieferten Farbpalette, zum Beispiel kupfernest.
+      required: true
+      example: kupfernest
+      selector:
+        text:
+    entity_ids:
+      name: Lampen
+      description: Nur in der Lichtzentrale freigegebene Einzellampen, keine Gruppen.
+      required: true
+      selector:
+        entity:
+          domain: light
+          multiple: true
+    brightness:
+      name: Helligkeit
+      description: Optionaler Helligkeitswert statt der Vorgabe aus der Farbpalette.
+      selector:
+        number:
+          min: 1
+          max: 255
+          mode: slider
+    transition:
+      name: Übergang
+      description: Übergangsdauer für Lampen, die Übergänge unterstützen.
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 0.1
+          unit_of_measurement: s
+          mode: box
