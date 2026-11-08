@@ -345,6 +345,35 @@ diese Taste überhaupt ein Doppelklick belegt ist.
   Keine Bereitstellung und keine echten Geräteaktionen. Nach Öffnen des Draft-PR endet die
   Arbeit einschließlich CI-Überwachung bis Claudes Rückmeldung.
 
+### Stufe 5a – Besitz beim Speichern und Abschalten
+
+- `brightness/save` erhält eigene aktive Stufen, wenn die Lampenlisten und ihre
+  Reihenfolge unverändert sind. Zielwertänderungen verlieren weder die Besitzzuordnung
+  noch die laufende Mindestzeit. Handbedienung bleibt vorrangig; eine bestehende Pause
+  wird durch eine reine Zielwertänderung nicht aufgehoben.
+- Bei geänderten Lampenlisten, Gruppierung oder Reihenfolge werden die bisherigen
+  eigenen Stufen zuerst rückwärts ausgeschaltet. Erst danach werden neue Einstellungen
+  gespeichert und die Besitzzuordnung zurückgesetzt. Helligkeits- und Sensoränderungen
+  behalten die Zielzuordnung, verwerfen aber wie bisher unpassende persistierte Lernwerte.
+  Bei unverändertem Sensor bleiben laufende Messungen und bekannte Eigenlichtanteile der
+  bereits eingeschalteten Stufen bis zum Abschalten erhalten; ihre tatsächliche Helligkeit
+  wurde durch das Speichern nicht verändert. Ein Sensorwechsel verwirft diese Anteile.
+- `brightness/set_enabled` mit `enabled: false` schaltet eigene aktive Stufen ebenfalls
+  rückwärts aus. Mit dem optionalen booleschen `keep_lights: true` bleiben sie an und
+  werden aus der Besitzverwaltung freigegeben. Erneutes Aktivieren übernimmt sie nicht.
+  Auch `brightness/save` mit `enabled: false` schaltet eigene Stufen aus.
+- Diese ausdrücklich angeforderten Abschaltungen warten nicht auf Lux, Anwesenheit oder
+  die Mindestzeit. Freigabe, Raum und Geräteeignung werden weiterhin unmittelbar vor
+  jedem Befehl geprüft. Unbeteiligte und manuell übernommene Lampen bleiben unangetastet.
+- Speichern/Deaktivieren und vollständige Stufenwechsel sind je Raum serialisiert.
+  Bei einem Abschaltfehler wird die Änderung nicht gespeichert, die Regelung pausiert
+  und die noch nicht abgeschalteten eigenen Ziele bleiben für einen erneuten Versuch
+  bekannt. Bereits erfolgreiche Abschaltungen werden nicht rückgängig gemacht. Scheitert
+  anschließend das Speichern, gelten weiter die alten Einstellungen; bereits abgeschaltete
+  Stufen sind auch dann nicht mehr als aktiv verzeichnet.
+- Automatisierte Abnahme: [Stufe-5-Testplan](STUFE_5_TESTPLAN.md). Keine echten Geräte,
+  Bereitstellung oder Zusammenführung. Nach dem Draft-PR vollständig stoppen.
+
 ## Tests
 
 - Python: `pytest-homeassistant-custom-component` für Store, Szenen-Snapshot/Anwenden,

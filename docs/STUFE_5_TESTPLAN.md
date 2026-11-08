@@ -63,6 +63,39 @@ synthetische Bereiche und Geräte; es wird keine echte HA-Installation angesproc
    Abbrechen, Serverfehler, wiederholtes Speichern und Neuladen; keine Erfolgsmeldung
    vor Serverbestätigung. Optionales Adaptive Lighting darf nicht vorausgesetzt werden.
 
+## Ergänzung Stufe 5a: Speichern und Deaktivieren
+
+- Drei synthetische Stufen einschalten und Eigenlicht lernen. Über `brightness/save`
+  nur den Zielwert ändern: aktive Stufen und Lernwerte bleiben erhalten. Bei genug Lux
+  werden sie anschließend in umgekehrter Reihenfolge ausgeschaltet; auch direkt nach
+  dem Speichern gilt weiterhin die Mindestzeit. Zusätzlich vor Abschluss der allerersten
+  Lernmessung speichern: Die laufende Messung wird danach abgeschlossen und die Stufe
+  bei genug Lux abgeschaltet.
+- Lampenlisten umordnen, entfernen, ersetzen oder neu gruppieren: Vor der Speicherung
+  werden ausschließlich die alten eigenen Ziele rückwärts ausgeschaltet. Die neuen
+  Stufen sind danach nicht aktiv. Auch eine geänderte Reihenfolge innerhalb einer
+  Stufenliste zählt als Änderung. Switch-Payloads enthalten nur Ein/Aus.
+- Nur Stufenhelligkeit oder Sensor ändern: Besitz bleibt erhalten, unpassende Lernwerte
+  für spätere Aktivierungen werden verworfen. Bei unverändertem Sensor bleiben bekannte
+  Eigenlichtanteile für bereits eingeschaltete Stufen bis zum Abschalten erhalten; ein
+  Sensorwechsel verwirft sie. Wiederholtes Aktivieren verliert keine eigenen Stufen.
+- `brightness/set_enabled` ohne `keep_lights` und mit `keep_lights: false`: eigene Stufen
+  aus und Besitz freigeben. Mit `keep_lights: true`: keine Lichtbefehle, Besitz freigeben.
+  Nicht boolesche Werte ablehnen. Nach erneutem Aktivieren werden angelassene Lampen
+  nicht stillschweigend übernommen. Deaktivieren per `brightness/save` ebenfalls prüfen.
+- Bereits manuell übernommene Lampen bleiben an. Eine bestehende manuelle Pause bleibt
+  beim reinen Zielwertspeichern bestehen. Veraltete Sensoren verhindern nicht das
+  ausdrückliche Deaktivieren mit Abschaltung.
+- Freigabeentzug, Raumwechsel und nicht verfügbare Ziele verhindern unsichere Befehle.
+  Teilfehler werden gemeldet, die Regelung pausiert, die alten Einstellungen bleiben
+  erhalten und fehlgeschlagene Ziele können ausdrücklich erneut abgeschaltet werden.
+- Einen laufenden synthetischen Einschalt-Service anhalten und gleichzeitig deaktivieren:
+  erst die abgeschlossene Aktivierung erfassen, dann ausschalten. Kein verlorener Besitz,
+  keine gegenseitige Blockade zwischen Regler-, Geräte- und Store-Sperren.
+- Fehlgeschlagenes reines Zielwertspeichern lässt aktive Stufen und Einstellungen unverändert.
+  Bei fehlerhafter Speicherung nach erfolgreichem Abschalten wird nichts als aktiv
+  ausgegeben, was zuvor erfolgreich ausgeschaltet wurde; keine automatische Rücknahme.
+
 ## Reproduzierbare Befehle
 
 Die pytest-Fixtures sind auf HA 2026.10.4 abgestimmt. Der native Zielversions-Smoke
@@ -87,7 +120,8 @@ uv pip install --python .venv-target/bin/python -r requirements-ha2026.11.txt
 Der native Smoke verwendet echte HA-Registries, Service-Dispatch und temporären
 Store mit synthetischen Zuständen und Serviceempfängern. Er prüft zusätzlich den
 Grundhelligkeitsstart, die Helligkeitspayload, Mindestzeit, manuelle Pause und
-Persistenz. Er ersetzt weder vollständige WebSocket-/Panel-Prüfung noch echte Geräteabnahme.
+Persistenz sowie Stufe-5a-Zielwertspeichern mit anschließendem Abschalten und
+Deaktivieren mit/ohne `keep_lights`. Er ersetzt weder vollständige WebSocket-/Panel-Prüfung noch echte Geräteabnahme.
 Das gebaute Frontend-Bundle gehört zum Entwurf; ein Build allein ist kein visueller UI-Test.
 
 ## Praktische Abnahme durch Claude nach dem Draft

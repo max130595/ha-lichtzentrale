@@ -43,7 +43,7 @@ class BrightnessManager:
         return self._rooms.setdefault(area, {
             "paused": False, "active": [], "pending": None, "last_change": None,
             "last_error": None, "window": None, "generation": 0,
-            "lock": asyncio.Lock(), "reclaim": False,
+            "lock": asyncio.Lock(), "reclaim": False, "active_learned": {},
         })
 
     @callback
@@ -161,7 +161,7 @@ class BrightnessManager:
     def pause(self, area):
         runtime = self._runtime(area)
         runtime["window"] = self._window(self._config(area), dt_util.now()) or runtime["window"] or "closed"
-        runtime.update(paused=True, active=[], pending=None, reclaim=False,
+        runtime.update(paused=True, active=[], active_learned={}, pending=None, reclaim=False,
                        generation=runtime["generation"] + 1)
 
     @callback
@@ -175,16 +175,71 @@ class BrightnessManager:
     def room_off(self, area):
         """An explicit, successful room-off releases manual pause after a full interval."""
         runtime = self._runtime(area)
-        runtime.update(paused=False, active=[], pending=None, last_change=monotonic(),
+        runtime.update(paused=False, active=[], active_learned={}, pending=None, last_change=monotonic(),
                        reclaim=False, last_error=None, generation=runtime["generation"] + 1)
 
-    @callback
-    def refresh_config(self, area):
-        """Editing/disabling cancels pending work, never changes devices."""
+    def config_lock(self, area):
+        """Serialize edits with complete stage transitions, including in-flight calls."""
+        return self._runtime(area)["lock"]
+
+    async def async_prepare_config(self, area, previous, config, *, keep_lights=False):
+        """Release old owned lights before replacing their stage mapping or disabling."""
+        same_targets = ([stage["entity_ids"] for stage in previous.get("stages", [])]
+                        == [stage["entity_ids"] for stage in config.get("stages", [])])
+        preserve_active = same_targets and config.get("enabled", False)
+        if not preserve_active and not keep_lights:
+            await self._async_turn_off_owned(area)
+        return preserve_active
+
+    async def _async_turn_off_owned(self, area):
+        """Explicit edits bypass lux/interval conditions, but never target unowned lights."""
         runtime = self._runtime(area)
-        runtime.update(paused=False, active=[], pending=None, last_change=None,
-                       window=None, reclaim=False, last_error=None,
-                       generation=runtime["generation"] + 1)
+        generation = runtime["generation"]
+        runtime["pending"] = None
+        try:
+            while runtime["active"]:
+                stage = runtime["active"][-1]
+                async with _locked_targets(self.hass, self.store, sorted(stage)) as (targets, areas):
+                    def guard(entity):
+                        return (not self.closed and runtime["generation"] == generation
+                                and bool(runtime["active"]) and runtime["active"][-1] is stage
+                                and entity in stage and areas[entity] == area
+                                and _still_allowed(self.hass, self.store, entity, areas))
+
+                    calls = [(entity.split(".", 1)[0], "turn_off", {"entity_id": entity})
+                             for entity in targets]
+                    result = await async_dispatch(self.hass, calls, context=self._context(), guard=guard)
+                    if runtime["generation"] != generation:
+                        raise ServiceValidationError("Die Lampen wurden zwischenzeitlich manuell bedient.")
+                    stage.difference_update(result["applied"])
+                    if result["applied"]:
+                        runtime["last_change"] = monotonic()
+                    if stage:
+                        raise ServiceValidationError("Eigene Stufen konnten nicht vollständig ausgeschaltet werden.")
+                    runtime["active_learned"].pop(len(runtime["active"]) - 1, None)
+                    runtime["active"].pop()
+        except (HomeAssistantError, ValueError, TypeError) as error:
+            # Retain failed targets for an explicit retry; do not resume regulation.
+            runtime.update(paused=True, last_error=str(error), reclaim=False)
+            raise
+
+    @callback
+    def refresh_config(self, area, *, preserve_active=False, previous=None, learned=()):
+        """Invalidate old learning/tasks without forgetting unchanged owned stages."""
+        runtime = self._runtime(area)
+        same_sensor = preserve_active and previous is not None and (
+            previous.get("lux_sensor_entity_id") == self._config(area).get("lux_sensor_entity_id"))
+        if same_sensor:
+            # Configuration does not change the brightness of already-owned lamps.
+            # Keep their measured contribution until this activation ends, even when
+            # new stage brightness invalidates the persisted estimate for future starts.
+            for index in range(len(runtime["active"])):
+                runtime["active_learned"].setdefault(index, learned[index] if index < len(learned) else None)
+        else:
+            runtime.update(pending=None, active_learned={})
+        runtime.update(reclaim=False, last_error=None, generation=runtime["generation"] + 1)
+        if not preserve_active:
+            runtime.update(paused=False, active=[], window=None)
         task = self._tasks.get(area)
         if task and task is not asyncio.current_task():
             task.cancel()
@@ -220,7 +275,7 @@ class BrightnessManager:
         learned = self.store.data["rooms"].get(area, {}).get("brightness_learned", [])
         return {"enabled": bool(config.get("enabled")), "paused": runtime["paused"],
                 "current_lux": self._lux(config), "active_stage": len(runtime["active"]),
-                "learned_lux": [learned[i] if i < len(learned) else None
+                "learned_lux": [runtime["active_learned"].get(i, learned[i] if i < len(learned) else None)
                                 for i in range(len(config.get("stages", [])))],
                 "last_error": runtime["last_error"]}
 
@@ -257,9 +312,19 @@ class BrightnessManager:
             return
         generation = runtime["generation"]
         rise = max(0.0, value - pending["before"])
+        if pending["stage"] != config["stages"][pending["index"]]:
+            # This sample belongs to the still-on, pre-edit brightness only.
+            # Never seed the persisted estimate for a different future activation.
+            previous = runtime["active_learned"].get(pending["index"])
+            runtime["active_learned"][pending["index"]] = (
+                rise if previous is None else previous * 0.75 + rise * 0.25)
+            runtime["pending"] = None
+            return
         await self.store.async_learn_brightness(area, config, pending["index"], rise,
             guard=lambda: self._valid(area, config, generation) and runtime["pending"] is pending)
         if self._valid(area, config, generation) and runtime["pending"] is pending:
+            # A completed sample replaces any pre-edit estimate for this activation.
+            runtime["active_learned"].pop(pending["index"], None)
             runtime["pending"] = None
 
     async def async_evaluate(self, area):
@@ -382,11 +447,13 @@ class BrightnessManager:
                 return
             runtime["last_error"] = None
             if on:
+                runtime["active_learned"].pop(index, None)
                 runtime["active"].append(set(targets))
                 if before is not None and sensor is not None and all(s.state == "off" for s in states.values()):
-                    runtime["pending"] = {"index": index, "before": before,
+                    runtime["pending"] = {"index": index, "before": before, "stage": stage,
                         "sensor_updated": sensor.last_updated, "time": monotonic()}
             else:
+                runtime["active_learned"].pop(index, None)
                 runtime["active"].pop()
 
     async def _adaptive_white(self, area, targets, context, guard):
