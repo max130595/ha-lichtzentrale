@@ -26,6 +26,8 @@ async def test_api_roundtrip(hass, store, brightness_setup, hass_ws_client):
     async_setup_websocket_api(hass)
     assert (await request(client, "get", area_id=area))["result"]["config"] is None
     manager = Mock()
+    manager.config_lock.return_value = asyncio.Lock()
+    manager.async_prepare_config = AsyncMock(return_value=False)
     manager.status.return_value = {"enabled": False, "paused": False, "current_lux": 40,
                                    "active_stage": 0, "learned_lux": [], "last_error": None}
     hass.data[DOMAIN]["brightness"] = manager
@@ -33,7 +35,8 @@ async def test_api_roundtrip(hass, store, brightness_setup, hass_ws_client):
     assert response["success"]
     assert response["result"]["config"] == config
     assert response["result"]["lux_sensors"] and response["result"]["persons"]
-    manager.refresh_config.assert_called_once_with(area)
+    manager.refresh_config.assert_called_once_with(
+        area, preserve_active=False, previous={}, learned=[])
     response = await request(client, "set_enabled", area_id=area, enabled=True)
     assert response["result"]["config"]["enabled"] is True
     restored = LichtzentraleStore(hass)
@@ -55,6 +58,8 @@ async def test_admin_required(hass, store, hass_ws_client, hass_read_only_access
 async def test_learning_persistence_reset_and_stale_guard(hass, store, brightness_setup):
     area, _, config = brightness_setup
     manager = Mock()
+    manager.config_lock.return_value = asyncio.Lock()
+    manager.async_prepare_config = AsyncMock(return_value=False)
     hass.data[DOMAIN] = {"store": store, "brightness": manager}
     await store.async_set_brightness(area, config)
     manager.reset_mock()
@@ -84,6 +89,8 @@ async def test_learning_persistence_reset_and_stale_guard(hass, store, brightnes
 async def test_failed_writes_and_stale_disable(hass, store, brightness_setup):
     area, _, config = brightness_setup
     manager = Mock()
+    manager.config_lock.return_value = asyncio.Lock()
+    manager.async_prepare_config = AsyncMock(return_value=False)
     hass.data[DOMAIN] = {"store": store, "brightness": manager}
     await store.async_set_brightness(area, config)
     manager.reset_mock()

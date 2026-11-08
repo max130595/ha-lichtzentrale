@@ -448,7 +448,8 @@ async def brightness_save(hass, store, msg, context):
 
 
 async def brightness_set_enabled(hass, store, msg, context):
-    await store.async_set_brightness_enabled(msg["area_id"], msg["enabled"])
+    await store.async_set_brightness_enabled(
+        msg["area_id"], msg["enabled"], keep_lights=msg.get("keep_lights", False))
     return await brightness_get(hass, store, msg, context)
 
 
@@ -456,6 +457,6 @@ BRIGHTNESS_HANDLERS = (
     command("brightness/get", AREA_FIELDS, brightness_get),
     command("brightness/save", {**AREA_FIELDS, vol.Required("config"): dict}, brightness_save),
     command("brightness/set_enabled", {
-        **AREA_FIELDS, vol.Required("enabled"): bool,
+        **AREA_FIELDS, vol.Required("enabled"): bool, vol.Optional("keep_lights", default=False): bool,
     }, brightness_set_enabled),
 )

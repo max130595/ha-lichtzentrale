@@ -251,6 +251,7 @@ async def test_restart_edit_disable_and_shutdown_do_not_reclaim_on_light(hass, s
     await t.manager.async_evaluate(t.area)
     await hass.async_block_till_done()
     t.manager.refresh_config(t.area)
+    t.time[0] += 180
     await t.manager.async_evaluate(t.area)
     assert t.manager.status(t.area)["paused"]
     assert len(t.calls) == 1

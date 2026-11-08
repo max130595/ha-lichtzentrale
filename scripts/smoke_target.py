@@ -737,6 +737,37 @@ async def run(config_dir: str) -> None:
             await hass.async_block_till_done()
             await brightness.async_evaluate(brightness_area.id)
             assert len(calls) == count + 1
+            # Stufe 5a: target-only edits retain owned stages and learned light.
+            brightness._runtime(brightness_area.id)["pending"]["time"] -= 10
+            hass.states.async_set(brightness_lux, "50", lux_attrs)
+            await hass.async_block_till_done()
+            brightness_config = await final.async_set_brightness(
+                brightness_area.id, {**brightness_config, "target_lux": 120})
+            assert brightness.status(brightness_area.id)["active_stage"] == 1
+            assert brightness.status(brightness_area.id)["learned_lux"] == [40]
+            brightness._runtime(brightness_area.id)["last_change"] -= 180
+            hass.states.async_set(brightness_lux, "500", lux_attrs)
+            await hass.async_block_till_done()
+            assert calls[-1].service == "turn_off"
+            assert hass.states.get(brightness_lamp.entity_id).state == "off"
+            assert brightness.status(brightness_area.id)["active_stage"] == 0
+            brightness._runtime(brightness_area.id)["last_change"] -= 180
+            hass.states.async_set(brightness_lux, "10", lux_attrs)
+            await hass.async_block_till_done()
+            assert brightness.status(brightness_area.id)["active_stage"] == 1
+            await final.async_set_brightness_enabled(brightness_area.id, False)
+            assert hass.states.get(brightness_lamp.entity_id).state == "off"
+            await final.async_set_brightness_enabled(brightness_area.id, True)
+            brightness._runtime(brightness_area.id)["last_change"] -= 180
+            await brightness.async_evaluate(brightness_area.id)
+            await hass.async_block_till_done()
+            assert brightness.status(brightness_area.id)["active_stage"] == 1
+            count = len(calls)
+            await final.async_set_brightness_enabled(brightness_area.id, False, keep_lights=True)
+            assert len(calls) == count
+            assert hass.states.get(brightness_lamp.entity_id).state == "on"
+            assert brightness.status(brightness_area.id)["active_stage"] == 0
+            await final.async_set_brightness_enabled(brightness_area.id, True)
             # A real native service event, even without a changed on/off state, pauses.
             await hass.services.async_call("light", "turn_on", {
                 "entity_id": brightness_lamp.entity_id, "brightness": 95,
@@ -752,7 +783,7 @@ async def run(config_dir: str) -> None:
             await persisted_brightness.async_load()
             room = persisted_brightness.data["rooms"][brightness_area.id]
             assert room["brightness"] == brightness_config
-            assert room["brightness_learned"] == [None]
+            assert room["brightness_learned"] == [40]
             assert "paused" not in room["brightness"]
             await final.async_set_brightness_enabled(brightness_area.id, False)
         finally:
@@ -788,7 +819,8 @@ def main() -> None:
         "dispatch, bounded transition selection, atomic save/enable/delete, Lux timer registration and cancellation, "
         "schedule persistence/reload/unload, overnight windows and persisted daily lux limits; "
         "brightness-stage native dispatch/payload, minimum interval, manual-service pause, "
-        "configuration and unknown-learning persistence, disable and unload."
+        "configuration and learning persistence, target-edit ownership/bright-light removal, "
+        "disable with/without keep_lights and unload."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "
