@@ -37,6 +37,7 @@ async def test_setup_unload_reload_remove(hass, hass_storage):
         assert hass.services.has_service(DOMAIN, "next_scene")
         assert "bindings" in hass.data[DOMAIN]
         assert "motion" in hass.data[DOMAIN]
+        assert "brightness" in hass.data[DOMAIN]
         assert "schedules" in hass.data[DOMAIN]
         await hass.data[DOMAIN]["store"].async_set_lights(["light.fixture_a"])
         original_store = hass.data[DOMAIN]["store"]
@@ -57,6 +58,7 @@ async def test_setup_unload_reload_remove(hass, hass_storage):
         assert not hass.services.has_service(DOMAIN, "next_scene")
         assert "bindings" not in hass.data[DOMAIN]
         assert "motion" not in hass.data[DOMAIN]
+        assert "brightness" not in hass.data[DOMAIN]
         assert "schedules" not in hass.data[DOMAIN]
         assert "store" not in hass.data[DOMAIN]
         assert STORAGE_KEY in hass_storage

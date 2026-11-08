@@ -23,6 +23,8 @@ custom_components/lichtzentrale/
   bindings.py          Tasterbelegung: Event-Entities abhören, Aktionen ausführen
   motion.py            Bewegungsautomatik: Belegung, Zeitfenster, Nachlauf und manuelle Pause
   motion_config.py     Sensor-Auswahl und geschlossene Konfigurationsprüfung
+  brightness.py        Grundhelligkeit: Stufen, Eigenlicht-Lernen und manuelle Pause
+  brightness_config.py Lux-/Personenauswahl und geschlossene Stufenprüfung
   schedules.py         Zeitpläne: Uhrzeit, Sonnenauf/-untergang mit Versatz, Helligkeitsschwelle
   websocket_api.py     alle Befehle für die Oberfläche (siehe unten)
   services.yaml        Services für Automationen
@@ -74,6 +76,7 @@ js/                    React + TypeScript Quellcode der Oberfläche (webpack, wi
 `adaptive/status`, `adaptive/set`,
 `bindings/list`, `binding/save`, `binding/delete`, `buttons/list` (alle Event-Entities mit Typen),
 `motion/get`, `motion/save`, `motion/set_enabled`,
+`brightness/get`, `brightness/save`, `brightness/set_enabled`,
 `schedules/list`, `schedule/save`, `schedule/delete`, `schedule/set_enabled`, `schedule/test`.
 
 Services für eigene Automationen: `lichtzentrale.apply_scene`, `lichtzentrale.next_scene`,
@@ -297,6 +300,50 @@ diese Taste überhaupt ein Doppelklick belegt ist.
 - Deutscher Editor und Übersicht mit Uhrzeit/Sonnenstand, Versatz und offenen Grenzen.
 - Prüfung und genaue Grenzsemantik: [STUFE_4A_TESTPLAN.md](STUFE_4A_TESTPLAN.md).
   Keine echten Geräteaktionen; nach dem Draft-PR sofort stoppen, auch CI-Überwachung.
+
+### Stufe 5 – Grundhelligkeit
+
+- **Konfiguration je Raum:** Ein Illuminanzsensor mit `device_class: illuminance` und
+  Einheit `lx`, Zielhelligkeit, Hysterese, Mindestabstand zwischen Stufenwechseln
+  (Vorgabe 180 Sekunden), optional Zeitfenster aus Stufe 4a und ausgewählte `person`-Entities.
+  Neue Konfigurationen sind zunächst ausgeschaltet. Lichtziele müssen ausdrücklich freigegeben
+  sein und zu diesem Raum gehören. Ein Ziel darf nur einmal in der Stufenliste vorkommen.
+- **Geordnete, additive Stufen:** Unter `Ziel − Hysterese` wird genau die nächste Stufe
+  zugeschaltet. Helligkeit gilt nur für dimmbare Lampen; Switch-Lichter erhalten ausschließlich
+  Ein/Aus. Abgeschaltet wird in umgekehrter Reihenfolge und nur, wenn nach Abzug des gelernten
+  Anteils der letzten Stufe noch mehr als `Ziel + Hysterese` verbleibt. Gleichheit schaltet nicht.
+  Auch Gegenbewegungen halten den Mindestabstand ein.
+- **Eigenlicht lernen:** Nach dem Zuschalten wird ein gültiger Lux-Anstieg nach mindestens
+  zehn Sekunden Beruhigungszeit als Schätzung gespeichert. Ohne frische Messung wird nach
+  120 Sekunden ohne neuen Lernwert weitergeregelt. Weitere Messungen verwenden einen
+  gleitenden Mittelwert mit Faktor 0,25. Ein unbekannter Anteil bleibt `null`, niemals vermeintlich
+  null Lux. Ohne verlässlichen Anteil wird die betreffende Stufe nicht automatisch abgeschaltet.
+  Tageslichtänderungen und Sensorverzögerung begrenzen die Genauigkeit dieser Schätzung.
+- **Vorrang und Sicherheit:** Manuelle Änderungen durch Taster, Szene oder App pausieren die
+  Regelung bis zum nächsten Zeitfenster-Beginn oder ausdrücklichem „Raum aus“. Bereits beim
+  Start oder Bearbeiten eingeschaltete Lampen werden nicht als eigene Stufen übernommen.
+  Fehlende/ungültige Lux-Werte sperren luxbedingte Stufenwechsel. Bei sicherer Abwesenheit
+  oder Fensterende werden nur eigene aktive Stufen rückwärts und mit Mindestabstand entfernt;
+  unbekannte Personen sperren alle Befehle. Ohne Zeitfenster bleibt eine manuelle Pause bis
+  zum ausdrücklichen Raum-Aus bestehen. Nach erfolgreichem Raum-Aus wartet die Regelung eine
+  volle Mindestzeit. Am nächsten tatsächlichen Fensterbeginn darf sie die Stufen wieder
+  übernehmen, lernt dabei aber nicht aus schon eingeschalteten Zielen.
+  Freigabe, Raumzuordnung und Geräteeignung werden vor Serviceaufrufen erneut geprüft.
+  Bestehende Raum-/Zielsperren verhindern konkurrierende Schaltfolgen.
+- **Natürliches Licht:** Eine vorhandene, gültige Adaptive-Lighting-Zuordnung liefert den
+  Weißton für geeignete Lampen; die gewählte Stufenhelligkeit bleibt maßgeblich. Ohne diese
+  optionale Integration funktioniert die Regelung ebenfalls.
+- **Store und API:** `rooms.<area_id>.brightness` enthält `enabled`, `lux_sensor_entity_id`,
+  `target_lux`, `hysteresis_lux`, `min_interval_seconds`, `time_window`, `person_entity_ids`
+  und `stages` mit jeweils `entity_ids` und `brightness`. Separate
+  `rooms.<area_id>.brightness_learned` enthalten die numerischen/null-Anteile in Stufenreihenfolge.
+  Laufzeitbesitz, Timer und manuelle Pause werden nicht gespeichert. Alte Räume brauchen keine
+  neue Konfiguration. `brightness/get`, `brightness/save` und `brightness/set_enabled` bedienen
+  den deutschen Raumeditor und den Status mit aktuellem Lux, Ziel, aktiver Stufe und Lernwerten.
+- **Prüfung/Übergabe:** Nur synthetische Räume, Sensoren, Personen und Geräte.
+  [Stufe-5-Testplan](STUFE_5_TESTPLAN.md) trennt automatisierte Prüfung und praktische Abnahme.
+  Keine Bereitstellung und keine echten Geräteaktionen. Nach Öffnen des Draft-PR endet die
+  Arbeit einschließlich CI-Überwachung bis Claudes Rückmeldung.
 
 ## Tests
 

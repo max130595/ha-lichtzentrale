@@ -13,6 +13,7 @@ const scene: Scene = {id: 'test_scene', name: 'Testszene', area_id: room.area_id
 function setup(r = room) {
   const callWS = vi.fn(async (req: {type: string; [key: string]: unknown}): Promise<unknown> => {
     if (req.type.endsWith('rooms/list')) return [r];
+    if (req.type.endsWith('brightness/get')) return {config: null, status: {paused: false, enabled: false, current_lux: null, active_stage: 0, learned_lux: [], last_error: null}, lux_sensors: [], persons: []};
     if (req.type.endsWith('motion/get')) return {config: null, status: {paused: false, active: false, enabled: false}, sensors: [], lux_sensors: []};
     if (req.type.endsWith('lights/list')) return r.lights;
     if (req.type.endsWith('hue_scenes/list')) return [{entity_id: 'scene.test_hue', area_id: r.area_id, name: 'Test Hue', available: true}];
