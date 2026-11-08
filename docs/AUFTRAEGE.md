@@ -8,7 +8,7 @@ Bad oben in Tests oder Beispielen, Schalter (`switch`) werden nie gedimmt.
 
 | Stufe | Branch | Status |
 |---|---|---|
-| 4a Zeitfenster-Bedingung | `stufe-4a-zeitfenster` | in Arbeit |
+| 4a Zeitfenster-Bedingung | `stufe-4a-zeitfenster` | erledigt (PR #9, getestet 08.11.) |
 | 5 Grundhelligkeit | `stufe-5-grundhelligkeit` | offen |
 | 6 Anwesenheitssimulation | `stufe-6-urlaub` | offen |
 | 7 Sicherung, „Alles aus“, Öffnung für andere | `stufe-7-sicherung` | offen |
