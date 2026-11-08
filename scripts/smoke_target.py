@@ -62,6 +62,7 @@ from custom_components.lichtzentrale.bindings import (  # noqa: E402
     BindingManager,
     list_buttons,
 )
+from custom_components.lichtzentrale.brightness import BrightnessManager  # noqa: E402
 from custom_components.lichtzentrale.config_flow import LichtzentraleConfigFlow  # noqa: E402
 from custom_components.lichtzentrale.const import DOMAIN, STORAGE_KEY  # noqa: E402
 from custom_components.lichtzentrale.dynamic_scenes import (  # noqa: E402
@@ -701,6 +702,61 @@ async def run(config_dir: str) -> None:
         await schedules.shutdown()
         await active.shutdown()
         assert not active.list()
+        # Stage five: native service events, lux state and persistent stage settings.
+        # Dedicated synthetic room: no inherited scenes, motion or adaptive mapping.
+        brightness_area = area_registry.async_get(hass).async_create("Fixture brightness room")
+        brightness_lamp = entities.async_get_or_create("light", "synthetic", "fixture-basic-lux-light")
+        entities.async_update_entity(brightness_lamp.entity_id, area_id=brightness_area.id)
+        brightness_lux = "sensor.fixture_basic_lux"
+        lux_attrs = {"device_class": "illuminance", "unit_of_measurement": "lx"}
+        hass.states.async_set(brightness_lamp.entity_id, "off", {"supported_color_modes": ["brightness"]})
+        hass.states.async_set(brightness_lux, "10", lux_attrs)
+        await final.async_set_lights([*final.data["settings"]["light_entity_ids"], brightness_lamp.entity_id])
+        brightness_config = await final.async_set_brightness(brightness_area.id, {
+            "enabled": True, "lux_sensor_entity_id": brightness_lux,
+            "target_lux": 100, "hysteresis_lux": 10, "min_interval_seconds": 180,
+            "time_window": None, "person_entity_ids": [],
+            "stages": [{"entity_ids": [brightness_lamp.entity_id], "brightness": 135}],
+        })
+        await hass.async_block_till_done()
+        brightness = BrightnessManager(hass, final)
+        hass.data[DOMAIN]["brightness"] = brightness
+        brightness.start()
+        try:
+            count = len(calls)
+            await brightness.async_evaluate(brightness_area.id)
+            await hass.async_block_till_done()
+            assert len(calls) == count + 1
+            assert calls[-1].domain == "light" and calls[-1].data["brightness"] == 135
+            assert hass.states.get(brightness_lamp.entity_id).state == "on"
+            assert brightness.status(brightness_area.id)["active_stage"] == 1
+            assert brightness.status(brightness_area.id)["learned_lux"] == [None]
+            assert not brightness.status(brightness_area.id)["paused"]
+            # The minimum interval prevents immediate removal after sudden brightness.
+            hass.states.async_set(brightness_lux, "500", lux_attrs)
+            await hass.async_block_till_done()
+            await brightness.async_evaluate(brightness_area.id)
+            assert len(calls) == count + 1
+            # A real native service event, even without a changed on/off state, pauses.
+            await hass.services.async_call("light", "turn_on", {
+                "entity_id": brightness_lamp.entity_id, "brightness": 95,
+            }, blocking=True, context=Context())
+            await hass.async_block_till_done()
+            assert brightness.status(brightness_area.id)["paused"]
+            count = len(calls)
+            hass.states.async_set(brightness_lux, "0", lux_attrs)
+            await hass.async_block_till_done()
+            await brightness.async_evaluate(brightness_area.id)
+            assert len(calls) == count
+            persisted_brightness = LichtzentraleStore(hass)
+            await persisted_brightness.async_load()
+            room = persisted_brightness.data["rooms"][brightness_area.id]
+            assert room["brightness"] == brightness_config
+            assert room["brightness_learned"] == [None]
+            assert "paused" not in room["brightness"]
+            await final.async_set_brightness_enabled(brightness_area.id, False)
+        finally:
+            await brightness.shutdown()
         await final.async_remove()
         assert not path.exists()
     finally:
@@ -730,7 +786,9 @@ def main() -> None:
         "ownership, dim/restore without switch dim, manual pause, empty-room release and motion persistence; parentless adapt_lgt updates and contextless "
         "motion-owned dynamic colors preserve vacancy shutdown; schedule time calculation, manual selected-light/switch "
         "dispatch, bounded transition selection, atomic save/enable/delete, Lux timer registration and cancellation, "
-        "schedule persistence/reload/unload, overnight windows and persisted daily lux limits."
+        "schedule persistence/reload/unload, overnight windows and persisted daily lux limits; "
+        "brightness-stage native dispatch/payload, minimum interval, manual-service pause, "
+        "configuration and unknown-learning persistence, disable and unload."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "

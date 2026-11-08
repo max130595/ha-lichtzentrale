@@ -31,6 +31,17 @@ def _require(value, message="Ungültiger Zeitplan."):
         raise ServiceValidationError(message)
 
 
+def validate_time_window(window):
+    """Share closed optional wall-time/solar windows across room automations."""
+    if window is None:
+        return None
+    _require(isinstance(window, dict) and set(window) == {"after", "before"},
+             "Das Zeitfenster benötigt Beginn und Ende; leere Grenzen bleiben offen.")
+    result = {key: validate_boundary(value) if value is not None else None
+              for key, value in window.items()}
+    return result if any(value is not None for value in result.values()) else None
+
+
 def action_targets(hass, store, action):
     """Validate references/grants again and return the affected light targets."""
     kind = action["type"]
@@ -106,15 +117,7 @@ def validate_schedule(hass, store, raw):
     _require(isinstance(condition, dict)
              and set(condition) in ({"weekdays", "person_entity_ids", "light_state"},
                                    {"weekdays", "person_entity_ids", "light_state", "time_window"}))
-    window = condition.get("time_window")
-    if window is not None:
-        _require(isinstance(window, dict) and set(window) == {"after", "before"},
-                 "Das Zeitfenster benötigt Beginn und Ende; leere Grenzen bleiben offen.")
-        window = {key: validate_boundary(value) if value is not None else None
-                  for key, value in window.items()}
-        if all(value is None for value in window.values()):
-            window = None
-    result["condition"]["time_window"] = window
+    result["condition"]["time_window"] = validate_time_window(condition.get("time_window"))
     days, persons = condition["weekdays"], condition["person_entity_ids"]
     _require(isinstance(days, list) and all(type(d) is int and 0 <= d <= 6 for d in days))
     _require(isinstance(persons, list) and all(isinstance(p, str) and p in {

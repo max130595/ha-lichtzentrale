@@ -273,6 +273,10 @@ async def _toggle_room(
     switch_only = not light_states
     if on is None:
         on = not any(state.state == "on" for state in (light_states or states))
+    brightness_manager = hass.data.get(DOMAIN, {}).get("brightness")
+    if not on and brightness_manager:
+        context = context or Context()
+        brightness_manager.begin_room_off(area_id, context)
     settings = store.data["rooms"].get(area_id, {})
     default = settings.get("default_on", "last")
     if on and default not in {"adaptive", "last"}:
@@ -372,6 +376,8 @@ async def _toggle_room(
                 ]
             },
         )
+    if not on and brightness_manager and not result.get("failed") and not result["skipped"]:
+        brightness_manager.room_off(area_id)
     return result
 
 

@@ -127,6 +127,7 @@ def async_setup_websocket_api(hass: HomeAssistant) -> None:
         *STAGE_TWO_HANDLERS,
         *STAGE_THREE_HANDLERS,
         *MOTION_HANDLERS,
+        *BRIGHTNESS_HANDLERS,
         *SCHEDULE_HANDLERS,
     ):
         websocket_api.async_register_command(hass, handler)
@@ -419,4 +420,42 @@ SCHEDULE_HANDLERS = (
         vol.Required("schedule_id"): cv.string, vol.Required("enabled"): bool,
     }, schedule_set_enabled),
     command("schedule/test", {vol.Required("schedule_id"): cv.string}, schedule_test),
+)
+
+
+async def brightness_get(hass, store, msg, context):
+    from .motion_config import list_lux_sensors
+    from .schedule_config import list_persons
+
+    area_id = msg["area_id"]
+    room = store.data["rooms"].get(area_id, {})
+    config = room.get("brightness")
+    manager = hass.data.get(DOMAIN, {}).get("brightness")
+    return {
+        "config": config,
+        "status": manager.status(area_id) if manager else {
+            "enabled": bool(config and config.get("enabled")), "paused": False,
+            "current_lux": None, "active_stage": 0,
+            "learned_lux": room.get("brightness_learned", []), "last_error": None,
+        },
+        "lux_sensors": list_lux_sensors(hass), "persons": list_persons(hass),
+    }
+
+
+async def brightness_save(hass, store, msg, context):
+    await store.async_set_brightness(msg["area_id"], msg["config"])
+    return await brightness_get(hass, store, msg, context)
+
+
+async def brightness_set_enabled(hass, store, msg, context):
+    await store.async_set_brightness_enabled(msg["area_id"], msg["enabled"])
+    return await brightness_get(hass, store, msg, context)
+
+
+BRIGHTNESS_HANDLERS = (
+    command("brightness/get", AREA_FIELDS, brightness_get),
+    command("brightness/save", {**AREA_FIELDS, vol.Required("config"): dict}, brightness_save),
+    command("brightness/set_enabled", {
+        **AREA_FIELDS, vol.Required("enabled"): bool,
+    }, brightness_set_enabled),
 )

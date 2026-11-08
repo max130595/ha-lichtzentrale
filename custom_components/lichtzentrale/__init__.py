@@ -9,6 +9,7 @@ from homeassistant.helpers.service import async_register_admin_service
 
 from .adaptive import async_set_adaptive
 from .bindings import BindingManager
+from .brightness import BrightnessManager
 from .const import DOMAIN, SERVICE_APPLY_PALETTE
 from .dynamic_scenes import DynamicSceneManager, async_stop_room
 from .motion import MotionManager
@@ -107,6 +108,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=vol.Schema(ADAPTIVE_FIELDS),
         supports_response=SupportsResponse.OPTIONAL,
     )
+    runtime["brightness"] = BrightnessManager(hass, store)
+    runtime["brightness"].start()
     runtime["motion"] = MotionManager(hass, store)
     runtime["motion"].start()
     runtime["bindings"] = BindingManager(hass, store)
@@ -132,6 +135,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload without removing persisted user settings."""
+    if brightness := hass.data[DOMAIN].pop("brightness", None):
+        await brightness.shutdown()
     if schedules := hass.data[DOMAIN].pop("schedules", None):
         await schedules.shutdown()
     if motion := hass.data[DOMAIN].pop("motion", None):

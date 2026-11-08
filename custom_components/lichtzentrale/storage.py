@@ -1,6 +1,7 @@
 # Geändert für Lichtzentrale
 """Versioned server-side persistence, never browser storage."""
 
+import math
 from asyncio import Lock
 from copy import deepcopy
 from typing import Any
@@ -331,6 +332,67 @@ class LichtzentraleStore:
 
     def _refresh_motion(self, area_id: str) -> None:
         if manager := self._hass.data.get(DOMAIN, {}).get("motion"):
+            manager.refresh_config(area_id)
+
+    async def async_set_brightness(self, area_id: str, config: dict) -> dict:
+        """Commit settings atomically, retaining learning only for unchanged stages/sensor."""
+        from .brightness_config import validate_brightness
+
+        async with self._lock:
+            config = validate_brightness(self._hass, self, area_id, config)
+            updated = deepcopy(self._data)
+            room = updated["rooms"].setdefault(area_id, {})
+            previous = room.get("brightness", {})
+            if any(previous.get(key) != config[key] for key in ("lux_sensor_entity_id", "stages")):
+                room["brightness_learned"] = [None] * len(config["stages"])
+            room["brightness"] = config
+            await self._store.async_save(updated)
+            self._data = updated
+            self._refresh_brightness(area_id)
+            return deepcopy(config)
+
+    async def async_set_brightness_enabled(self, area_id: str, enabled: bool) -> dict:
+        """Always permit disabling stale setups; validate all references on enabling."""
+        from .brightness_config import validate_brightness
+
+        if type(enabled) is not bool:
+            raise ServiceValidationError("Bitte einen Ein/Aus-Wert angeben.")
+        async with self._lock:
+            config = deepcopy(self._data["rooms"].get(area_id, {}).get("brightness"))
+            if not isinstance(config, dict):
+                raise ServiceValidationError("Bitte zuerst die Grundhelligkeit einrichten.")
+            config["enabled"] = enabled
+            if enabled:
+                config = validate_brightness(self._hass, self, area_id, config)
+            updated = deepcopy(self._data)
+            updated["rooms"][area_id]["brightness"] = config
+            await self._store.async_save(updated)
+            self._data = updated
+            self._refresh_brightness(area_id)
+            return deepcopy(config)
+
+    async def async_learn_brightness(self, area_id, expected_config, index, rise, *, guard=None):
+        """Persist an EMA sample without refreshing runtime or resurrecting stale work."""
+        if (type(index) is not int or index < 0 or type(rise) not in (int, float)
+                or not math.isfinite(rise) or rise < 0):
+            raise ServiceValidationError("Ungültiger gelernter Lichtanteil.")
+        async with self._lock:
+            room = self._data["rooms"].get(area_id, {})
+            config = room.get("brightness")
+            if (not isinstance(config, dict) or config != expected_config
+                    or index >= len(config["stages"]) or (guard is not None and not guard())):
+                return False
+            updated = deepcopy(self._data)
+            room = updated["rooms"][area_id]
+            learned = room.setdefault("brightness_learned", [None] * len(config["stages"]))
+            previous = learned[index]
+            learned[index] = rise if previous is None else previous * 0.75 + rise * 0.25
+            await self._store.async_save(updated)
+            self._data = updated
+            return True
+
+    def _refresh_brightness(self, area_id):
+        if manager := self._hass.data.get(DOMAIN, {}).get("brightness"):
             manager.refresh_config(area_id)
 
     async def async_save_schedule(self, raw: dict) -> dict:

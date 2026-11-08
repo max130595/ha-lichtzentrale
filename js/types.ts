@@ -25,3 +25,8 @@ export type ScheduleAction = {type: 'scene'; scene_id: string} | {type: 'adaptiv
 export interface Schedule {id: string; name: string; enabled: boolean; trigger: ScheduleTrigger; condition: {weekdays: number[]; person_entity_ids: string[]; light_state: 'any' | 'on' | 'off'; time_window?: {after: MotionBoundary | null; before: MotionBoundary | null} | null}; action: ScheduleAction; transition: number | null}
 export interface ScheduleEntry extends Schedule {next_run: string | null; last_error: string | null}
 export interface SchedulesResponse {time_zone: string; schedules: ScheduleEntry[]; lux_sensors: MotionSensor[]; persons: {entity_id: string; name: string; available: boolean}[]}
+
+export interface BrightnessStage {entity_ids: string[]; brightness: number | null}
+export interface BrightnessConfig {enabled: boolean; lux_sensor_entity_id: string; target_lux: number; hysteresis_lux: number; min_interval_seconds: number; time_window: {after: MotionBoundary | null; before: MotionBoundary | null} | null; person_entity_ids: string[]; stages: BrightnessStage[]}
+export interface BrightnessStatus {enabled: boolean; paused: boolean; current_lux: number | null; active_stage: number; learned_lux: (number | null)[]; last_error: string | null}
+export interface BrightnessResponse {config: BrightnessConfig | null; status: BrightnessStatus; lux_sensors: MotionSensor[]; persons: {entity_id: string; name: string; available: boolean}[]}
