@@ -332,15 +332,76 @@ Allgemein für alle Taster mit `toggle_lights` und `toggle_room`. Eingesetzt wir
 
 Lieferung als Git-Bundle mit Tests und Screenshots bei 390 px: Effekt-Feld, Tasterdialog „Ambiente zuerst“, Skript-Feld der Szene. Keine Vorschauphase.
 
-## Stufe 6 – Anwesenheitssimulation
+## Stufe 6 – Anwesenheitssimulation (Urlaubsmodus)
 
-- Schalter „Urlaubsmodus“ in der Oberfläche und als Service.
-- Pro ausgewähltem Raum abends zwischen wählbaren Grenzen (Uhrzeit/Sonnenstand) zufällige Ein-
-  und Ausschaltzeiten mit Mindest- und Höchstdauer, plausible Abfolge (Wohnraum lang, Flur/Bad
-  kurz).
-- Optional „aus dem Verlauf lernen“: typische Schaltzeiten der letzten 14 Tage aus dem Recorder,
-  zufällig um ±20 Minuten verschoben.
-- Bewegungsautomatik und Grundhelligkeit sind im Urlaubsmodus pausiert.
+Basis: aktuelles `main` (0.5.2). Branch `stufe-6-urlaub`, Version 0.6.0.
+Angaben von Max vom 09.11.: nur manuelles Einschalten, alle Räume wählbar, abends und kurz morgens.
+
+### 1. Ein- und Ausschalten
+- Der Urlaubsmodus wird **nur manuell** eingeschaltet. Keine Automatik über Anwesenheit.
+- Bedienwege:
+  - Schalter in der Oberfläche unter „Mehr“
+  - Home-Assistant-Entity `switch.lichtzentrale_urlaubsmodus` für Dashboards
+  - Service `lichtzentrale.set_vacation` mit `enabled` und optional `until`
+- Optional ein **Enddatum**. Danach schaltet sich der Modus selbst aus, und die normalen Zeitpläne laufen wieder.
+- Der Zustand wird im Store gespeichert und übersteht einen Neustart. Nach einem Neustart wird der aktuelle Abschnitt neu geplant, nichts wird nachgeholt.
+
+### 2. Räume
+- Räume und Zonen sind frei wählbar. Grundsätzlich sind alle Räume mit freigegebenen Lampen möglich.
+- Pro Raum gibt es einen Typ mit eigener Dauer:
+  - **Wohnraum:** lang, 45–150 min
+  - **Durchgang** (Flur, Bad): kurz, 2–12 min
+  - **Schlafraum:** spät, 10–40 min
+- Pro Raum zusätzlich:
+  - Gewicht für die Häufigkeit
+  - Einschaltart: Szene des Raums, feste Helligkeit oder letzter Zustand
+- Nie gleichzeitig mehr als N Räume an (Standard 3). Die Abfolge soll plausibel sein: zuerst Wohnraum, später Bad oder Flur, zuletzt Schlafraum.
+
+### 3. Zeitfenster
+- **Abend:** Beginn Sonnenuntergang mit Versatz (Standard −15 min), Ende zufällig zwischen zwei Uhrzeiten (Standard 22:30–23:30).
+- **Morgen, kurz:** zufällig in einem Fenster (Standard 6:30–7:30), 1–2 Räume mit insgesamt 10–30 min.
+  Nur wenn es zu dem Zeitpunkt noch dunkel ist (Sonnenstand). Das Fenster kann einzeln abgeschaltet werden.
+- Alle Grenzen sind einstellbar im bekannten Format, Uhrzeit oder Sonne plus Versatz.
+- Jeden Tag wird ein neuer Zufallsplan erstellt. Der Plan des Tages ist in der Oberfläche sichtbar,
+  einschließlich „nächste Schaltung“.
+- Optional „aus dem Verlauf lernen“: typische Schaltzeiten pro Raum aus dem Recorder der letzten 14 Tage, zufällig um ±20 min verschoben.
+  Liegen zu wenig Daten vor, gilt der Zufallsplan.
+
+### 4. Zusammenspiel mit dem Rest
+- Während des Urlaubsmodus sind pausiert:
+  - Bewegungsautomatik
+  - Grundhelligkeit
+  - alle Lichtzentrale-Zeitpläne
+  - Taster-Ambiente
+- Taster schalten trotzdem normal. Ein Tastendruck in einem Raum nimmt diesen Raum für den Rest des Abschnitts aus der Simulation heraus.
+- Beim Ausschalten des Urlaubsmodus gehen alle Lampen aus, die die Simulation eingeschaltet hat, und nur diese. Danach gelten wieder die normalen Regeln, ohne nachträgliches Auslösen verpasster Zeitpläne.
+- Befehle laufen über die bestehenden Wege: Freigaben, Begrenzer und Effekte. Die Simulation schaltet nie Lampen, die nicht freigegeben sind.
+- Optional ein Push-Hinweis beim Ein- und Ausschalten über einen wählbaren `notify`-Dienst.
+
+### 5. Oberfläche
+- Karte „Urlaubsmodus“:
+  - Schalter und Enddatum
+  - Räume mit Typ, Gewicht und Einschaltart
+  - Zeitfenster Abend und Morgen
+  - maximale Anzahl gleichzeitig eingeschalteter Räume
+- „Plan heute“ als Zeitleiste, dazu ein Knopf „Probelauf 5 min“. Der Probelauf spielt einen verkürzten Plan nur für die ausgewählten Räume ab.
+- Mobil bei 390 px ohne Überlauf.
+
+### 6. Tests und Lieferung
+- Tests:
+  - Planerzeugung mit festem Seed
+  - Grenzen und Dauern
+  - Höchstzahl gleichzeitiger Räume
+  - Morgenfenster bei Helligkeit übersprungen
+  - Enddatum
+  - Neustart mitten im Abschnitt
+  - Pausieren und Fortsetzen der anderen Automatiken
+  - Tastendruck nimmt Raum heraus
+  - beim Ausschalten nur eigene Lampen aus
+  - entzogene Freigabe
+  - Verlauf-Lernen mit und ohne Daten
+- Lieferung als Git-Bundle mit Screenshots bei 390 px. Keine Vorschauphase.
+- Abnahme am echten System durch Claude nur mit dem Probelauf, **nicht in den Kinderzimmern und nicht im Bad OG**.
 
 ## Stufe 7 – Sicherung, „Alles aus“, Öffnung für andere
 
