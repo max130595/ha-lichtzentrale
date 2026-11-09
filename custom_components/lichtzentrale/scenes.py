@@ -26,6 +26,7 @@ from .rooms import (
     async_dispatch,
     check_execution_guard,
     light_service_data,
+    locked_room,
     room_targets,
     validate_control_options,
     validate_transition,
@@ -43,20 +44,26 @@ def _name(value):
     return value.strip()
 
 
-def _area(hass, area_id):
+def _area(hass, area_id, store=None):
+    if store is not None:
+        from .zones import validate_area
+
+        return validate_area(hass, store, area_id)
     if not isinstance(area_id, str) or ar.async_get(hass).async_get_area(area_id) is None:
         _error("Der Raum wurde nicht gefunden.")
 
 
 def _targets(hass, store, area_id, targets):
-    _area(hass, area_id)
+    _area(hass, area_id, store)
     if any(not isinstance(entity_id, str) for entity_id in targets):
         _error("Ungültige Lampenkennung.")
     ids = validate_lights(hass, list(targets))
     allowed = store.data["settings"]["light_entity_ids"]
     if not ids or any(e not in allowed for e in ids):
         _error("Alle Lampen der Szene müssen ausdrücklich freigegeben sein.")
-    if any(entity_area_id(hass, e) != area_id for e in ids):
+    from .zones import contains
+
+    if any(not contains(hass, store, area_id, e) for e in ids):
         _error("Alle Lampen der Szene müssen zum gewählten Raum gehören.")
     return ids
 
@@ -219,7 +226,7 @@ async def async_save_scene(hass, store, scene):
     if not isinstance(scene, dict):
         _error("Ungültige Szene.")
     area_id = scene.get("area_id")
-    _area(hass, area_id)
+    _area(hass, area_id, store)
     existing = _scene(store, scene["id"]) if scene.get("id") else None
     if existing and existing["area_id"] != area_id:
         _error("Eine Szene kann nicht in einen anderen Raum verschoben werden.")
@@ -237,7 +244,12 @@ async def async_save_scene(hass, store, scene):
     verteilung = validate_distribution(scene.get("verteilung", "zufall"))
     if dynamic["welle"] and verteilung == "zufall":
         _error("Für eine Welle bitte eine räumliche Verteilung auswählen.")
+    night = scene.get("night", existing.get("night", False) if existing else False)
+    if type(night) is not bool:
+        _error("Die Nachtlicht-Kennzeichnung muss ein Wahrheitswert sein.")
     result = {
+        **deepcopy(existing or {}),
+        "night": night,
         "id": existing["id"] if existing else str(uuid4()),
         "name": _name(scene.get("name")),
         "area_id": area_id,
@@ -342,8 +354,7 @@ async def async_apply_scene(
 ):
     """Serialize recalls per room; dispatch each recall's individual lamps in parallel."""
     initial = _scene(store, scene_id)
-    locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
-    async with locks.setdefault(initial["area_id"], Lock()):
+    async with locked_room(hass, store, initial["area_id"]):
         return await async_apply_scene_locked(
             hass, store, scene_id, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard
         )
@@ -355,7 +366,7 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
     validate_transition(transition)
     scene = _scene(store, scene_id)
     area_id = scene["area_id"]
-    _area(hass, area_id)
+    _area(hass, area_id, store)
     from .adaptive import async_pause_adaptive
 
     validate_dynamic(scene.get("dynamic", {}), scene["kind"])
@@ -386,6 +397,7 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
             brightness=scene.get("brightness"),
             context=context,
             manage=False,
+            layout_area_id=area_id,
             verteilung=scene.get("verteilung", "zufall"),
             welle=scene.get("dynamic", {}).get("welle", False),
             transition=scene["dynamic"]["transition"] if transition is None else transition,

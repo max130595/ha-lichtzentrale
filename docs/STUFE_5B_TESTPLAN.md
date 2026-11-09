@@ -1,11 +1,12 @@
-# Stufe 5b: Vorschau prüfen, Umsetzung getrennt freigeben
+# Stufe 5b: Vorschau und freigegebene Umsetzung prüfen
 
-## Umfang dieses Draft-PRs
+## Teil 1: Freigegebene Vorschau
 
 Teil 1 ist eine eigenständige Handy-Vorschau unter `docs/vorschau-5b/index.html`.
 Alle Daten sind erfunden und bleiben nur im Arbeitsspeicher der Seite. Die Vorschau
-verbindet sich weder mit Home Assistant noch mit Geräten. Produktiver Quellcode,
-Frontend-Bundle, Integrationsversion und gespeicherte Nutzerdaten bleiben unverändert.
+verbindet sich weder mit Home Assistant noch mit Geräten. Die Vorschau selbst verändert weder produktiven Quellcode noch gespeicherte Nutzerdaten.
+Nach ihrer ausdrücklichen Freigabe enthält dieser Branch nun zusätzlich die produktive
+Umsetzung (Version 0.4.0). Die folgenden Vorschauprüfungen bleiben getrennt davon.
 
 `index.html` herunterladen und in einem Browser öffnen. Kein Build und kein Konto nötig.
 Die Datei funktioniert auch offline. Auf einem breiten Bildschirm kann die Prüfbreite mit `?width=320`, `?width=390` oder
@@ -74,9 +75,10 @@ und Browser-Persistenzzugriffen. Sie ersetzen keine Prüfung mit Home Assistant.
 Vorhandene Frontend-Regression: `npm run typecheck`, `npm run lint`, `npm test`.
 Der genaue ausgeführte Stand und die manuellen Handyprüfungen stehen im PR.
 
-## Teil 2: Erst nach ausdrücklicher Freigabe
+## Teil 2: Produktive Umsetzung nach ausdrücklicher Freigabe
 
-Diese Punkte sind **offen**, nicht durch eine klickbare Vorschau nachgewiesen:
+Die folgenden Abnahmekriterien gelten für den produktiven Code. Automatisierte Tests
+verwenden ausschließlich synthetische Daten; eine Prüfung mit echten Geräten bleibt offen:
 
 - Serverseitiges Speichern und additives Migrieren: Bestehende Szenen, Paletten,
   Tasterbelegungen, Ein-Aktions-Zeitpläne, Bewegungs- und Grundhelligkeitsregeln samt
@@ -102,5 +104,66 @@ Diese Punkte sind **offen**, nicht durch eine klickbare Vorschau nachgewiesen:
 - Erst nach erfolgreicher Abnahme schaltet Claude die bisherigen einzelnen
   Zigbee2MQTT-Automationen im echten System ab. Dieser Draft verändert sie nicht.
 
-**Haltepunkt:** Nach Öffnen des Draft-PRs endet die Arbeit an Teil 1. Keine produktive
-Umsetzung, Nachbesserung am Branch oder CI-Überwachung bis zur vereinbarten Rückmeldung.
+### Reproduzierbare Prüfungen
+
+1. `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`.
+   Den Build wiederholen und Bundle/Lizenzdateien auf identische Bytes prüfen.
+2. `node --test docs/vorschau-5b/preview.check.cjs` für die getrennte Vorschau.
+3. Python 3.14 mit `requirements-test.txt`: `ruff check custom_components tests scripts`
+   und `python -m pytest -q`. Die pytest-Abhängigkeit verwendet HA 2026.10.4.
+4. Getrennte Python-3.14-Umgebung mit `requirements-ha2026.11.txt`:
+   `python scripts/smoke_target.py`. Dieser native HA-2026.11.0-Lauf prüft Registry,
+   Services und echten Store mit synthetischen Entities, nicht echte Hardware.
+
+### Gezielte Abdeckung im Repository
+
+- `tests/test_stage5b_targets.py`: überlappende Zonen/Freigaben, entfernte Referenzen,
+  Nachtlicht-Kennzeichnung, unbekannte Szenenfelder, deduplizierte allgemeine Aktionen,
+  Switch-Fähigkeiten, Tagesstand/Neustart, Fehler/No-op und gemeinsame Raumsperren.
+- `tests/test_zone_runtime.py`: zoneneigene Positionen/Farbverteilung, Mitgliedschaft vor
+  jedem Dynamiktick, Stopp überlappender Dynamik, kein Wecken ausgeschalteter Ziele und
+  Zonenvalidierung bei Bewegung/Grundhelligkeit.
+- `tests/test_schedule_actions.py` und bestehende Zeitplantests: streng serielle
+  Mehrfachaktionen, Zone aus → Raum-Nachtlicht und umgekehrt, Conditions vor der Folge,
+  deaktivierte Pläne, Fehler, Unterbrechungen sowie alte Pläne und Zusatzfelder.
+- `tests/test_bindings.py` / `test_bindings_api.py`: gleiche generische Ereignistypen mit
+  unterschiedlichen tatsächlich gelernten Attributen, Richtungs-/Geschwindigkeitswerte,
+  ablaufende/abgebrochene Anlernsitzungen, persistente Zuordnung und alte Hue-Belegungen.
+- `js/AutomationWizard.test.tsx`, `js/Zones.test.tsx` und erweiterte App-/Rooms-/Buttons-
+  Tests: neue Bedienabläufe, Back/Cancel, Zielübernahme, weitere Aktionen, Schalter,
+  Szene erstellen, Vorlagen und Ausblenden des Szenenfelds bei anderen Aktionen.
+- `scripts/smoke_target.py`: zusätzlich Zonen über Raumgrenzen, Nachtlicht-Markierung,
+  volle Helligkeit, manuelle Änderungen ohne Verlust des Automatikstands, erneutes Laden
+  vom Datenträger und Rückkehr zum gespeicherten Aus-Stand.
+
+### Noch durch Claude am echten System abzunehmen
+
+- Handy-Sichtprüfung bei 320/390/430 px, Scrollen, Daumenbedienung und HA-Theme. DOM-Tests
+  sind kein Nachweis für Pixel-Layout oder echte Browserdarstellung.
+- HACS-Installation, vollständiger Konfigurationseintrag-/Panel-/WebSocket-Lebenszyklus,
+  Neustart, reale Logs und Geräteantworten unter HA 2026.11.
+- Tatsächliche Zigbee2MQTT-Attribute für jede physische Taste und Drehgeste anlernen.
+  Die Vorlage rät keine Quellenzuordnung. Erst nach erfolgreichem Test die bisherigen
+  externen Automationen abschalten; dieser Branch tut das nicht.
+- Optionales Adaptive Lighting am vorhandenen System prüfen, falls später installiert.
+  Ohne Integration werden dessen Bedienelemente nicht angeboten.
+- Rückkehr zu Hue-/dynamischen Nachtlichtszenen und Gerätefarbrundung prüfen. Ein fehlender
+  oder ungültiger Automatikstand darf keine Ersatzszene oder beliebige Lampe auslösen.
+- Bei gelöschter Zone bleiben verknüpfte Szenen/Pläne erhalten und melden das fehlende Ziel,
+  statt still Daten zu löschen. Die Zuordnung muss der Nutzer ausdrücklich reparieren.
+
+**Haltepunkt:** Nach Aktualisierung des Draft-PRs mit Teil 2 endet die Arbeit wieder.
+Keine weitere Branch-Änderung, Live-Aktion oder CI-Überwachung bis zur Rückmeldung.
+
+## Ausgeführter Entwicklungsstand, Teil 2
+
+- Python-Gesamtsuite: **821 bestanden** unter HA 2026.10.4 / Python 3.14.
+- Frontend: **141 bestanden in 10 Dateien** mit `npm test -- --maxWorkers=1`.
+  Der anfängliche parallele Lauf hatte zwei Startzeitüberschreitungen im Vitest-Pool;
+  der vollständige serielle Lauf ist ohne Fehler abgeschlossen.
+- TypeScript, ESLint und Ruff: bestanden. Getrennte Vorschau: **22 bestanden**.
+- Native Smoke-Prüfung mit HA **2026.11.0**: bestanden, ausschließlich synthetische Geräte.
+- Webpack-Build zweimal erfolgreich und Bundle/Lizenzen bytegleich. Die drei bekannten
+  Größenhinweise von Webpack (Bundle über der empfohlenen Grenze) sind keine Buildfehler.
+- Keine visuelle Handy-/Browser-Abnahme, echte Installation oder Hardwareprüfung erfolgt.
+  GitHub-CI, HACS-Action und hassfest werden nach Übergabe ausdrücklich nicht überwacht.

@@ -37,16 +37,15 @@ describe('Räume und Szenen', () => {
     // A browser generates a zero-detail click for Enter/Space on a native button.
     // jsdom does not synthesize that default action from a keydown by itself.
     fireEvent.click(button, {detail: 0});
-    expect(await screen.findByRole('button', {name: 'Raum einschalten'})).toBeVisible();
+    expect(await screen.findByRole('button', {name: 'Einschalten'})).toBeVisible();
     expect(screen.getByRole('heading', {name: 'Testraum', level: 2})).toBeVisible();
   });
-  it('defaults to rooms and shows persisted last scene with restart', async () => {
+  it('defaults to a compact home without last-scene hints', async () => {
     const callWS = vi.fn(async (req: {type: string}) => req.type.endsWith('rooms/list') ? [room] : req.type === 'lichtzentrale/scenes/list' ? [scene] : []);
     render(<App hass={{callWS} as Hass}/>);
-    expect(screen.getByRole('button', {name: 'Räume'})).toHaveAttribute('aria-current', 'page');
-    expect(await screen.findByText('Zuletzt über Lichtzentrale gestartet: Testszene')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', {name: 'Erneut starten'}));
-    await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/apply', scene_id: scene.id}));
+    expect(screen.getByRole('button', {name: 'Zuhause'})).toHaveAttribute('aria-current', 'page');
+    await screen.findByRole('button', {name: 'Testraum'});
+    expect(screen.queryByText(/Zuletzt über/)).not.toBeInTheDocument();
   });
   it('switch-only room never exposes brightness, color or white controls', async () => {
     const callWS = setup(); await open();
@@ -57,8 +56,10 @@ describe('Räume und Szenen', () => {
   });
   it('snapshots server state and reports unavailable omitted targets', async () => {
     const callWS = setup(); await open();
+    fireEvent.click(screen.getByRole('button', {name: '+ Neue Szene'}));
+    fireEvent.click(screen.getByRole('button', {name: 'Weiter · Name'}));
     fireEvent.change(screen.getByLabelText('Szenenname'), {target: {value: 'Neue Szene'}});
-    fireEvent.click(screen.getByRole('button', {name: 'Aktuellen Zustand als Szene speichern'}));
+    fireEvent.click(screen.getByRole('button', {name: 'Szene speichern'}));
     expect(await screen.findByText(/1 nicht verfügbare Lampe\(n\) fehlen/)).toHaveAttribute('role', 'status');
     expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/snapshot', area_id: room.area_id, name: 'Neue Szene'});
   });
@@ -66,6 +67,7 @@ describe('Räume und Szenen', () => {
     const callWS = setup(); await open();
     fireEvent.click(screen.getByRole('button', {name: 'Testszene als Favorit'}));
     await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/save', scene: {...scene, favorite: true}}));
+    fireEvent.click(screen.getByText('Mehr Optionen · Hue-Szene importieren'));
     await waitFor(() => expect(screen.getByLabelText('Hue-Szene')).toBeEnabled());
     fireEvent.change(screen.getByLabelText('Hue-Szene'), {target: {value: 'scene.test_hue'}});
     fireEvent.click(screen.getByRole('button', {name: 'Hue-Szene importieren'}));
@@ -92,7 +94,7 @@ describe('Räume und Szenen', () => {
     expect(rgbToXy('#ff0000')[0]).toBeCloseTo(.7006, 3); expect(rgbToXy('#000000')).toEqual([.3127, .329]);
   });
   it('deletes only after explicit confirmation', async () => {
-    const callWS = setup(); await open(); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const callWS = setup(); await open(); fireEvent.click(screen.getByText('Szene bearbeiten')); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     fireEvent.click(screen.getByRole('button', {name: 'Löschen'})); expect(callWS.mock.calls.some(([req]) => req.type.endsWith('scene/delete'))).toBe(false);
     confirm.mockReturnValue(true); fireEvent.click(screen.getByRole('button', {name: 'Löschen'}));
     await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/delete', scene_id: scene.id})); confirm.mockRestore();
@@ -118,6 +120,7 @@ describe('Antwortreihenfolge und Sortierung', () => {
     const callWS = vi.fn(async (request: {type: string}): Promise<unknown> => request.type.endsWith('rooms/list') ? [room] : request.type === 'lichtzentrale/scenes/list' ? [scene, {...scene, id: 'test_second', name: 'Zweite Testszene', order: 1}] : []);
     function Host() {const [detail, setDetail] = useState(false); return <Rooms hass={{callWS} as Hass} detail={detail} openRoom={() => setDetail(true)}/>;}
     render(<Host/>); await open();
+    fireEvent.click(screen.getAllByText('Szene bearbeiten')[0]);
     expect(screen.getByRole('button', {name: 'Testszene nach oben'})).toBeDisabled();
     fireEvent.click(screen.getByRole('button', {name: 'Testszene nach unten'}));
     await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scenes/reorder', area_id: room.area_id, scene_ids: ['test_second', scene.id]}));
@@ -137,8 +140,53 @@ it('remembers the selected room after visiting the gallery', async () => {
   const callWS = vi.fn(async (request: {type: string}) => request.type.endsWith('rooms/list') ? [room] : []);
   render(<App hass={{callWS} as Hass}/>);
   fireEvent.click(await screen.findByRole('button', {name: 'Testraum'}));
-  fireEvent.click(screen.getByRole('button', {name: 'Galerie'}));
-  fireEvent.click(screen.getByRole('button', {name: 'Raum'}));
-  expect(await screen.findByRole('button', {name: 'Raum einschalten'})).toBeVisible();
+  fireEvent.click(screen.getByRole('button', {name: 'Farben'}));
+  fireEvent.click(screen.getByRole('button', {name: 'Zuhause'}));
+  fireEvent.click(await screen.findByRole('button', {name: 'Testraum'}));
+  expect(await screen.findByRole('button', {name: 'Einschalten'})).toBeVisible();
   expect(screen.getByRole('heading', {level: 1})).toHaveTextContent('Testraum');
+});
+
+it('places zones before rooms and dims only capable targets directly', async () => {
+  const zone = {...room, kind: 'zone', area_id: 'zone:test_zone', name: 'Testzone', brightness: 128, lights: [{...room.lights[0], entity_id: 'light.test_zone_lamp', supported_color_modes: ['brightness']}]};
+  const callWS = vi.fn(async (request: {type: string}) => request.type.endsWith('rooms/list') ? [room, zone] : []);
+  render(<Rooms hass={{callWS} as Hass} detail={false} openRoom={() => {}}/>);
+  const zoneButton = await screen.findByRole('button', {name: 'Testzone'});
+  const roomButton = screen.getByRole('button', {name: 'Testraum'});
+  expect(zoneButton.compareDocumentPosition(roomButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getAllByRole('slider')).toHaveLength(1);
+  const slider = screen.getByRole('slider', {name: 'Testzone Helligkeit'});
+  fireEvent.change(slider, {target: {value: '200'}}); fireEvent.keyUp(slider, {key: 'ArrowRight'});
+  await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/room/brightness', area_id: zone.area_id, brightness: 200}));
+});
+
+it('cancels new scenes without saving and keeps advanced controls closed', async () => {
+  const callWS = setup(); await open();
+  expect(screen.getByText('Mehr Optionen').parentElement).not.toHaveAttribute('open');
+  expect(screen.queryByText('Zurück zur Automatik')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', {name: '+ Neue Szene'}));
+  fireEvent.click(screen.getByRole('button', {name: 'Weiter · Name'}));
+  expect(screen.getByRole('button', {name: 'Szene speichern'})).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Szenenname'), {target: {value: 'Nicht speichern'}});
+  fireEvent.click(screen.getByRole('button', {name: 'Abbrechen'}));
+  expect(callWS.mock.calls.some(([req]) => req.type.endsWith('scene/snapshot'))).toBe(false);
+});
+
+it('renames a scene without changing its stored properties and cancels without writing', async () => {
+  const callWS = setup(); await open();
+  fireEvent.click(screen.getByText('Szene bearbeiten'));
+  fireEvent.click(screen.getByRole('button', {name: 'Szene umbenennen'}));
+  fireEvent.change(screen.getByLabelText('Neuer Szenenname'), {target: {value: 'Entwurf'}});
+  fireEvent.click(screen.getByRole('button', {name: 'Umbenennen abbrechen'}));
+  expect(callWS.mock.calls.some(([req]) => req.type.endsWith('scene/save'))).toBe(false);
+  fireEvent.click(screen.getByRole('button', {name: 'Szene umbenennen'}));
+  expect(screen.getByLabelText('Neuer Szenenname')).toHaveValue(scene.name);
+  fireEvent.change(screen.getByLabelText('Neuer Szenenname'), {target: {value: '  '}});
+  expect(screen.getByRole('button', {name: 'Namen speichern'})).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Neuer Szenenname'), {target: {value: ' Neuer Name '}});
+  const save = screen.getByRole('button', {name: 'Namen speichern'});
+  fireEvent.click(save); fireEvent.click(save);
+  await screen.findByText('Szenenname gespeichert.');
+  expect(callWS.mock.calls.filter(([req]) => req.type.endsWith('scene/save'))).toHaveLength(1);
+  expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/save', scene: {...scene, name: 'Neuer Name'}});
 });

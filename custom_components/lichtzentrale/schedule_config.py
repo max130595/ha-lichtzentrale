@@ -81,8 +81,34 @@ def action_targets(hass, store, action):
 
 def validate_schedule(hass, store, raw):
     """Normalize new plans; reject stale update IDs and unknown nested fields."""
-    keys = {"name", "enabled", "trigger", "condition", "action", "transition"}
-    _require(isinstance(raw, dict) and set(raw) in (keys, keys | {"id"}))
+    # Persisted extension fields belong to their writer. Preserve them verbatim,
+    # but never accept new/changed unknown input or interpret it as an action.
+    extensions = {}
+    previous = next((p for p in store.data.get("schedules", [])
+                     if isinstance(raw, dict) and p["id"] == raw.get("id")), None)
+    if previous:
+        raw = deepcopy(raw)
+        schemas = {
+            "": {"id", "name", "enabled", "trigger", "condition", "transition", "action", "actions"},
+            "condition": {"weekdays", "person_entity_ids", "light_state", "time_window"},
+            "trigger": {"type", "value", "event", "offset_min", "sensor_entity_id",
+                        "comparison", "threshold", "duration_seconds"},
+            "action": {"type", "scene_id", "area_id", "enabled", "entity_ids", "on", "brightness"},
+        }
+        for section, allowed in schemas.items():
+            value = raw if not section else raw.get(section)
+            old = previous if not section else previous.get(section)
+            if not isinstance(value, dict) or not isinstance(old, dict):
+                continue
+            extra = {key: value[key] for key in set(value) - allowed}
+            _require(all(key in old and old[key] == val for key, val in extra.items()))
+            extensions[section] = deepcopy(extra)
+            for key in extra:
+                value.pop(key)
+    keys = {"name", "enabled", "trigger", "condition", "transition"}
+    _require(isinstance(raw, dict) and set(raw) in (
+        keys | {"action"}, keys | {"action", "id"},
+        keys | {"actions"}, keys | {"actions", "id"}))
     result = deepcopy(raw)
     if "id" in raw:
         _require(isinstance(raw["id"], str) and any(
@@ -126,7 +152,22 @@ def validate_schedule(hass, store, raw):
     _require(condition["light_state"] in ("any", "on", "off"))
     result["condition"]["weekdays"] = sorted(set(days))
     result["condition"]["person_entity_ids"] = list(dict.fromkeys(persons))
-    action = raw["action"]
+    if "actions" in raw:
+        from .target_actions import validate_action
+
+        _require(isinstance(raw["actions"], list) and bool(raw["actions"]),
+                 "Bitte mindestens eine Aktion auswählen.")
+        result["actions"] = [validate_action(hass, store, action) for action in raw["actions"]]
+    else:
+        result["action"] = validate_legacy_action(hass, store, raw["action"])
+    for section, extra in extensions.items():
+        (result if not section else result[section]).update(extra)
+    return result
+
+
+def validate_legacy_action(hass, store, action):
+    """Keep the original action schema and semantics for existing saved plans."""
+    action = deepcopy(action)
     _require(isinstance(action, dict))
     kind = action.get("type")
     fields = {"scene": {"type", "scene_id"}, "adaptive": {"type", "area_id", "enabled"},
@@ -145,5 +186,5 @@ def validate_schedule(hass, store, raw):
                  "Beim Ausschalten bitte keine Helligkeit angeben.")
     targets = action_targets(hass, store, action)
     if kind == "lights":
-        result["action"]["entity_ids"] = targets
-    return result
+        action["entity_ids"] = targets
+    return action

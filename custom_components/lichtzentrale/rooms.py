@@ -3,6 +3,7 @@
 
 import asyncio
 import math
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from homeassistant.components.light import LightEntityFeature
 from homeassistant.core import Context, HomeAssistant, State, callback
@@ -13,6 +14,7 @@ from .color_temperature import find_closest_ct_match
 from .const import DOMAIN
 from .lights import entity_area_id, list_lights, validate_lights
 from .storage import LichtzentraleStore
+from .zones import contains, validate_area, zone_id
 
 COLOR_MODES = {"xy", "hs", "rgb", "rgbw", "rgbww"}
 
@@ -23,9 +25,15 @@ def list_rooms(hass: HomeAssistant, store: LichtzentraleStore) -> list[dict]:
     allowed = store.data["settings"]["light_entity_ids"]
     lights = list_lights(hass, allowed)
     result = []
-    for area in ar.async_get(hass).async_list_areas():
-        members = [item for item in lights if item["allowed"] and item["area_id"] == area.id]
-        if not members:
+    from types import SimpleNamespace
+
+    areas = list(ar.async_get(hass).async_list_areas()) + [
+        SimpleNamespace(id="zone:" + z["id"], name=z["name"])
+        for z in store.data.get("zones", [])
+    ]
+    for area in areas:
+        members = [item for item in lights if item["allowed"] and contains(hass, store, area.id, item["entity_id"])]
+        if not members and zone_id(area.id) is None:
             continue
         status_members = [item for item in members if item["domain"] == "light"] or members
         brightness = [
@@ -36,6 +44,7 @@ def list_rooms(hass: HomeAssistant, store: LichtzentraleStore) -> list[dict]:
         result.append(
             {
                 "area_id": area.id,
+                "kind": "zone" if zone_id(area.id) is not None else "room",
                 "name": area.name,
                 "lights": members,
                 "on": any(item["on"] for item in status_members),
@@ -63,12 +72,11 @@ def list_rooms(hass: HomeAssistant, store: LichtzentraleStore) -> list[dict]:
 @callback
 def room_targets(hass: HomeAssistant, store: LichtzentraleStore, area_id: str) -> list[str]:
     """Return approved area members, validating all before performing work."""
-    if not ar.async_get(hass).async_get_area(area_id):
-        raise ServiceValidationError("Der Raum wurde nicht gefunden.")
+    validate_area(hass, store, area_id)
     targets = [
         entity_id
         for entity_id in store.data["settings"]["light_entity_ids"]
-        if entity_area_id(hass, entity_id) == area_id
+        if contains(hass, store, area_id, entity_id)
     ]
     return validate_lights(hass, targets)
 
@@ -212,13 +220,26 @@ async def async_set_light(
     )
 
 
+@asynccontextmanager
+async def locked_room(hass, store, area_id):
+    """Serialize overlapping zones with physical room and explicit-lamp recalls."""
+    targets = room_targets(hass, store, area_id)
+    original_areas = {entity: entity_area_id(hass, entity) for entity in targets}
+    keys = {area_id, *[area for area in original_areas.values() if area]}
+    locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
+    async with AsyncExitStack() as stack:
+        for key in sorted(keys):
+            await stack.enter_async_context(locks.setdefault(key, asyncio.Lock()))
+        current = room_targets(hass, store, area_id)
+        if current != targets or any(entity_area_id(hass, entity) != original_areas[entity] for entity in current):
+            raise ServiceValidationError("Die Zielauswahl hat sich geändert. Bitte erneut versuchen.")
+        yield
+
+
 async def async_toggle_room(
     hass, store, area_id, on=None, context=None, *, transition=None, guard=None, dispatch_guard=None
 ):
-    from asyncio import Lock
-
-    locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
-    async with locks.setdefault(area_id, Lock()):
+    async with locked_room(hass, store, area_id):
         return await _toggle_room(
             hass, store, area_id, on, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard
         )
@@ -353,7 +374,7 @@ async def _toggle_room(
         check_execution_guard(dispatch_guard)
         if (
             entity_id not in store.data["settings"]["light_entity_ids"]
-            or entity_area_id(hass, entity_id) != area_id
+            or not contains(hass, store, area_id, entity_id)
         ):
             return False
         try:

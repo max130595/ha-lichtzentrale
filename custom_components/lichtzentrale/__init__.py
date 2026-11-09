@@ -8,6 +8,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service import async_register_admin_service
 
 from .adaptive import async_set_adaptive
+from .automatic_state import AutomaticStateManager
 from .bindings import BindingManager
 from .brightness import BrightnessManager
 from .const import DOMAIN, SERVICE_APPLY_PALETTE
@@ -108,6 +109,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=vol.Schema(ADAPTIVE_FIELDS),
         supports_response=SupportsResponse.OPTIONAL,
     )
+    runtime["automatic_state"] = AutomaticStateManager(hass, store)
+    await runtime["automatic_state"].start()
     runtime["brightness"] = BrightnessManager(hass, store)
     runtime["brightness"].start()
     runtime["motion"] = MotionManager(hass, store)
@@ -135,6 +138,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload without removing persisted user settings."""
+    if automatic := hass.data[DOMAIN].pop("automatic_state", None):
+        await automatic.shutdown()
     if brightness := hass.data[DOMAIN].pop("brightness", None):
         await brightness.shutdown()
     if schedules := hass.data[DOMAIN].pop("schedules", None):

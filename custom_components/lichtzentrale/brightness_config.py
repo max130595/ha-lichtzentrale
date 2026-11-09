@@ -5,12 +5,11 @@ import math
 from copy import deepcopy
 
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import area_registry as ar
 
-from .lights import entity_area_id
 from .motion_config import list_lux_sensors
 from .schedule_config import list_persons, validate_time_window
 from .selected_lights import validate_selected_lights
+from .zones import contains, validate_area
 
 
 def validate_brightness(hass, store, area_id, raw):
@@ -19,8 +18,7 @@ def validate_brightness(hass, store, area_id, raw):
         if not value:
             raise ServiceValidationError(message)
 
-    require(isinstance(area_id, str) and ar.async_get(hass).async_get_area(area_id),
-            "Der Raum wurde nicht gefunden. Bitte neu laden.")
+    validate_area(hass, store, area_id)
     require(isinstance(raw, dict) and set(raw) == {
         "enabled", "lux_sensor_entity_id", "target_lux", "hysteresis_lux",
         "min_interval_seconds", "time_window", "person_entity_ids", "stages",
@@ -49,7 +47,7 @@ def validate_brightness(hass, store, area_id, raw):
     for stage in result["stages"]:
         require(isinstance(stage, dict) and set(stage) == {"entity_ids", "brightness"})
         targets = validate_selected_lights(hass, store, stage["entity_ids"])
-        require(all(entity_area_id(hass, entity_id) == area_id for entity_id in targets),
+        require(all(contains(hass, store, area_id, entity_id) for entity_id in targets),
                 "Alle Lampen einer Stufe müssen zu diesem Raum gehören.")
         require(not seen.intersection(targets), "Jede Lampe darf nur in einer Stufe vorkommen.")
         seen.update(targets)

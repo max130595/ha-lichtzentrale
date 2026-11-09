@@ -714,3 +714,43 @@ async def test_config_refresh_clears_dynamic_exception(hass, dynamic_motion):
     assert manager._runtime(area)["dynamic_scene"] is None
     await change(hass, target, "on", brightness=110)
     assert manager.status(area)["paused"]
+
+
+async def test_common_action_toggles_configured_zone_motion(hass, store, motion):
+    from copy import deepcopy
+
+    from custom_components.lichtzentrale.target_actions import async_execute_action
+
+    manager, area, targets, sensors, calls = motion
+    zone = await store.async_save_zone({"name": "Synthetic motion zone", "entity_ids": targets})
+    zone_area = "zone:" + zone["id"]
+    await store.async_set_motion(zone_area, deepcopy(store.data["rooms"][area]["motion"]))
+    await async_execute_action(hass, store, {"type": "motion", "area_ids": [zone_area], "entity_ids": [], "enabled": False})
+    assert store.data["rooms"][zone_area]["motion"]["enabled"] is False
+    await async_execute_action(hass, store, {"type": "motion", "area_ids": [zone_area], "entity_ids": [], "enabled": True})
+    assert store.data["rooms"][zone_area]["motion"]["enabled"] is True
+    assert not calls
+
+
+async def test_zone_motion_scene_waits_for_physical_room_lock(hass, store, motion):
+    import asyncio
+    from copy import deepcopy
+
+    from custom_components.lichtzentrale.rooms import locked_room
+    from custom_components.lichtzentrale.scenes import async_save_scene
+
+    manager, area, targets, sensors, calls = motion
+    zone = await store.async_save_zone({"name": "Synthetic locked motion zone", "entity_ids": targets})
+    zone_area = "zone:" + zone["id"]
+    scene = await async_save_scene(hass, store, {"name": "Synthetic motion scene", "area_id": zone_area, "kind": "snapshot", "lights": {targets[0]: {"on": True, "brightness": 90}}})
+    config = deepcopy(store.data["rooms"][area]["motion"])
+    config["windows"][0]["action"] = {"type": "scene", "scene_id": scene["id"]}
+    await store.async_set_motion(zone_area, config)
+    with patch.object(manager, "_occupancy", return_value=True):
+        async with locked_room(hass, store, area):
+            task = asyncio.create_task(manager._activate(zone_area))
+            await asyncio.sleep(0)
+            assert not task.done()
+            assert not calls
+        await task
+    assert calls[0].data == {"entity_id": targets[0], "brightness": 90}

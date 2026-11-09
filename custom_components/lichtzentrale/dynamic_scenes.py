@@ -194,9 +194,27 @@ def manager(hass):
     return hass.data.get(DOMAIN, {}).get("dynamic")
 
 
+async def async_stop_overlapping(hass, targets):
+    """Join every local loop touching selected lights before a new action starts."""
+    active = manager(hass)
+    stopped = False
+    if active:
+        for area, run in list(active.active.items()):
+            if set(targets).intersection(run["targets"]):
+                stopped = (await active.stop(area))["stopped"] or stopped
+    return {"stopped": stopped}
+
+
 async def stop_dynamic(hass, area_id):
     active = manager(hass)
-    return await active.stop(area_id) if active else {"stopped": False}
+    if not active:
+        return {"stopped": False}
+    try:
+        targets = _current_targets(hass, active.store, area_id)
+    except ServiceValidationError:
+        targets = []
+    stopped = (await async_stop_overlapping(hass, targets))["stopped"]
+    return {"stopped": (await active.stop(area_id))["stopped"] or stopped}
 
 
 async def async_stop_room(hass, store, area_id, context=None):
@@ -235,16 +253,14 @@ async def async_stop_room(hass, store, area_id, context=None):
 
 def _current_targets(hass, store, area_id):
     """Resolve approved, existing individual members; missing entities cannot block peers."""
-    from homeassistant.helpers import area_registry as ar
+    from .lights import is_individual_light
+    from .zones import contains, validate_area
 
-    from .lights import entity_area_id, is_individual_light
-
-    if not ar.async_get(hass).async_get_area(area_id):
-        raise ServiceValidationError("Der Raum wurde nicht gefunden.")
+    validate_area(hass, store, area_id)
     return [
         e
         for e in store.data["settings"]["light_entity_ids"]
-        if entity_area_id(hass, e) == area_id
+        if contains(hass, store, area_id, e)
         and (state := hass.states.get(e))
         and is_individual_light(hass, state)
     ]

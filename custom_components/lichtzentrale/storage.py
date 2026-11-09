@@ -18,6 +18,8 @@ def empty_data() -> dict[str, Any]:
     """Return independent containers for the planned data model."""
     return {
         "scenes": [],
+        "zones": [],
+        "automatic_state": {},
         "palettes": [],
         "rooms": {},
         "bindings": [],
@@ -85,6 +87,10 @@ class LichtzentraleStore:
                 raise ServiceValidationError(
                     "Die Szene wurde inzwischen gelöscht. Bitte neu laden."
                 )
+            if scene.get("night"):
+                for peer in updated["scenes"]:
+                    if peer["area_id"] == scene["area_id"]:
+                        peer["night"] = False
             if index is None:
                 updated["scenes"].append(deepcopy(scene))
             else:
@@ -139,8 +145,9 @@ class LichtzentraleStore:
             updated = deepcopy(self._data)
             updated["rooms"].setdefault(area_id, {}).update(deepcopy(changes))
             if "pre_off_lights" in changes:
-                from .lights import entity_area_id, is_individual_light
+                from .lights import is_individual_light
                 from .rooms import _remember_light
+                from .zones import contains
 
                 # Share the newest room-off values with explicit-target recalls.
                 # Pending/off peers retain their own previous useful last state.
@@ -148,7 +155,7 @@ class LichtzentraleStore:
                     entity_id: _remember_light(state)
                     for entity_id in changes["pre_off_lights"]
                     if entity_id in self._data["settings"]["light_entity_ids"]
-                    and entity_area_id(self._hass, entity_id) == area_id
+                    and contains(self._hass, self, area_id, entity_id)
                     and (state := self._hass.states.get(entity_id)) is not None
                     and state.domain == "light"
                     and state.state == "on"
@@ -161,19 +168,19 @@ class LichtzentraleStore:
 
     async def async_set_position(self, area_id: str, entity_id: str, position: dict | None):
         """Write one position without losing concurrent edits or trusting stale grants."""
-        from homeassistant.helpers import area_registry as ar
 
-        from .lights import entity_area_id, validate_lights
+        from .lights import validate_lights
         from .positions import validate_position
+        from .zones import contains, validate_area
 
         position = validate_position(position) if position is not None else None
         async with self._lock:
             # Validate after waiting for the Store lock: settings or area membership
             # may have changed while another write was being persisted.
+            validate_area(self._hass, self, area_id)
             if (
-                ar.async_get(self._hass).async_get_area(area_id) is None
-                or entity_id not in self._data["settings"]["light_entity_ids"]
-                or entity_area_id(self._hass, entity_id) != area_id
+                entity_id not in self._data["settings"]["light_entity_ids"]
+                or not contains(self._hass, self, area_id, entity_id)
             ):
                 raise ServiceValidationError("Die Lampe muss für diesen Raum freigegeben sein.")
             validate_lights(self._hass, [entity_id])
@@ -225,13 +232,18 @@ class LichtzentraleStore:
                 item["id"] != binding["id"]
                 and item["event_entity"] == binding["event_entity"]
                 and item["event_type"] == binding["event_type"]
+                and item.get("event_attributes", {}) == binding.get("event_attributes", {})
                 for item in updated["bindings"]
             ):
                 raise ServiceValidationError("Für dieses Ereignis gibt es bereits eine Belegung.")
             if index is None:
                 updated["bindings"].append(deepcopy(binding))
             else:
-                updated["bindings"][index] = deepcopy(binding)
+                previous = updated["bindings"][index]
+                for optional in ("event_attributes", "control_label"):
+                    if optional not in binding:
+                        previous.pop(optional, None)
+                updated["bindings"][index] = {**previous, **deepcopy(binding)}
             await self._store.async_save(updated)
             self._data = updated
             self._refresh_bindings()
@@ -430,6 +442,9 @@ class LichtzentraleStore:
             if index is None:
                 updated["schedules"].append(schedule)
             else:
+                previous = updated["schedules"][index]
+                previous.pop("action" if "actions" in schedule else "actions", None)
+                schedule = {**previous, **schedule}
                 updated["schedules"][index] = schedule
             await self._store.async_save(updated)
             self._data = updated
@@ -492,3 +507,43 @@ class LichtzentraleStore:
     async def async_remove(self) -> None:
         """Remove integration data when its config entry is deleted."""
         await self._store.async_remove()
+
+    async def async_save_zone(self, raw):
+        from .zones import validate_zone
+
+        async with self._lock:
+            zone = validate_zone(self._hass, self, raw)
+            updated = deepcopy(self._data)
+            index = next((i for i, z in enumerate(updated["zones"]) if z["id"] == zone["id"]), None)
+            if index is None:
+                updated["zones"].append(zone)
+            else:
+                updated["zones"][index] = zone
+            await self._store.async_save(updated)
+            self._data = updated
+            return deepcopy(zone)
+
+    async def async_delete_zone(self, identifier):
+        # Keep scenes and rules visible for repair; never silently retarget them.
+        async with self._lock:
+            updated = deepcopy(self._data)
+            updated["zones"] = [z for z in updated["zones"] if z["id"] != identifier]
+            await self._store.async_save(updated)
+            self._data = updated
+
+    async def async_set_automatic_state(self, key, action, day):
+        async with self._lock:
+            updated = deepcopy(self._data)
+            updated["automatic_state"][key] = {"day": day, "action": deepcopy(action)}
+            await self._store.async_save(updated)
+            self._data = updated
+
+    async def async_expire_automatic_state(self, day):
+        async with self._lock:
+            valid = {key: value for key, value in self._data["automatic_state"].items() if value.get("day") == day}
+            if valid == self._data["automatic_state"]:
+                return
+            updated = deepcopy(self._data)
+            updated["automatic_state"] = valid
+            await self._store.async_save(updated)
+            self._data = updated

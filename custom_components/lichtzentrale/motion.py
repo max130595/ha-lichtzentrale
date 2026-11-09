@@ -16,7 +16,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .lights import entity_area_id
-from .rooms import async_dispatch, light_service_data, room_targets
+from .rooms import async_dispatch, light_service_data, locked_room, room_targets
 from .selected_lights import _locked_targets, _still_allowed, _stop_dynamics
 
 _LOGGER = logging.getLogger(__name__)
@@ -326,8 +326,7 @@ class MotionManager:
                 scene = _scene(self.store, action["scene_id"])
                 if scene["area_id"] != area:
                     return
-                locks = self.hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
-                async with locks.setdefault(area, asyncio.Lock()):
+                async with locked_room(self.hass, self.store, area):
                     if runtime["paused"] or self._occupancy(area) is not True:
                         return
                     result = await async_apply_scene_locked(self.hass, self.store, scene["id"], context)
@@ -339,8 +338,7 @@ class MotionManager:
             elif action["type"] == "adaptive":
                 from .adaptive import async_turn_on_adaptive
                 from .dynamic_scenes import stop_dynamic
-                locks = self.hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
-                async with locks.setdefault(area, asyncio.Lock()):
+                async with locked_room(self.hass, self.store, area):
                     if runtime["paused"] or self._occupancy(area) is not True:
                         return
                     await stop_dynamic(self.hass, area)

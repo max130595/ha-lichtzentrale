@@ -63,8 +63,9 @@ def _still_allowed(hass, store, entity_id, areas):
 
 
 async def _stop_dynamics(hass, store, targets, areas):
-    from .dynamic_scenes import stop_dynamic
+    from .dynamic_scenes import async_stop_overlapping, stop_dynamic
 
+    await async_stop_overlapping(hass, [e for e in targets if e.startswith("light.")])
     # A room loop can already have a tick in flight. Cancel/join it before
     # capturing values; never freeze or issue commands to unselected peers.
     for area in sorted({areas[e] for e in targets if e.startswith("light.") and areas[e]}):

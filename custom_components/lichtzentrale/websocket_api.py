@@ -93,6 +93,7 @@ async def ws_settings(hass, connection, msg):
     {
         vol.Required("type"): f"{DOMAIN}/palette/apply",
         **APPLY_FIELDS,
+        vol.Optional("layout_area_id"): cv.string,
     }
 )
 @websocket_api.require_admin
@@ -109,6 +110,7 @@ async def ws_apply(hass, connection, msg):
             msg["transition"],
             connection.context(msg),
             verteilung=msg["verteilung"],
+            layout_area_id=msg.get("layout_area_id"),
         )
         connection.send_result(msg["id"], result)
     except HomeAssistantError as error:
@@ -129,6 +131,7 @@ def async_setup_websocket_api(hass: HomeAssistant) -> None:
         *MOTION_HANDLERS,
         *BRIGHTNESS_HANDLERS,
         *SCHEDULE_HANDLERS,
+        *STAGE_FIVE_B_HANDLERS,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -459,4 +462,49 @@ BRIGHTNESS_HANDLERS = (
     command("brightness/set_enabled", {
         **AREA_FIELDS, vol.Required("enabled"): bool, vol.Optional("keep_lights", default=False): bool,
     }, brightness_set_enabled),
+)
+
+
+async def zones_list(hass, store, msg, context):
+    return store.data["zones"]
+
+
+async def zone_save(hass, store, msg, context):
+    return await store.async_save_zone(msg["zone"])
+
+
+async def zone_delete(hass, store, msg, context):
+    from .dynamic_scenes import stop_dynamic
+
+    await stop_dynamic(hass, "zone:" + msg["zone_id"])
+    await store.async_delete_zone(msg["zone_id"])
+    return {}
+
+
+async def action_execute(hass, store, msg, context):
+    from .target_actions import async_execute_action
+
+    return await async_execute_action(hass, store, msg["action"], context)
+
+
+async def button_learn_start(hass, store, msg, context):
+    return hass.data[DOMAIN]["bindings"].learn_start(msg["entity_id"])
+
+
+async def button_learn_status(hass, store, msg, context):
+    return hass.data[DOMAIN]["bindings"].learn_status(msg["token"])
+
+
+async def button_learn_cancel(hass, store, msg, context):
+    return hass.data[DOMAIN]["bindings"].learn_cancel(msg["token"])
+
+
+STAGE_FIVE_B_HANDLERS = (
+    command("zones/list", {}, zones_list),
+    command("zone/save", {vol.Required("zone"): dict}, zone_save),
+    command("zone/delete", {vol.Required("zone_id"): cv.string}, zone_delete),
+    command("action/execute", {vol.Required("action"): dict}, action_execute),
+    command("buttons/learn/start", {vol.Required("entity_id"): cv.entity_id}, button_learn_start),
+    command("buttons/learn/status", {vol.Required("token"): cv.string}, button_learn_status),
+    command("buttons/learn/cancel", {vol.Required("token"): cv.string}, button_learn_cancel),
 )

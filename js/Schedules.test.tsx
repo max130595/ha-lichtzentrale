@@ -13,9 +13,10 @@ function setup(options: {initial?: SchedulesResponse; adaptive?: boolean; write?
   let data = options.initial || response();
   const callWS = vi.fn(async (m: {type: string; [key: string]: unknown}): Promise<unknown> => {
     if (m.type === 'lichtzentrale/schedules/list') return options.list ? options.list() : data;
+    if (m.type === 'lichtzentrale/zones/list') return [];
     if (m.type === 'lichtzentrale/rooms/list') return [{area_id: 'test_area', name: 'Testraum'}];
     if (m.type === 'lichtzentrale/lights/list') return [{entity_id: 'light.test_light', name: 'Testlampe', area_id: 'test_area', area_name: 'Testraum', allowed: true, available: true}, {entity_id: 'switch.test_switch', name: 'Testschalter', area_id: null, area_name: null, allowed: true, available: true}, {entity_id: 'switch.test_blocked', name: 'Gesperrt', allowed: false, available: true}];
-    if (m.type === 'lichtzentrale/scenes/list') return [{id: 'test_scene', name: 'Testszene', dynamic: {enabled: true}}];
+    if (m.type === 'lichtzentrale/scenes/list') return [{id: 'test_scene', name: 'Testszene', area_id: 'test_area', dynamic: {enabled: true}}];
     if (m.type === 'lichtzentrale/adaptive/status') return {available: !!options.adaptive, rooms: [{area_id: 'test_area', available: !!options.adaptive}]};
     if (options.write) return options.write(m);
     if (m.type.endsWith('/save')) {
@@ -42,7 +43,7 @@ describe('Zeitpläne', () => {
   });
   it('creates disabled time plans without display fields or secure-context crypto', async () => {
     vi.stubGlobal('crypto', {});
-    const {callWS} = setup({initial: response([])}); await screen.findByText('Noch keine Zeitpläne.'); fireEvent.click(screen.getByText('Zeitplan hinzufügen')); expect(screen.getByText('Zeitplan speichern')).toBeDisabled(); change('Name', 'Neuer Testplan'); change('Uhrzeit', '07:35'); change('Szene', 'test_scene'); save();
+    const {callWS} = setup({initial: response([])}); await screen.findByText('Noch keine Automationen.'); fireEvent.click(screen.getByText('+ Neue Automation')); fireEvent.click(screen.getByRole('button', {name: 'Uhrzeit'})); change('Uhrzeit', '07:35'); fireEvent.click(screen.getByText('Weiter')); fireEvent.click(screen.getByLabelText('Testraum')); fireEvent.click(screen.getByText('Weiter')); change('Name (optional)', 'Neuer Testplan'); change('Szene 1', 'test_scene'); fireEvent.click(screen.getByText('Automation speichern'));
     await screen.findByText('Zeitplan in Home Assistant gespeichert.'); const saved = writes(callWS)[0][0].schedule as Schedule; expect(saved).toMatchObject({enabled: false, trigger: {type: 'time', value: '07:35'}}); expect(saved).not.toHaveProperty('id'); expect(saved).not.toHaveProperty('next_run'); expect(saved).not.toHaveProperty('last_error');
   });
   it('edits solar triggers, conditions and transition', async () => {

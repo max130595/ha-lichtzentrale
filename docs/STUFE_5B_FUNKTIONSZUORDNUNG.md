@@ -1,8 +1,9 @@
 # Stufe 5b: Wo finde ich meine bisherigen Funktionen?
 
-**Entwurf zur Freigabe, Teil 1.** Die [Handy-Vorschau](vorschau-5b/index.html) arbeitet nur mit
+**Teil 1 freigegeben; Teil 2 im Draft zur technischen Abnahme.** Die [Handy-Vorschau](vorschau-5b/index.html) arbeitet nur mit
 Beispielen im Arbeitsspeicher. Sie ist kein Home-Assistant-Panel und steuert keine Geräte.
-Die bestehende Integration, ihr Bundle und alle gespeicherten Daten bleiben unverändert.
+Die produktive Umsetzung nutzt dieselbe Zuordnung; bestehende gespeicherte Daten werden
+additiv ergänzt. Geräte werden ausschließlich über die Home-Assistant-Integration gesteuert.
 
 ## Fünf Reiter, ein gemeinsamer Ablauf
 
@@ -11,7 +12,7 @@ Die bestehende Integration, ihr Bundle und alle gespeicherten Daten bleiben unve
 - **Farben:** Farbpaletten auswählen, dann Raum oder Zone. Eigene Szenen entstehen direkt im Ziel.
 - **Automationen:** Verständliche Sätze statt technischer Regeln. Neu anlegen mit **Wann → Wo → Was**.
 - **Taster:** Ein Bild des Geräts, darauf die Taste wählen und ihre Aufgabe festlegen.
-- **Mehr:** Lampenfreigaben, seltene Einstellungen, Protokoll und Hinweise zur Vorschau.
+- **Mehr:** Lampenfreigaben und seltene Einstellungen. Protokollhinweise erscheinen zusätzlich in Home Assistant.
 
 Der bisherige eigene Reiter „Raum“ wird zur Detailansicht von „Zuhause“. So muss niemand einen
 Raum auswählen und danach erst den richtigen Reiter suchen. Ein Zurück-Knopf führt zur Liste.
@@ -28,7 +29,7 @@ Formulare und aufklappbare „Mehr Optionen“ bleiben innerhalb dieser zweiten 
 | Snapshot speichern | Zuhause → Raum/Zone → + Neue Szene | Aktuellen Zustand sichern; fehlende Lampen ausdrücklich melden |
 | Gespeicherte Szenen starten | Raum-/Zonendetails | Snapshot, Palette, Hue; Favoriten, Namen und Reihenfolge |
 | Szenen umbenennen, favorisieren, sortieren, löschen | Raum-/Zonendetails → Szene bearbeiten | Bestehende IDs und Verweise; Löschbestätigung |
-| Hue-Szene importieren | Farben → Mehr Optionen → Von Hue übernehmen | Nur verifizierte Ziele; keine Hue-Bilder oder mitgelieferten Hue-Namen |
+| Hue-Szene importieren | Raumdetails → Mehr Optionen → Hue-Szene importieren | Nur verifizierte Ziele; keine Hue-Bilder oder mitgelieferten Hue-Namen |
 | Farbpaletten nach Kategorie | Farben → Farbpaletten | Eigene Namen, Farben und erzeugte Farbverläufe |
 | Palette direkt anwenden / als Szene speichern | Farben → Palette wählen | Zielauswahl, Helligkeit, optional Dynamik |
 | Dynamische Szene starten | Szene → Mehr Optionen | Intervall und Übergang; ausgeschaltete Lampen bleiben aus |
@@ -46,15 +47,16 @@ Formulare und aufklappbare „Mehr Optionen“ bleiben innerhalb dieser zweiten 
 | Lux als Auslöser, Mindestdauer | Automationen → Wann → Mehr Optionen | Ereignisabhängiger Auslöser bleibt erhalten |
 | Wochentage | Automationen → Wann | Alle vorausgewählt bei neuer Regel; alte Auswahl unverändert |
 | Personen, Lichtzustand, Zeitfenster, Übergang | Automationen → Mehr Optionen | Einschließlich Mitternacht, offenen Grenzen und bisherigen Sicherheitsregeln |
-| Jetzt testen / nächste Ausführung | Direkt in der Automationenliste | In Phase 2 echte Aktion mit Bedingungen; in dieser Vorschau ausschließlich Simulation |
+| Jetzt testen / nächste Ausführung | Direkt in der Automationenliste | Produktiv echte Aktion mit Bedingungen; in der separaten Vorschau ausschließlich Simulation |
 | Bewegungsautomatik | Raum → Mehr Optionen → Bewegung | Sensoren, Fenster, Aktionen, Lux, Nachlauf, Vorabdunkeln, manuelle Pause |
 | Grundhelligkeit | Raum → Mehr Optionen → Grundhelligkeit | Stufen, Lux-Ziel, Hysterese, Mindestzeit, Eigenlicht-Lernen, Besitz und manuelle Pause |
 | Grundhelligkeit abschalten / Licht anlassen | Grundhelligkeit → Mehr Optionen | Bestehende ausdrückliche Auswahl, keine unbeabsichtigte Übernahme |
 | Lampenfreigaben | Mehr → Lampen freigeben | Bisherige ausdrückliche Freigabe und ausgeschlossene Geräte |
 | Fehlende Geräte / Teilfehler / erneutes Laden | Beim betroffenen Element und im Protokoll | Keine vorgetäuschte Erfolgsmeldung; Anzeigenamen statt Entity-ID |
 
-Die Vorschau zeigt die Platzierung dieser erweiterten Einstellungen. Eine tatsächliche
-Sensorberechnung, Importfunktion oder Gerätevalidierung ist damit noch nicht umgesetzt.
+Die Vorschau zeigt nur die Platzierung. Die produktive Oberfläche verwendet weiterhin die
+bestehenden Sensorberechnungen, Importfunktionen und Gerätevalidierungen. Alte erweiterte
+Zeitpläne behalten dafür ihren bisherigen Editor; neue Pläne nutzen den Assistenten.
 
 ## Neu in Stufe 5b
 
@@ -71,27 +73,23 @@ Sensorberechnung, Importfunktion oder Gerätevalidierung ist damit noch nicht um
 
 ## Grenzen zwischen Vorschau und Umsetzung
 
-- **Jetzt:** Alle Aktionen verändern nur synthetische Demodaten. Neuladen oder „Vorschau
-  zurücksetzen“ setzt sie zurück. Keine Browser-Persistenz, keine Netzwerkanfragen an HA.
-- **Erst nach Freigabe:** Serverseitige Zonen, Multiaktionen und Nachtlicht-Zuordnung ergänzen
-  das bestehende Modell. Alte Szenen, Zeitpläne, Bewegungs-/Grundhelligkeitsregeln und Taster
-  dürfen weder still gelöscht noch ungefragt umgedeutet werden.
-- **Automatikstand in Phase 2:** Pro Raum/Zone gilt die letzte heute von einer Automation
-  ausgeführte Aktion, auch „aus“ oder Nachtlicht. Der Stand überlebt einen Neustart und wird
-  um lokales Mitternacht zurückgesetzt. Manuelle Bedienung überschreibt ihn nicht.
-  Die Vorschau macht die Rückkehr sichtbar; sie simuliert keine vollständige HA-Zeitplanung.
-- **Zigbee2MQTT in Phase 2:** Tatsächliche Ereignisattribute werden zur Laufzeit gelernt.
-  Ein generischer Ereignistyp alleine reicht nicht für mehrere Tasten. Attribute im Demoablauf
-  sind nur Beispieldaten und kein festgelegter Adapter. Vorhandene Hue-Belegungen bleiben gültig.
-- **Migrationstest später:** Ein bestehender Store muss vor/nach Migration verglichen werden,
-  einschließlich unbekannter Zusatzfelder und alter Ein-Aktions-Zeitpläne. Phase 1 schreibt
-  keinen Store und kann deshalb keinen erfolgreichen Migrationstest behaupten.
-- Bestehende externe Home-Assistant-Automationen werden nicht abgeschaltet. Das übernimmt
-  Claude erst nach erfolgreicher produktiver Abnahme.
-- Stufe 6/7, Urlaubsmodus, Sicherung und erweiterte Switch-Freigaben gehören nicht zu diesem Entwurf.
+- Die getrennte HTML-Vorschau verändert nur Demodaten im Arbeitsspeicher. Die produktive
+  Integration speichert Zonen, Szenen, Taster und Automationen serverseitig.
+- Der Automatikstand pro Raum/Zone gilt nur am lokalen Kalendertag und überlebt Neustarts
+  innerhalb dieses Tages. Manuelle Bedienung überschreibt ihn nicht. Ohne Stand erfolgt
+  keine Geräteaktion; ein Protokollhinweis erklärt die fehlende Rückkehr.
+- Neue Automationen führen alle Aktionen streng nacheinander aus. Eine Szene gehört
+  genau einem Raum oder einer Zone; für verschiedene Szenen mehrere Aktionen anlegen.
+- Zigbee2MQTT-Attribute werden zur Laufzeit gelernt. Ein generischer Ereignistyp alleine
+  reicht nicht für mehrere Tasten. Gerätezeichnungen/Vorlagen ersetzen nicht das tatsächliche
+  Zuordnen der physischen Taste. Vorhandene Hue-Belegungen bleiben gültig.
+- Alte gespeicherte Objekte und Zusatzfelder bleiben erhalten. Die automatisierten Prüfungen
+  sowie noch offene Geräte- und Handy-Abnahmen stehen im [Testplan](STUFE_5B_TESTPLAN.md).
+- Externe Home-Assistant-Automationen werden nicht abgeschaltet. Das übernimmt Claude erst
+  nach erfolgreicher Abnahme. Stufe 6/7 gehören nicht zu dieser Umsetzung.
 
-## Freigabeentscheidung
+## Übergabe
 
-Bitte zuerst die Bedienung in der Vorschau beurteilen: Ist die Raum-/Zonenübersicht verständlich?
-Ist die Automation mit −15 Minuten ohne Anleitung anlegbar? Lässt sich der Dimmer unmittelbar
-belegen und Nachtlicht ⇄ Automatik nachvollziehen? Danach kann Teil 2 gesondert freigegeben werden.
+Die Vorschau ist freigegeben. Teil 2 wird mit gebautem Bundle als Draft zur Prüfung
+übergeben. Nach dieser Übergabe keine weiteren Änderungen oder CI-Überwachung, bis Claude
+über den Nutzer die Arbeit wieder freigibt. Keine Live-Installation in diesem Auftrag.

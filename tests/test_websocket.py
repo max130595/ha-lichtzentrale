@@ -270,3 +270,26 @@ async def test_palette_distribution_protocol(hass, client, store, light_calls):
     assert len(light_calls) == 4
     assert not (await request(client, "palette/apply", palette_id="kupfernest", entity_ids=["light.fixture_a"], verteilung="invalid"))["success"]
     assert len(light_calls) == 4
+
+
+async def test_direct_zone_palette_uses_own_positions_and_rejects_outside_target(hass, client, store, light_calls):
+    from custom_components.lichtzentrale.palettes import list_palettes
+
+    ids = ["light.synthetic_zone_a", "light.synthetic_zone_b", "light.synthetic_outside"]
+    for entity in ids:
+        hass.states.async_set(entity, "on", {"supported_color_modes": ["xy"]})
+    await store.async_set_lights(ids)
+    zone = await store.async_save_zone({"name": "Synthetic palette zone", "entity_ids": ids[:2]})
+    target = "zone:" + zone["id"]
+    await store.async_set_position(target, ids[0], {"cell": [2, 0], "height": "boden"})
+    await store.async_set_position(target, ids[1], {"cell": [0, 0], "height": "boden"})
+    result = await request(client, "palette/apply", palette_id="kupfernest", entity_ids=ids[:2], layout_area_id=target, verteilung="verlauf_links_rechts")
+    assert result["success"]
+    colors = next(p for p in list_palettes() if p["id"] == "kupfernest")["colors"]
+    by_id = {call.data["entity_id"]: call.data["xy_color"] for call in light_calls}
+    assert tuple(by_id[ids[1]]) == (colors[0]["x"], colors[0]["y"])
+    assert tuple(by_id[ids[0]]) == (colors[-1]["x"], colors[-1]["y"])
+    light_calls.clear()
+    result = await request(client, "palette/apply", palette_id="kupfernest", entity_ids=ids, layout_area_id=target)
+    assert not result["success"]
+    assert not light_calls

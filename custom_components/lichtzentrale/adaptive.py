@@ -7,16 +7,15 @@ of the optional custom integration is required. See basnijholt/adaptive-lighting
 switch.py: _switches_from_service_call, handle_apply_service.
 """
 
-from asyncio import Lock
 from collections.abc import Mapping
 
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN
-from .lights import entity_area_id, validate_lights
-from .rooms import check_execution_guard, validate_transition
+from .lights import validate_lights
+from .rooms import check_execution_guard, locked_room, room_targets, validate_transition
+from .zones import contains, validate_area
 
 ADAPTIVE_DOMAIN = "adaptive_lighting"
 UNSET = object()
@@ -55,7 +54,7 @@ def _validated(hass, store, area_id, entity_id):
     lights = validate_lights(hass, list(lights))
     allowed = store.data["settings"]["light_entity_ids"]
     if any(
-        not e.startswith("light.") or e not in allowed or entity_area_id(hass, e) != area_id
+        not e.startswith("light.") or e not in allowed or not contains(hass, store, area_id, e)
         for e in lights
     ):
         raise ServiceValidationError(
@@ -85,20 +84,22 @@ def status(hass, store):
             }
         )
     rooms = []
-    for area in ar.async_get(hass).async_list_areas():
-        settings = store.data["rooms"].get(area.id, {})
+    area_ids = [a.id for a in ar.async_get(hass).async_list_areas()]
+    area_ids.extend("zone:" + z["id"] for z in store.data.get("zones", []))
+    for area_id in area_ids:
+        settings = store.data["rooms"].get(area_id, {})
         entity_id = settings.get("adaptive_switch")
         available, reason = False, None
         if entity_id:
             try:
-                _validated(hass, store, area.id, entity_id)
+                _validated(hass, store, area_id, entity_id)
                 available = True
             except ServiceValidationError as error:
                 reason = str(error)
         state = hass.states.get(entity_id) if entity_id else None
         rooms.append(
             {
-                "area_id": area.id,
+                "area_id": area_id,
                 "switch_entity_id": entity_id,
                 "enabled": bool(available and state and state.state == "on"),
                 "available": available,
@@ -171,8 +172,7 @@ async def async_set_adaptive(
     """Serialize settings and adaptive operations with scenes and room toggles."""
     if not isinstance(area_id, str):
         raise ServiceValidationError("Ungültiger Raum.")
-    locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
-    async with locks.setdefault(area_id, Lock()):
+    async with locked_room(hass, store, area_id):
         return await _async_set_adaptive(
             hass, store, area_id, enabled, adaptive_switch, default_on, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard
         )
@@ -185,8 +185,7 @@ async def _async_set_adaptive(
     """Validate optional mapping/settings before persistence or device actions."""
     check_execution_guard(guard)
     validate_transition(transition)
-    if not isinstance(area_id, str) or ar.async_get(hass).async_get_area(area_id) is None:
-        raise ServiceValidationError("Der Raum wurde nicht gefunden.")
+    validate_area(hass, store, area_id)
     if enabled is not None and type(enabled) is not bool:
         raise ServiceValidationError("Ein/Aus muss ein Wahrheitswert sein.")
     if default_on is not None and default_on not in ("adaptive", "last"):
@@ -231,10 +230,33 @@ async def _async_set_adaptive(
 
 
 async def async_pause_adaptive(hass, store, area_id, context=None, *, dispatch_guard=None):
-    """Pause a configured room before a color scene; absent integration is optional."""
-    entity_id = store.data["rooms"].get(area_id, {}).get("adaptive_switch")
-    if entity_id and hass.data.get(ADAPTIVE_DOMAIN):
-        await _set_enabled(hass, store, area_id, entity_id, False, context, dispatch_guard=dispatch_guard)
+    """Pause every validated intersecting mapping; callers already hold scene locks."""
+    if not hass.data.get(ADAPTIVE_DOMAIN):
+        return
+    targets = set(room_targets(hass, store, area_id))
+    # No nested lock acquisition: scene callers hold physical room locks, shared
+    # by explicit adaptive configuration operations through locked_room.
+    checked = []
+    for mapped_area, settings in store.data["rooms"].items():
+        entity_id = settings.get("adaptive_switch")
+        if not entity_id:
+            continue
+        try:
+            lights = _validated(hass, store, mapped_area, entity_id)
+        except ServiceValidationError:
+            if mapped_area == area_id:
+                raise
+            continue
+        if targets.intersection(lights):
+            checked.append((mapped_area, entity_id))
+    for mapped_area, entity_id in checked:
+        # Recheck targets and mappings after each earlier service call yielded.
+        current_targets = set(room_targets(hass, store, area_id))
+        if store.data["rooms"].get(mapped_area, {}).get("adaptive_switch") != entity_id:
+            continue
+        if not current_targets.intersection(_validated(hass, store, mapped_area, entity_id)):
+            continue
+        await _set_enabled(hass, store, mapped_area, entity_id, False, context, dispatch_guard=dispatch_guard)
 
 
 async def async_resume_adaptive(hass, store, area_id, context=None):

@@ -17,12 +17,12 @@ function mock() {return vi.fn(async (request: {type: string; [key: string]: unkn
   return {applied: ['light.test_fixture'], skipped: [], failed: []};
 });}
 afterEach(() => {cleanup(); vi.useRealTimers();});
-async function selectRoom() {await waitFor(() => expect(screen.getByLabelText('Zielraum')).toBeEnabled()); fireEvent.change(screen.getByLabelText('Zielraum'), {target: {value: room.area_id}});}
+async function selectRoom() {await waitFor(() => expect(screen.getByLabelText('Raum oder Zone')).toBeEnabled()); fireEvent.change(screen.getByLabelText('Raum oder Zone'), {target: {value: room.area_id}}); fireEvent.click(screen.getByText('Mehr Optionen'));}
 describe('Stufe 2 Galerie', () => {
   it('applies static room palette only to approved targets', async () => {
     const callWS = mock(); render(<RoomPalette hass={{callWS} as Hass} palette={palette}/>); await selectRoom();
     fireEvent.click(screen.getByRole('button', {name: 'Im gewählten Raum anwenden'}));
-    await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/palette/apply', palette_id: palette.id, entity_ids: ['light.test_fixture'], brightness: 120, transition: 10, verteilung: 'zufall'}));
+    await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/palette/apply', palette_id: palette.id, layout_area_id: room.area_id, entity_ids: ['light.test_fixture'], brightness: 120, transition: 10, verteilung: 'zufall'}));
   });
   it('saves dynamic palette then starts by saved ID and validates timing', async () => {
     const callWS = mock(); render(<RoomPalette hass={{callWS} as Hass} palette={palette}/>); await selectRoom();

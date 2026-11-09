@@ -77,6 +77,9 @@ async def test_button_api_roundtrip_and_room_configuration(hass, client, setup, 
 
 
 @pytest.mark.parametrize("name,payload", [
+    ("buttons/learn/start", {"entity_id": "event.synthetic"}),
+    ("buttons/learn/status", {"token": "synthetic"}),
+    ("buttons/learn/cancel", {"token": "synthetic"}),
     ("buttons/list", {}), ("bindings/list", {}), ("binding/save", {"binding": {}}),
     ("binding/delete", {"binding_id": "synthetic"}),
     ("binding/settings", {"double_click_ms": 600}),
@@ -199,3 +202,21 @@ async def test_selected_binding_api_roundtrip(client, setup, store, action):
     assert result["result"]["area_id"] is None
     assert (await request(client, "bindings/list"))["result"]["bindings"] == [result["result"]]
     assert store.data["bindings"] == [result["result"]]
+
+
+async def test_learning_commands_are_ephemeral_and_cancelable(hass, client, setup, store):
+    from custom_components.lichtzentrale.bindings import BindingManager
+
+    manager = BindingManager(hass, store)
+    hass.data[DOMAIN]["bindings"] = manager
+    before = store.data
+    try:
+        result = await request(client, "buttons/learn/start", entity_id=setup[3]["event_entity"])
+        assert result["success"]
+        token = result["result"]["token"]
+        assert (await request(client, "buttons/learn/status", token=token))["result"] == {"status": "waiting", "observation": None}
+        assert (await request(client, "buttons/learn/cancel", token=token))["result"] == {"cancelled": True}
+        assert not (await request(client, "buttons/learn/status", token=token))["success"]
+        assert store.data == before
+    finally:
+        await manager.shutdown()

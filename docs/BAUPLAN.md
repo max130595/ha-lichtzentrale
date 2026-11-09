@@ -389,6 +389,45 @@ diese Taste überhaupt ein Doppelklick belegt ist.
   und tatsächlicher Zigbee2MQTT-Ereignisverarbeitung benötigt eine separate Nutzerfreigabe.
   [Prüfliste](STUFE_5B_TESTPLAN.md) trennt Vorschau-Abnahme von späteren Integrationstests.
 
+### Stufe 5b – Teil 2: Produktive Umsetzung nach Vorschaufreigabe
+
+- Fünf feste Reiter unten: Zuhause, Farben, Automationen, Taster und Mehr. Die vier
+  benannten Reiter haben schlichte Überschriften ohne Werbezeilen. Zuhause zeigt Zonen
+  vor kompakten Raumkacheln; seltene Einstellungen bleiben unter „Mehr Optionen“.
+- Zonen stehen serverseitig in `zones` mit eigener ID, Name und freigegebenen Lampen.
+  Die Zielkennung `zone:<id>` erweitert die bestehenden Raumfunktionen. Räume und Freigaben
+  werden nicht verändert; Mehrfachmitgliedschaft ist erlaubt. Entfernte Geräte bleiben als
+  reparierbare Verweise erhalten und erweitern niemals automatisch die Freigabe.
+- Szenen können pro Raum/Zone mit `night: true` als Nachtlicht markiert werden. Die neue
+  Szene entsteht direkt im Ziel: Lampen einstellen, Namen eingeben, speichern. Nachtlicht
+  bleibt ein kleiner Knopf; Rückkehr zur Automatik steht nur Tastern und Automationen offen.
+- Neue Automationen nutzen Wann → Wo → Was. Die erste Aktion übernimmt die Ziele aus Wo,
+  nur weitere Aktionen haben eine zusätzliche Zielauswahl. `actions` werden vollständig
+  in Listenreihenfolge abgewartet, auch wenn Ziele überlappen. Innerhalb einer allgemeinen
+  Lichtaktion werden gleiche Lampen zusammengeführt; zwischen Aktionen niemals. Eine
+  Szene gehört genau einem Raum/einer Zone. Mehrere individuelle Szenen benötigen getrennte
+  Aktionen. Nachtlicht/Automatik für mehrere Ziele führt deren jeweilige Szene in Zielreihenfolge
+  aus; bei gemeinsamen Lampen gilt dabei der spätere Zielauftrag.
+- Alte Ein-Aktions-Pläne und ihre erweiterten Auslöser/Bedingungen bleiben ausführbar und
+  bearbeitbar. Der bestehende Editor bleibt für diese Daten erreichbar. Store-Erweiterungen
+  sind additiv; unbekannte Zusatzfelder werden beim Bearbeiten beibehalten.
+- `automatic_state` speichert nur vollständig erfolgreiche automatische Szene-, Nachtlicht-
+  oder Aus-Aktionen je Raum/Zone samt lokalem Datum. Manuelle Bedienung ersetzt diesen Stand
+  nicht. Neustart am selben Tag erhält ihn; Neustart am Folgetag und lokales Mitternacht
+  verwerfen ihn. Ohne heutigen Stand ist „Zurück zur Automatik“ wirkungslos mit Protokollhinweis.
+- Taster werden anhand tatsächlicher Event-Entities angeboten. Anlernen erfasst Quelle,
+  Ereignistyp und beobachtete Ereignisattribute gemeinsam, statt Tastenattribute zu raten.
+  Eine zeitlich begrenzte Anlernsitzung unterdrückt die alte Aktion des erfassten Ereignisses.
+  Gerätezeichnungen und Vorlagen helfen bei der Zuordnung; jede physische Taste wird
+  ausdrücklich zugeordnet. Unbekannte Typen bleiben mit Rohnamen auswählbar.
+- Zonen funktionieren auch für Positionen, Farbverteilung, Dynamik und seltene Raumoptionen.
+  Einzellampen-/Raumaktionen beenden überlappende lokale Farbdynamik. Gemeinsame physische
+  Raumsperren verhindern konkurrierende Szenenbefehle. Switch-Lichter erhalten weiterhin
+  ausschließlich Ein/Aus und nie Helligkeits-, Temperatur- oder Farbbefehle.
+- Version 0.4.0 enthält das neu gebaute HACS-Frontend. Keine Live-Installation, keine Änderung
+  externer Zigbee2MQTT-Automationen. Tests und verbleibende Abnahme mit echten Geräten:
+  [STUFE_5B_TESTPLAN.md](STUFE_5B_TESTPLAN.md). Nach Aktualisierung des Draft-PR wieder stoppen.
+
 ## Tests
 
 - Python: `pytest-homeassistant-custom-component` für Store, Szenen-Snapshot/Anwenden,
