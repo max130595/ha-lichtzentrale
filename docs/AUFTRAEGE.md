@@ -10,7 +10,8 @@ Bad oben in Tests oder Beispielen, Schalter (`switch`) werden nie gedimmt.
 |---|---|---|
 | 4a Zeitfenster-Bedingung | `stufe-4a-zeitfenster` | erledigt (PR #9, getestet 08.11.) |
 | 5 Grundhelligkeit | `stufe-5-grundhelligkeit` | erledigt (PR #10, #11) |
-| 5b Einfache Bedienung wie die Hue-App | `stufe-5b-einfach` | offen – **als Nächstes** |
+| 5b Einfache Bedienung wie die Hue-App | `stufe-5b-einfach` | erledigt (PR #12, am echten System getestet 09.11.) |
+| 5c Eigene Paletten und Helligkeit pro Lampe | `stufe-5c-paletten` | offen – **als Nächstes** |
 | 6 Anwesenheitssimulation | `stufe-6-urlaub` | offen |
 | 7 Sicherung, „Alles aus“, Öffnung für andere | `stufe-7-sicherung` | offen |
 
@@ -111,6 +112,41 @@ Die Lichtzentrale ersetzt danach die Hue-App vollständig, auch für Lampen ohne
 **Fertig wenn:** In der Vorschau (synthetisch) kann ein Nutzer ohne Anleitung eine
 Sonnenuntergangs-Automation mit −15 Min. für eine Zone anlegen, einen Hue Dimmer wie oben belegen
 und „Nachtlicht ⇄ Automatik“ auslösen, und alle bisherigen Daten bleiben erhalten.
+
+## Stufe 5c – Eigene Paletten und Helligkeit pro Lampe
+
+**Anlass (Test am echten System, 09.11.):** Eine dynamische Herbstszene für eine Zone ließ sich nicht
+schön einstellen. Es fehlten eigene Farben (kein sattes Orange in den eingebauten Paletten), und alle
+Lampen der Zone liefen mit derselben Helligkeit – Deckenspots direkt über dem Sofa blendeten, während
+andere Lampen zu dunkel waren. Der Raum hat schwarze, Eichen- und Birkenholzflächen, olivgrüne und
+dunkelgraue Wände; rosastichige Rottöne wirken darauf schmutzig.
+
+### Eigene Paletten
+- Reiter **Farben → + Neue Palette**: Name, 2–6 Farben über Farbwähler, Live-Vorschau als Verlauf.
+  Speichern, bearbeiten, löschen. Serverseitig im Store, Migration nur ergänzend.
+- **Live-Probe**: Beim Bearbeiten optional auf ein Ziel (Raum/Zone) anwenden, damit man die Farben
+  am echten Raum sieht, bevor man speichert. Abbrechen stellt den vorherigen Zustand wieder her.
+- Eigene Paletten sind überall wählbar wie eingebaute (Szenen, Automationen, Galerie).
+- Eine gelöschte Palette, die noch von Szenen benutzt wird: Löschen mit Hinweis verweigern.
+
+### Neue eingebaute Palette „Herbstglut“
+- Kategorie Jahreszeiten, Farben (sRGB): Bernstein `#FF9A2E`, sattes Orange `#FF6A13`, Kupfer
+  `#D9541E`, Goldgelb `#FFC247`, gedämpftes Weinrot `#9E2A2B`. Keine Rosa- oder Lilatöne.
+- Prüfen, dass Hue-Farblampen diese Töne gesättigt wiedergeben (xy im Farbraum der Lampe, nicht über
+  einen Weißton angenähert). Lampen nur mit Weißtönen erhalten den wärmsten Weißton.
+
+### Helligkeit pro Lampe in Farbpaletten-Szenen
+- In einer Paletten-Szene (auch dynamisch) für jede Lampe eine eigene Helligkeit 1–100 % oder „wie
+  Szene“. Standard bleibt „wie Szene“, bestehende Szenen ändern sich nicht.
+- Optional pro Lampe **„feste Farbe“** statt Farbwechsel (eine Palettenfarbe oder ein Weißton), z. B.
+  ein Akzent, der ruhig bleiben soll.
+- Dynamische Wechsel behalten die Helligkeit pro Lampe bei jedem Takt bei.
+- Bedienung im Szenen-Editor: Liste der Lampen mit Schieberegler, Änderungen sofort live sichtbar
+  (wie Hue), „Speichern“ übernimmt.
+
+**Fertig wenn:** Eine eigene Palette angelegt und live ausprobiert werden kann, „Herbstglut“
+mitgeliefert ist, und in einer dynamischen Zonen-Szene zwei Lampen dauerhaft dunkler laufen als die
+übrigen. Tests synthetisch, keine echten Entity-IDs. Nach dem Draft-PR stoppen.
 
 ## Stufe 6 – Anwesenheitssimulation
 
