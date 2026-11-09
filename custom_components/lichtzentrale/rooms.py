@@ -177,6 +177,23 @@ def light_service_data(
 async def async_dispatch(hass, calls, skipped=None, context=None, guard=None, effect_guard=None):
     """Start all prepared calls together and isolate individual device failures."""
     result = {"applied": [], "skipped": list(skipped or [])}
+    vacation = hass.data.get(DOMAIN, {}).get("vacation")
+    if vacation and vacation._own(context):
+        from .command_limiter import limiter
+
+        def allowed(entity):
+            return ((guard is None or guard(entity))
+                    and (effect_guard is None or effect_guard(entity)))
+
+        for domain, service, params in calls:
+            try:
+                key, entity = await limiter(hass).dispatch(
+                    hass, domain, service, params, context, allowed,
+                    ongoing_guard=lambda entity: effect_guard is None or effect_guard(entity))
+            except Exception:
+                key, entity = "failed", params["entity_id"]
+            result.setdefault(key, []).append(entity)
+        return result
     not_allowed = object()
 
     async def dispatch(domain, service, params):

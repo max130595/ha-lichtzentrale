@@ -131,3 +131,18 @@ next_scene:
       required: true
       selector:
         area:
+
+set_vacation:
+  name: Urlaubsmodus einstellen
+  description: Aktiviert oder beendet ausschließlich auf ausdrücklichen Aufruf die Anwesenheitssimulation. Nur ausgewählte freigegebene Räume werden simuliert.
+  fields:
+    enabled:
+      name: Urlaubsmodus einschalten
+      required: true
+      selector:
+        boolean:
+    until:
+      name: Enddatum
+      description: Optionales Datum im Format JJJJ-MM-TT, einschließlich dieses Tages. Ohne Angabe bleibt das gespeicherte Enddatum erhalten; null entfernt es.
+      selector:
+        date:

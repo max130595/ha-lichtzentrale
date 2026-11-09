@@ -643,6 +643,9 @@ class BindingManager:
 
     async def _action(self, binding, context):
         area_id, action = binding["area_id"], binding["action"]
+        vacation = self.hass.data.get(DOMAIN, {}).get("vacation")
+        if vacation and vacation.paused:
+            await vacation.manual_targets(area_id, binding["params"].get("entity_ids"))
         if action in {"toggle_room", "toggle_lights"} and "ambient_first" in binding["params"]:
             from .ambient_first import async_ambient_action
             result = await async_ambient_action(self, binding, context)

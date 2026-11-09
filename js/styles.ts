@@ -16,5 +16,7 @@ export const sceneEditorStyles = `
 `;
 
 export const styles = baseStyles + sceneEditorStyles + `
+.vacation{min-width:0}.vacation input,.vacation select{min-width:0;max-width:100%}.vacation button{max-width:100%;white-space:normal;overflow-wrap:anywhere}.vacation-status{padding:16px;border-radius:12px;background:var(--secondary-background-color,#e5f1eb);margin:18px 0}.vacation-room{border-top:1px solid var(--divider-color,#cdd5ce);padding:10px 0}.vacation-timeline{list-style:none;padding:0 0 0 16px;border-left:3px solid var(--primary-color,#147566);margin-left:5px}.vacation-timeline li{padding:10px 0 16px;position:relative}.vacation-timeline li:before{content:"";position:absolute;left:-23px;top:17px;width:11px;height:11px;border-radius:50%;background:var(--primary-color,#147566)}.vacation-timeline span{display:block;margin-top:5px}
+
 .seasonal-editor{max-width:620px;margin:0 auto}.seasonal-editor h2{font-size:23px}.season-choice{margin:12px 0}.month-day{margin:12px 0}.month-day-fields{display:grid;grid-template-columns:minmax(70px,1fr) minmax(140px,2fr);gap:12px}.month-day legend{font-size:15px}.christmas-settings{padding:14px;background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#cdd5ce);border-radius:14px}
 `;

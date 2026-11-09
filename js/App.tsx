@@ -3,6 +3,7 @@ import {displayName, displayError} from './display';
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {PaletteEditor} from './PaletteEditor';
 import {ReplaceLight} from './ReplaceLight';
+import {Vacation} from './Vacation';
 import {DimmingSettings} from './DimmingSettings';
 import type {NavigationGuard} from './sceneControls';
 import {RoomPalette} from './RoomPalette';
@@ -40,12 +41,15 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
   const [palette, setPalette] = useState<Palette | null>(null);
   const [paletteEditor, setPaletteEditor] = useState<{palette?: Palette; duplicate?: boolean} | null>(null);
   const navigationGuard = useRef<NavigationGuard>(null), navigationLock = useRef(false);
+  const moreGuards = useRef<Record<string, NavigationGuard>>({});
+  const dimmingGuard = useCallback((guard: NavigationGuard) => {moreGuards.current.dimming = guard;}, []);
+  const vacationGuard = useCallback((guard: NavigationGuard) => {moreGuards.current.vacation = guard;}, []);
   const [navigating, setNavigating] = useState(false), [hasPreview, setHasPreview] = useState(false);
   const registerGuard = useCallback((guard: NavigationGuard) => {navigationGuard.current = guard; setHasPreview(!!guard);}, []);
   async function navigate(action: () => void) {
     if (navigationLock.current) return;
     navigationLock.current = true; setNavigating(true);
-    try {if (!navigationGuard.current || await navigationGuard.current()) action();}
+    try {for (const guard of Object.values(moreGuards.current)) {if (guard && !await guard()) return;} if (!navigationGuard.current || await navigationGuard.current()) action();}
     finally {navigationLock.current = false; if (alive.current) setNavigating(false);}
   }
   async function deletePalette(item: Palette) {
@@ -111,7 +115,7 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
       {tab === 'Zuhause' && <>{detail && <button disabled={navigating} onClick={() => void navigate(() => setDetail(false))}>← Zuhause</button>}<Rooms hass={hass} registerGuard={registerGuard} detail={detail} openRoom={() => setDetail(true)} initialArea={roomArea} onRoomChange={(name, area) => {setRoomArea(area); setRoomName(name);}}/></>}
       {tab === 'Taster' && <Buttons hass={hass}/>}
       {tab === 'Automationen' ? <Schedules hass={hass}/> : (tab === 'Farben' || tab === 'Mehr') ? <>
-        {tab === 'Mehr' && <><DimmingSettings key={settingsRevision} hass={hass} registerGuard={registerGuard}/><ReplaceLight hass={hass}/></>}
+        {tab === 'Mehr' && <><Vacation key={`vacation-${settingsRevision}`} hass={hass} registerGuard={vacationGuard}/><DimmingSettings key={settingsRevision} hass={hass} registerGuard={dimmingGuard}/><ReplaceLight hass={hass}/></>}
         {tab === 'Mehr' && <button disabled={disabled} onClick={() => {setGrants(lights.filter(light => light.allowed).map(light => light.entity_id)); setSettings(!settings);}}>Lampen freigeben</button>}
         {loading && <p role="status">Lampen und Paletten werden geladen …</p>}
         <button className="refresh" disabled={disabled} onClick={() => void navigate(() => {setSettings(false); setSettingsRevision(value => value + 1); setPaletteEditor(null); if (hasPreview) setPalette(null); void load();})}>Neu laden</button>

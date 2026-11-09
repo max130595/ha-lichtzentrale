@@ -121,7 +121,9 @@ async def async_ambient_action(manager, binding, context):
     from .dynamic_scenes import async_stop_room
     from .scenes import async_apply_scene
     from .selected_lights import async_control_lights, validate_selected_lights
-
+    from .vacation import vacation_paused
+    if vacation_paused(manager.hass):
+        return None
     context = context or Context()
     hass, store = manager.hass, manager.store
     area, params = binding["area_id"], binding["params"]

@@ -18,6 +18,7 @@ from .const import DOMAIN
 from .lights import entity_area_id
 from .rooms import async_dispatch, light_service_data, locked_room, room_targets
 from .selected_lights import _locked_targets, _still_allowed, _stop_dynamics
+from .vacation import vacation_paused
 
 _LOGGER = logging.getLogger(__name__)
 _SENSOR_CLASSES = {"motion", "occupancy", "presence"}
@@ -101,7 +102,7 @@ class MotionManager:
         deadline = runtime["deadline"]
         return {
             "enabled": bool(self._config(area).get("enabled")),
-            "paused": runtime["paused"], "occupied": self._occupancy(area),
+            "paused": runtime["paused"] or vacation_paused(self.hass), "occupied": self._occupancy(area),
             "active": bool(runtime["owned"]),
             "active_targets": sorted(runtime["owned"]), "dimmed": bool(runtime["restore"]),
             "remaining_seconds": max(0, math.ceil(deadline - monotonic())) if deadline else None,
@@ -177,7 +178,7 @@ class MotionManager:
 
     @callback
     def _changed(self, event):
-        if self.closed:
+        if self.closed or vacation_paused(self.hass):
             return
         entity = event.data["entity_id"]
         old, new = event.data.get("old_state"), event.data.get("new_state")
@@ -235,7 +236,15 @@ class MotionManager:
         runtime["timers"].clear()
         runtime["deadline"] = None
 
+    @callback
+    def vacation_changed(self, paused):
+        """Forget old occupancy deadlines; only fresh sensor events may restart."""
+        for area in tuple(self._rooms):
+            self.refresh_config(area)
+
     def _schedule(self, area):
+        if vacation_paused(self.hass):
+            return
         runtime = self._runtime(area)
         if runtime["deadline"] is not None:
             return
@@ -299,6 +308,8 @@ class MotionManager:
                 continue
             selected = [e for e in targets if e.startswith("light.") and e in lights
                         and _still_allowed(self.hass, self.store, e, areas)]
+            if vacation_paused(self.hass):
+                return
             if not selected or state.state == "off":
                 continue
             if state.state != "on":
@@ -313,7 +324,8 @@ class MotionManager:
         runtime = self._runtime(area)
         async with runtime["lock"]:
             config = self._config(area)
-            if self.closed or not config.get("enabled") or runtime["paused"] or self._occupancy(area) is not True:
+            if (self.closed or vacation_paused(self.hass) or not config.get("enabled")
+                    or runtime["paused"] or self._occupancy(area) is not True):
                 return
             if runtime["restore"]:
                 await self._dispatch_owned(area, "restore")
@@ -331,9 +343,12 @@ class MotionManager:
                 if scene["area_id"] != area:
                     return
                 async with locked_room(self.hass, self.store, area):
-                    if runtime["paused"] or self._occupancy(area) is not True:
+                    if vacation_paused(self.hass) or runtime["paused"] or self._occupancy(area) is not True:
                         return
-                    result = await async_apply_scene_locked(self.hass, self.store, scene["id"], context)
+                    result = await async_apply_scene_locked(
+                        self.hass, self.store, scene["id"], context,
+                        guard=lambda: not vacation_paused(self.hass),
+                        dispatch_guard=lambda: not vacation_paused(self.hass))
                     if result.get("resolved_scene_id"):
                         scene = _scene(self.store, result["resolved_scene_id"])
                     hue = self.hass.states.get(scene.get("hue_scene", "")) if scene["kind"] == "hue" else None
@@ -345,19 +360,22 @@ class MotionManager:
                 from .adaptive import async_turn_on_adaptive
                 from .dynamic_scenes import stop_dynamic
                 async with locked_room(self.hass, self.store, area):
-                    if runtime["paused"] or self._occupancy(area) is not True:
+                    if vacation_paused(self.hass) or runtime["paused"] or self._occupancy(area) is not True:
                         return
                     await stop_dynamic(self.hass, area)
-                    if runtime["paused"] or self._occupancy(area) is not True:
+                    if vacation_paused(self.hass) or runtime["paused"] or self._occupancy(area) is not True:
                         return
-                    result = {"applied": await async_turn_on_adaptive(self.hass, self.store, area, context)}
+                    result = {"applied": await async_turn_on_adaptive(
+                        self.hass, self.store, area, context,
+                        guard=lambda: not vacation_paused(self.hass),
+                        dispatch_guard=lambda: not vacation_paused(self.hass))}
             else:
                 targets = action.get("entity_ids") or room_targets(self.hass, self.store, area)
                 if not targets:
                     return
                 async with _locked_targets(self.hass, self.store, targets) as (targets, areas):
                     await _stop_dynamics(self.hass, self.store, targets, areas)
-                    if runtime["paused"] or self._occupancy(area) is not True:
+                    if vacation_paused(self.hass) or runtime["paused"] or self._occupancy(area) is not True:
                         return
                     await self._pause_selected_adaptive(targets, areas, context)
                     calls, prepared = [], {}
@@ -368,7 +386,8 @@ class MotionManager:
                             calls.append((state.domain, *light_service_data(
                                 state, on=True, brightness=action["brightness"])))
                     result = await async_dispatch(self.hass, calls, context=context,
-                        guard=lambda e: not runtime["paused"] and self._occupancy(area) is True
+                        guard=lambda e: not vacation_paused(self.hass) and not runtime["paused"]
+                        and self._occupancy(area) is True
                         and self.hass.states.get(e) is prepared[e]
                         and _still_allowed(self.hass, self.store, e, areas))
             if runtime["paused"]:
@@ -378,6 +397,8 @@ class MotionManager:
             runtime["last_error"] = "Einige Ziele konnten nicht geschaltet werden." if result.get("failed") else None
 
     async def _dispatch_owned(self, area, operation, deadline=None):
+        if vacation_paused(self.hass):
+            return
         runtime = self._runtime(area)
         targets = [e for e in runtime["owned"] if _still_allowed(
             self.hass, self.store, e, runtime["owned"])]
@@ -419,7 +440,7 @@ class MotionManager:
                     calls.append((state.domain, *payload))
                     prepared[entity] = state
             result = await async_dispatch(self.hass, calls, context=self._context(),
-                guard=lambda e: not self.closed and not runtime["paused"]
+                guard=lambda e: not self.closed and not vacation_paused(self.hass) and not runtime["paused"]
                 and self._config(area).get("enabled")
                 and (deadline is None or runtime["deadline"] == deadline)
                 and self.hass.states.get(e) is prepared[e]
@@ -440,7 +461,8 @@ class MotionManager:
             deadline = runtime["deadline"] if deadline is None else deadline
             if runtime["deadline"] != deadline:
                 return
-            if self.closed or not self._config(area).get("enabled") or self._occupancy(area) is not False:
+            if (self.closed or vacation_paused(self.hass)
+                    or not self._config(area).get("enabled") or self._occupancy(area) is not False):
                 self._cancel_timers(area)
                 return
             if dim:

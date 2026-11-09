@@ -19,6 +19,7 @@ from .lights import entity_area_id
 from .rooms import async_dispatch, light_service_data
 from .schedule_windows import _interval, window_is_open
 from .selected_lights import _locked_targets, _still_allowed
+from .vacation import vacation_paused
 
 _LOGGER = logging.getLogger(__name__)
 LEARN_SETTLE_SECONDS = 10
@@ -62,8 +63,20 @@ class BrightnessManager:
             if self._config(area).get("enabled"):
                 self._spawn(area)
 
+    @callback
+    def vacation_changed(self, paused):
+        """Discard pending regulation and learning without touching existing lights."""
+        for area in set(self._rooms) | set(self.store.data["rooms"]):
+            runtime = self._runtime(area)
+            runtime.update(active=[], active_learned={}, pending=None, reclaim=False,
+                           generation=runtime["generation"] + 1, last_change=monotonic())
+            task = self._tasks.get(area)
+            if task and task is not asyncio.current_task():
+                task.cancel()
+
     def _spawn(self, area):
-        if self.closed or (task := self._tasks.get(area)) and not task.done():
+        if (self.closed or vacation_paused(self.hass)
+                or (task := self._tasks.get(area)) and not task.done()):
             return
         task = self.hass.async_create_task(self.async_evaluate(area), "Lichtzentrale Grundhelligkeit")
         self._tasks[area] = task
@@ -93,7 +106,7 @@ class BrightnessManager:
     @callback
     def _service(self, event):
         """Even a repeated manual command with no state change pauses regulation."""
-        if self.closed or self._own(event.context):
+        if self.closed or vacation_paused(self.hass) or self._own(event.context):
             return
         if event.data.get("domain") not in {"light", "switch"} or event.data.get("service") not in {
             "turn_on", "turn_off", "toggle",
@@ -130,7 +143,7 @@ class BrightnessManager:
 
     @callback
     def _changed(self, event):
-        if self.closed:
+        if self.closed or vacation_paused(self.hass):
             return
         entity = event.data["entity_id"]
         old, new = event.data.get("old_state"), event.data.get("new_state")
@@ -201,7 +214,8 @@ class BrightnessManager:
                 stage = runtime["active"][-1]
                 async with _locked_targets(self.hass, self.store, sorted(stage)) as (targets, areas):
                     def guard(entity):
-                        return (not self.closed and runtime["generation"] == generation
+                        return (not self.closed and not vacation_paused(self.hass)
+                                and runtime["generation"] == generation
                                 and bool(runtime["active"]) and runtime["active"][-1] is stage
                                 and entity in stage and areas[entity] == area
                                 and _still_allowed(self.hass, self.store, entity, areas))
@@ -273,7 +287,7 @@ class BrightnessManager:
     def status(self, area):
         config, runtime = self._config(area), self._runtime(area)
         learned = self.store.data["rooms"].get(area, {}).get("brightness_learned", [])
-        return {"enabled": bool(config.get("enabled")), "paused": runtime["paused"],
+        return {"enabled": bool(config.get("enabled")), "paused": runtime["paused"] or vacation_paused(self.hass),
                 "current_lux": self._lux(config), "active_stage": len(runtime["active"]),
                 "learned_lux": [runtime["active_learned"].get(i, learned[i] if i < len(learned) else None)
                                 for i in range(len(config.get("stages", [])))],
@@ -292,7 +306,8 @@ class BrightnessManager:
 
     def _valid(self, area, config, generation):
         runtime = self._runtime(area)
-        return (not self.closed and config.get("enabled") and self._config(area) == config
+        return (not self.closed and not vacation_paused(self.hass)
+                and config.get("enabled") and self._config(area) == config
                 and generation == runtime["generation"] and not runtime["paused"])
 
     async def _learn(self, area, config):
@@ -332,7 +347,7 @@ class BrightnessManager:
         runtime = self._runtime(area)
         async with runtime["lock"]:
             config = self._config(area)
-            if self.closed or not config.get("enabled"):
+            if self.closed or vacation_paused(self.hass) or not config.get("enabled"):
                 return
             from .brightness_config import validate_brightness
 
