@@ -52,6 +52,10 @@ async def async_call(hass, domain, service, params, context=None, *, guard=None,
     active = data.setdefault("active_effects", {})
     old = active.get(entity) or (state.attributes.get("effect") if state else None)
     stop = domain == "light" and known and old and old not in STOP_EFFECTS
+    if stop and service == "turn_off" and state.state == "off":
+        # Switched off elsewhere: a stop is light.turn_on and would flash the lamp.
+        active.pop(entity, None)
+        stop = False
     invalidate(hass, [entity])
     if not effect and not stop:
         return await send(domain, service, params)

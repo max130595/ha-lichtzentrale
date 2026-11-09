@@ -243,3 +243,23 @@ async def test_script_light_command_releases_dynamic_lamp(hass, store, room, lig
     await hass.async_block_till_done()
     assert entity in manager.active[room[0]]["excluded"]
     await manager.stop(room[0])
+
+
+async def test_off_elsewhere_no_stop_flash_on_room_off(hass, store, room, light_calls):
+    """A lamp switched off outside the Lichtzentrale must not get a stop (turn_on)."""
+    from custom_components.lichtzentrale.rooms import async_toggle_room
+
+    scene = await make(hass, store, room)
+    entity = room[1][0]
+    with patch("custom_components.lichtzentrale.effects.EFFECT_DELAY", 0):
+        await async_apply_scene(hass, store, scene["id"])
+    assert hass.data["lichtzentrale"]["active_effects"][entity] == "sparkle"
+    state = hass.states.get(entity)
+    hass.states.async_set(entity, "off", {**state.attributes, "effect": None}, context=Context())
+    await hass.async_block_till_done()
+    light_calls.clear()
+    off_calls = []
+    hass.services.async_register("light", "turn_off", lambda call: off_calls.append(call))
+    await async_toggle_room(hass, store, room[0], on=False)
+    assert not [call for call in light_calls if call.data.get("entity_id") == entity]
+    assert entity not in hass.data["lichtzentrale"]["active_effects"]
