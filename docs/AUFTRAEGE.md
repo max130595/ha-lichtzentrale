@@ -11,7 +11,7 @@ Bad oben in Tests oder Beispielen, Schalter (`switch`) werden nie gedimmt.
 | 4a Zeitfenster-Bedingung | `stufe-4a-zeitfenster` | erledigt (PR #9, getestet 08.11.) |
 | 5 Grundhelligkeit | `stufe-5-grundhelligkeit` | erledigt (PR #10, #11) |
 | 5b Einfache Bedienung wie die Hue-App | `stufe-5b-einfach` | erledigt (PR #12, am echten System getestet 09.11.) |
-| 5c Stimmungen, eigene Paletten, Helligkeit pro Lampe | `stufe-5c-paletten` | offen – **als Nächstes** |
+| 5c Stimmungen, eigene Paletten, Helligkeit pro Lampe | `stufe-5c-paletten` | zusammengeführt (PR #13, Review-Korrekturen K1/K2), Abnahme am echten System läuft |
 | 6 Anwesenheitssimulation | `stufe-6-urlaub` | offen |
 | 7 Sicherung, „Alles aus“, Öffnung für andere | `stufe-7-sicherung` | offen |
 
