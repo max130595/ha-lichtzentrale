@@ -161,7 +161,7 @@ async def test_external_one_lamp_change_and_own_context(hass, store, setup):
     hass.states.async_set(ids[0], "on", attrs, context=context)
     await hass.async_block_till_done()
     assert ids[0] not in run["excluded"]
-    hass.states.async_set(ids[0], "on", {**attrs, "brightness": 80}, context=Context())
+    hass.states.async_set(ids[0], "on", {**attrs, "brightness": 80}, context=Context(user_id="synthetic-user"))
     await hass.async_block_till_done()
     assert run["excluded"] == {ids[0]}
     assert manager.active[scene["area_id"]] is run

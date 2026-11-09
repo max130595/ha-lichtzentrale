@@ -126,7 +126,8 @@ async def test_own_current_day_state_wins_even_against_newer_foreign_state(hass,
         result = await async_execute_action(hass, store, {"type": "return_auto", "area_id": rooms[0].id})
     assert result["applied"] == [ids[0]]
     assert calls.call_count == 1
-    assert calls.call_args.args[2] == {"entity_id": ids[0], "brightness": 70, "color_temp_kelvin": 2000}
+    # A brightness-only recall must not inject a white tone for a null color mode.
+    assert calls.call_args.args[2] == {"entity_id": ids[0], "brightness": 70}
 
 
 async def test_old_own_state_does_not_hide_current_foreign_state_and_both_expire(hass, store, overlap):

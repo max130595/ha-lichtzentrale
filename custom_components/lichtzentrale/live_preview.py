@@ -97,11 +97,17 @@ class LivePreviewManager:
                 entity_id = event.data.get("entity_id")
                 if entity_id not in original:
                     return
-                new = event.data.get("new_state")
+                old, new = event.data.get("old_state"), event.data.get("new_state")
                 own = new is not None and (new.context.id == session["context"].id or new.context.parent_id == session["context"].id)
                 if own:
                     session["touched"].add(entity_id)
-                else:
+                elif old is not None and new is not None and (
+                    (old.state in {"on", "off"} and new.state in {"on", "off"}
+                     and old.state != new.state)
+                    or (new.context.user_id is not None and old.attributes != new.attributes)
+                ):
+                    # Delayed attribute-only device reports carry no command
+                    # context. Keep rollback ownership unless a user changed them.
                     session["released"].add(entity_id)
                     session["generation"] += 1
 

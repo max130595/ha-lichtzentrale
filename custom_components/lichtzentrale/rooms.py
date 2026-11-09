@@ -159,9 +159,9 @@ def light_service_data(
             state, color_RGB_to_xy(*color_temperature_to_rgb(color_temp_kelvin))
         ))
     if on is True or len(params) > 1:
-        # Newly paired Z2M color lamps can report brightness=None/mode=unknown.
-        # Initialize a supported native mode instead of interpreting that as off.
-        if state.attributes.get("color_mode") in {None, "unknown"} and not (
+        # Initialize explicitly unknown modes on newly paired Z2M lamps only.
+        # An off lamp normally reports None and must retain its last color.
+        if state.attributes.get("color_mode") == "unknown" and not (
             "xy_color" in params or "color_temp_kelvin" in params
         ):
             if "color_temp" in modes:

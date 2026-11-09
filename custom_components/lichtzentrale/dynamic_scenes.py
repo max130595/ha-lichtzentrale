@@ -219,16 +219,11 @@ class DynamicSceneManager:
                 return
             old, new = event.data.get("old_state"), event.data.get("new_state")
             own = new and (new.context.id == run["context"].id or new.context.parent_id == run["context"].id)
-            fields = ("brightness", "xy_color", "color_temp_kelvin", "hs_color", "rgb_color", "rgbw_color", "rgbww_color")
-            motion = self.hass.data.get(DOMAIN, {}).get("motion")
-            # Motion already owns this exact run/context and deliberately treats
-            # contextless same-on device color reports as automatic. Preserve that
-            # narrow exception; user-originated or excluded-lamp changes are manual.
-            automatic_motion = motion and motion._dynamic_update(
-                scene["area_id"], event.data["entity_id"], old, new
-            )
-            if old and new and not own and not automatic_motion and new.state in {"on", "off"} and (
-                old.state != new.state or any(old.attributes.get(k) != new.attributes.get(k) for k in fields)
+            # Long Zigbee transitions outlive HA's command context. Attribute
+            # reports alone are not manual controls; service calls are handled below.
+            if old and new and not own and new.state in {"on", "off"} and (
+                (old.state in {"on", "off"} and old.state != new.state)
+                or (new.context.user_id is not None and old.attributes != new.attributes)
             ):
                 run["excluded"].add(event.data["entity_id"])
                 self.hass.async_create_task(self._persist(run))
