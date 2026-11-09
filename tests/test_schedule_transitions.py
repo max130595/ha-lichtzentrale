@@ -128,11 +128,19 @@ async def test_snapshot_and_palette_overrides(hass, store, fade_room, fade_calls
 
 
 async def test_dynamic_first_tick_waits_for_fade_only_once(hass, store):
+    import asyncio
+
     manager = DynamicSceneManager(hass, store)
-    run = {"scene": {"area_id": "studio", "dynamic": {"interval": 5}},
+    run = {"scene": {"area_id": "studio", "dynamic": {"enabled": True, "interval": 5}},
            "initial_transition": 1800}
+    now = [0]
+
+    async def advance(seconds):
+        now[0] += seconds
+
     with (
-        patch("custom_components.lichtzentrale.dynamic_scenes.asyncio.sleep", AsyncMock()) as sleep,
+        patch.object(asyncio.get_running_loop(), "time", side_effect=lambda: now[0]),
+        patch("custom_components.lichtzentrale.dynamic_scenes.asyncio.sleep", side_effect=advance) as sleep,
         patch.object(manager, "tick", AsyncMock(side_effect=[True, False])),
     ):
         await manager._loop(run)

@@ -26,7 +26,7 @@ const binding: Binding = {id: 'test_binding', event_entity: buttons[0].entity_id
 const unavailable: AdaptiveStatus = {available: false, rooms: [], switches: []};
 const adaptive: AdaptiveStatus = {available: true, rooms: [{area_id: rooms[0].area_id, switch_entity_id: 'switch.test_adaptive', enabled: true, available: true, default_on: 'last'}], switches: []};
 type Request = {type: string; [key: string]: unknown};
-type Options = {lights?: Light[]; bindings?: Binding[]; buttons?: ButtonEntity[]; rooms?: Room[]; adaptive?: AdaptiveStatus};
+type Options = {scenes?: Scene[]; lights?: Light[]; bindings?: Binding[]; buttons?: ButtonEntity[]; rooms?: Room[]; adaptive?: AdaptiveStatus};
 function makeApi(options: Options = {}) {
   let savedBindings = options.bindings || [], savedRooms = options.rooms || rooms, double_click_ms = 500;
   const callWS = vi.fn(async (request: Request): Promise<unknown> => {
@@ -36,7 +36,7 @@ function makeApi(options: Options = {}) {
       case 'lichtzentrale/buttons/list': return options.buttons || buttons;
       case 'lichtzentrale/bindings/list': return {bindings: savedBindings, double_click_ms};
       case 'lichtzentrale/rooms/list': return savedRooms;
-      case 'lichtzentrale/scenes/list': return scenes;
+      case 'lichtzentrale/scenes/list': return options.scenes || scenes;
       case 'lichtzentrale/adaptive/status': return options.adaptive || unavailable;
       case 'lichtzentrale/binding/save': {
         const saved = {...(request.binding as Binding), id: (request.binding as Binding).id || 'test_new_binding'};
@@ -572,4 +572,177 @@ describe('Gelernte Merkmale und Egal-Auswahl', () => {
     fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
     expect(screen.getByLabelText('unknown_observed_key beachten')).toHaveValue('match');
   });
+});
+
+describe('Beim Einschalten', () => {
+  it('keeps legacy bindings unchanged and saves fixed brightness only for on actions', async () => {
+    const {callWS} = await setup({bindings: [binding]});
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Beim Einschalten')).toHaveValue('last');
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/binding/save', binding});
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    fireEvent.change(screen.getByLabelText('Beim Einschalten'), {target: {value: 'brightness'}});
+    expect(screen.getByLabelText('Helligkeit beim Einschalten')).toHaveValue('100');
+    fireEvent.change(screen.getByLabelText('Helligkeit beim Einschalten'), {target: {value: '40'}});
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/binding/save', binding: {...binding, params: {on_behavior: {mode: 'brightness', brightness: 102}}}});
+    expect(eventGroup().getByText(/beim Einschalten 40 %/)).toBeVisible();
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    chooseAction('turn_off_room');
+    expect(screen.queryByLabelText('Beim Einschalten')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({action: 'turn_off_room', params: {}})}));
+  });
+  it('requires a matching room scene and invalidates it when the room changes', async () => {
+    const {callWS} = await setup(); editEvent(); chooseRoom();
+    fireEvent.change(screen.getByLabelText('Beim Einschalten'), {target: {value: 'scene'}});
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    const select = within(screen.getByLabelText('Szene beim Einschalten'));
+    expect(select.getByRole('option', {name: 'Testszene A'})).toBeInTheDocument();
+    expect(select.queryByRole('option', {name: 'Testszene B'})).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Szene beim Einschalten'), {target: {value: scenes[0].id}});
+    chooseRoom(rooms[1].area_id);
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Szene beim Einschalten'), {target: {value: scenes[2].id}});
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({area_id: rooms[1].area_id, params: {on_behavior: {mode: 'scene', scene_id: scenes[2].id}}})}));
+  });
+  it('restricts selected-lamp scenes to eligible subsets and never widens the selection', async () => {
+    const ownLights = testLights.slice(0, 2);
+    const palette = {...scenes[0], id: 'test_palette', kind: 'palette' as const, name: 'Testpalette'};
+    const snapshot = {...scenes[0], lights: {'light.test_a': {on: true}, 'switch.test_b': {on: true}}};
+    const hue = {...scenes[0], id: 'test_hue', kind: 'hue' as const, name: 'Testbridge'};
+    const mixedRoom = {...rooms[0], lights: ownLights};
+    const {callWS} = await setup({lights: ownLights, rooms: [mixedRoom], scenes: [snapshot, palette, hue]});
+    editEvent(); chooseAction('toggle_lights'); selectLight('Testlicht A');
+    fireEvent.change(screen.getByLabelText('Beim Einschalten'), {target: {value: 'scene'}});
+    expect(within(screen.getByLabelText('Szene beim Einschalten')).getByRole('option', {name: 'Testpalette'})).toBeInTheDocument();
+    expect(within(screen.getByLabelText('Szene beim Einschalten')).queryByRole('option', {name: 'Testbridge'})).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Szene beim Einschalten'), {target: {value: snapshot.id}});
+    selectLight('Testlicht B');
+    expect(within(screen.getByLabelText('Szene beim Einschalten')).queryByRole('option', {name: 'Testpalette'})).not.toBeInTheDocument();
+    expect(screen.getByText('Nur die ausgewählten Lampen übernehmen die Szene. Andere Lampen bleiben unverändert.')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({area_id: null, params: {entity_ids: ['light.test_a', 'switch.test_b'], on_behavior: {mode: 'scene', scene_id: snapshot.id}}})}));
+  });
+  it('preserves failed brightness drafts and cancels without changing saved behavior', async () => {
+    const existing = {...binding, params: {on_behavior: {mode: 'brightness' as const, brightness: 127}}};
+    const {callWS} = await setup({bindings: [existing]});
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Helligkeit beim Einschalten')).toHaveValue('50');
+    fireEvent.change(screen.getByLabelText('Helligkeit beim Einschalten'), {target: {value: '100'}});
+    callWS.mockRejectedValueOnce(new Error('Synthetischer Speicherfehler'));
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByRole('alert');
+    expect(screen.getByLabelText('Helligkeit beim Einschalten')).toHaveValue('100');
+    fireEvent.click(screen.getByRole('button', {name: 'Abbrechen'}));
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Helligkeit beim Einschalten')).toHaveValue('50');
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/binding/save', binding: existing});
+  });
+  it('retains stale scene behavior visibly until explicitly repaired', async () => {
+    const existing = {...binding, params: {on_behavior: {mode: 'scene' as const, scene_id: 'test_missing_scene'}}};
+    const {callWS} = await setup({bindings: [existing]});
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByRole('alert')).toHaveTextContent('passt nicht mehr');
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Beim Einschalten'), {target: {value: 'last'}});
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/binding/save', binding: {...binding, params: {on_behavior: {mode: 'last'}}}});
+  });
+});
+
+describe('Beim Einschalten nach Tageszeit', () => {
+  it('saves ordered clock/solar windows with brightness, white temperature and scene', async () => {
+    const {callWS, unmount} = await setup(); editEvent(); chooseRoom();
+    fireEvent.change(screen.getByLabelText('Beim Einschalten'), {target: {value: 'time'}});
+    fireEvent.change(screen.getByLabelText('Einschaltfenster 1 Beginn: Uhrzeit'), {target: {value: '08:00'}});
+    fireEvent.change(screen.getByLabelText('Einschaltfenster 1 Ende: Bezug'), {target: {value: 'sunset'}});
+    fireEvent.change(screen.getByLabelText('Einschaltfenster 1 Ende: Versatz in Minuten'), {target: {value: '-15'}});
+    fireEvent.change(screen.getByLabelText('Einschaltfenster 1 Helligkeit'), {target: {value: '30'}});
+    fireEvent.change(screen.getByLabelText('Einschaltfenster 1 Weißton in Kelvin'), {target: {value: '2700'}});
+    fireEvent.click(screen.getByRole('button', {name: 'Einschaltfenster hinzufügen'}));
+    fireEvent.change(screen.getByLabelText('Einschaltfenster 2 Aktion'), {target: {value: 'scene'}});
+    fireEvent.change(screen.getByLabelText('Einschaltfenster 2 Szene'), {target: {value: scenes[0].id}});
+    fireEvent.click(screen.getByRole('button', {name: 'Einschaltfenster 2 nach oben'}));
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    const saved = callWS.mock.calls.find(([request]) => request.type === 'lichtzentrale/binding/save')![0].binding as Binding;
+    expect(saved.params.on_behavior).toEqual({mode: 'time', windows: [
+      {window: {after: {type: 'time', value: '07:00'}, before: {type: 'time', value: '22:00'}}, mode: 'scene', scene_id: scenes[0].id},
+      {window: {after: {type: 'time', value: '08:00'}, before: {type: 'sun', event: 'sunset', offset_min: -15}}, mode: 'brightness', brightness: 77, color_temp_kelvin: 2700},
+    ]});
+    expect(eventGroup().getByText(/nach Tageszeit \(2 Zeitfenster\)/)).toBeVisible();
+    unmount(); render(<Buttons hass={{callWS} as Hass}/>);
+    await screen.findByRole('region', {name: 'Testgerät'});
+    fireEvent.click(screen.getAllByText('Alle Ereignisse und gespeicherte Belegungen')[0]);
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Beim Einschalten')).toHaveValue('time');
+    expect(screen.getByLabelText('Einschaltfenster 1 Szene')).toHaveValue(scenes[0].id);
+    expect(screen.getByLabelText('Einschaltfenster 2 Weißton in Kelvin')).toHaveValue(2700);
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect((callWS.mock.calls.at(-1)![0].binding as Binding).params).toEqual(saved.params);
+  });
+  it('blocks invalid ranges or stale scene targets and keeps failed edits until cancellation', async () => {
+    const existing: Binding = {...binding, params: {on_behavior: {mode: 'time', windows: [
+      {window: {after: null, before: null}, mode: 'brightness', brightness: 13, color_temp_kelvin: 2200},
+    ]}}};
+    const {callWS} = await setup({bindings: [existing]});
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    fireEvent.change(screen.getByLabelText('Einschaltfenster 1 Weißton in Kelvin'), {target: {value: '999'}});
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Einschaltfenster 1 Weißton in Kelvin'), {target: {value: '3000'}});
+    callWS.mockRejectedValueOnce(new Error('Synthetischer Schreibfehler'));
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByRole('alert');
+    expect(screen.getByLabelText('Einschaltfenster 1 Weißton in Kelvin')).toHaveValue(3000);
+    fireEvent.click(screen.getByRole('button', {name: 'Abbrechen'}));
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Einschaltfenster 1 Weißton in Kelvin')).toHaveValue(2200);
+    fireEvent.change(screen.getByLabelText('Einschaltfenster 1 Aktion'), {target: {value: 'scene'}});
+    fireEvent.change(screen.getByLabelText('Einschaltfenster 1 Szene'), {target: {value: scenes[0].id}});
+    chooseRoom(rooms[1].area_id);
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    expect(screen.getByRole('option', {name: 'Szene nicht mehr passend oder vorhanden'})).toHaveProperty('selected', true);
+  });
+});
+
+it('offers seasonal selected-lamp behavior only when every usable season child fits', async () => {
+  const child = {...scenes[0], lights: {'light.test_a': {on: true}, 'switch.test_b': {on: true}}};
+  const palette: Scene = {...scenes[0], id: 'test_season_palette', name: 'Testpalette', kind: 'palette'};
+  const hue: Scene = {...scenes[0], id: 'test_season_hue', name: 'Testbridge', kind: 'hue'};
+  const seasonal: Scene = {...scenes[0], id: 'test_seasonal_safe', name: 'Testjahreszeiten', kind: 'seasonal', seasonal: {
+    scenes: {spring: child.id, summer: 'test_missing_season', autumn: null, winter: null},
+    boundaries: {spring: '03-01', summer: '06-01', autumn: '09-01', winter: '12-01'},
+    christmas: {enabled: false, scene_id: hue.id, start: '12-01', end: '12-26'},
+  }};
+  const withPalette: Scene = {...seasonal, id: 'test_seasonal_palette', name: 'Testjahreszeiten mit Palette', seasonal: {...seasonal.seasonal!, scenes: {...seasonal.seasonal!.scenes, winter: palette.id}}};
+  const withHue: Scene = {...seasonal, id: 'test_seasonal_hue', name: 'Testjahreszeiten mit Bridge', seasonal: {...seasonal.seasonal!, christmas: {...seasonal.seasonal!.christmas, enabled: true}}};
+  const stale: Scene = {...seasonal, id: 'test_seasonal_stale', name: 'Testjahreszeiten ohne Szene', seasonal: {...seasonal.seasonal!, scenes: {spring: 'test_missing_season', summer: null, autumn: null, winter: null}}};
+  const mixedRoom = {...rooms[0], lights: testLights.slice(0, 2)};
+  const {callWS} = await setup({lights: testLights.slice(0, 2), rooms: [mixedRoom], scenes: [child, palette, hue, seasonal, withPalette, withHue, stale]});
+  editEvent(); chooseAction('toggle_lights'); selectLight('Testlicht A');
+  fireEvent.change(screen.getByLabelText('Beim Einschalten'), {target: {value: 'scene'}});
+  let choices = within(screen.getByLabelText('Szene beim Einschalten'));
+  expect(choices.getByRole('option', {name: 'Testjahreszeiten'})).toBeInTheDocument();
+  expect(choices.getByRole('option', {name: 'Testjahreszeiten mit Palette'})).toBeInTheDocument();
+  expect(choices.queryByRole('option', {name: 'Testjahreszeiten mit Bridge'})).not.toBeInTheDocument();
+  expect(choices.queryByRole('option', {name: 'Testjahreszeiten ohne Szene'})).not.toBeInTheDocument();
+  selectLight('Testlicht B');
+  choices = within(screen.getByLabelText('Szene beim Einschalten'));
+  expect(choices.queryByRole('option', {name: 'Testjahreszeiten mit Palette'})).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Szene beim Einschalten'), {target: {value: seasonal.id}});
+  fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+  await screen.findByText('Belegung in Home Assistant gespeichert.');
+  expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({params: {entity_ids: ['light.test_a', 'switch.test_b'], on_behavior: {mode: 'scene', scene_id: seasonal.id}}})}));
 });

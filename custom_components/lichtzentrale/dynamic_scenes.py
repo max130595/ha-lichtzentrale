@@ -9,27 +9,39 @@ import asyncio
 import logging
 import math
 from copy import deepcopy
+from uuid import uuid4
 
-from homeassistant.core import callback
+from homeassistant.const import EVENT_CALL_SERVICE, EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import Context, CoreState, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import DOMAIN
-from .rooms import room_targets
 
 _LOGGER = logging.getLogger(__name__)
 
 
+TEMPOS = {"very_slow": (180, 60), "slow": (90, 40), "medium": (30, 15), "fast": (8, 3)}
+EXECUTION_FIELDS = (
+    "kind", "area_id", "lights", "palette_id", "brightness", "dynamic", "hue_scene",
+    "verteilung", "lamp_settings", "wave_order",
+)
+
+
 def validate_dynamic(value, kind):
-    if not isinstance(value, dict) or set(value) - {"enabled", "interval", "transition", "welle"}:
+    if not isinstance(value, dict) or set(value) - {
+        "enabled", "interval", "transition", "welle", "tempo", "gentle"
+    }:
         raise ServiceValidationError("Ungültige Dynamik-Einstellungen.")
-    enabled = value.get("enabled", False)
-    wave = value.get("welle", False)
+    enabled, wave, gentle = value.get("enabled", False), value.get("welle", False), value.get("gentle", False)
+    tempo = value.get("tempo")
+    if tempo is not None and (not isinstance(tempo, str) or tempo not in TEMPOS):
+        raise ServiceValidationError("Ungültiges Tempo.")
     if type(wave) is not bool or (wave and kind != "palette"):
         raise ServiceValidationError("Welle ist nur für Farbpaletten verfügbar.")
-    interval = value.get("interval", 60)
-    transition = value.get("transition", 10)
-    if type(enabled) is not bool or any(
+    defaults = TEMPOS.get(tempo, (60, 10))
+    interval, transition = value.get("interval", defaults[0]), value.get("transition", defaults[1])
+    if type(enabled) is not bool or type(gentle) is not bool or any(
         type(v) not in (int, float) or not math.isfinite(v) for v in (interval, transition)
     ):
         raise ServiceValidationError("Ungültige Dynamik-Einstellungen.")
@@ -39,7 +51,13 @@ def validate_dynamic(value, kind):
         )
     if enabled and kind != "palette":
         raise ServiceValidationError("Dynamik ist nur für Farbpaletten verfügbar.")
-    return {"enabled": enabled, "interval": interval, "transition": transition, "welle": wave}
+    result = {"enabled": enabled, "interval": interval, "transition": transition, "welle": wave}
+    # Legacy seconds remain byte-for-byte meaningful; no implicit preset migration.
+    if "tempo" in value:
+        result["tempo"] = tempo
+    if "gentle" in value:
+        result["gentle"] = gentle
+    return result
 
 
 class DynamicSceneManager:
@@ -47,139 +65,301 @@ class DynamicSceneManager:
         self.hass, self.store = hass, store
         self.active = {}
         self.closed = False
+        self._startup_unsubscribe = None
 
     def list(self):
+        from .moon import illuminated_fraction
+
         return [
             {
-                "scene_id": r["scene"]["id"],
-                "area_id": area,
+                "scene_id": r["scene"]["id"], "area_id": area,
                 "name": r["scene"]["name"],
-                "interval": r["scene"]["dynamic"]["interval"],
-                "transition": r["scene"]["dynamic"]["transition"],
+                "interval": r["scene"]["dynamic"].get("interval", 60),
+                "transition": r["scene"]["dynamic"].get("transition", 10),
                 "welle": r["scene"]["dynamic"].get("welle", False),
                 "verteilung": r["scene"].get("verteilung", "zufall"),
+                "tempo": r["scene"]["dynamic"].get("tempo"),
+                "gentle": r["scene"]["dynamic"].get("gentle", False),
+                "excluded": sorted(r["excluded"]),
+                "moon_illumination": round(100 * illuminated_fraction()),
             }
             for area, r in self.active.items()
         ]
 
     @staticmethod
     def _unsubscribe(run):
-        if unsubscribe := run.pop("unsubscribe", None):
-            unsubscribe()
+        for key in ("unsubscribe", "service_unsubscribe"):
+            if unsubscribe := run.pop(key, None):
+                unsubscribe()
 
-    async def stop(self, area_id):
+    async def _persist(self, run):
+        if not run["persist"]:
+            return
+        await self.store.async_set_dynamic_run(run["scene"]["area_id"], {
+            "token": run["token"], "scene_id": run["scene"]["id"],
+            "scene": run["scene"], "targets": run["targets"],
+            "excluded": sorted(run["excluded"]),
+        }, expected_token=run["token"])
+
+    async def stop(self, area_id, *, preserve=False):
         run = self.active.pop(area_id, None)
         if run:
+            run["preserve"] = preserve
             self._unsubscribe(run)
             run["task"].cancel()
             await asyncio.gather(run["task"], return_exceptions=True)
+        if not preserve and (run is None or run["persist"]):
+            await self.store.async_set_dynamic_run(
+                area_id, None, expected_token=run["token"] if run else None
+            )
         return {"stopped": run is not None}
 
     async def shutdown(self):
         self.closed = True
+        if self._startup_unsubscribe:
+            self._startup_unsubscribe()
+            self._startup_unsubscribe = None
         for area in list(self.active):
-            await self.stop(area)
+            await self.stop(area, preserve=True)
 
-    async def start(self, scene, context, applied_targets=None, *, initial_transition=None):
-        await self.stop(scene["area_id"])
+    async def restore(self, *, wait_for_start=True):
+        """Resume only the persisted scope and currently-on lamps, never recall on."""
+        if self.closed:
+            return
+        if wait_for_start and self.hass.state != CoreState.running:
+            if not self._startup_unsubscribe:
+                async def started(_event):
+                    self._startup_unsubscribe = None
+                    await self.restore(wait_for_start=False)
+                self._startup_unsubscribe = self.hass.bus.async_listen_once(
+                    EVENT_HOMEASSISTANT_STARTED, started
+                )
+            return
+        for area, saved in self.store.data.get("active_dynamic", {}).items():
+            if self.closed or area in self.active:
+                continue
+            try:
+                scene = next((s for s in self.store.data["scenes"] if s["id"] == saved.get("scene_id")), None)
+                if scene is None or any(scene.get(k) != saved.get("scene", {}).get(k) for k in EXECUTION_FIELDS):
+                    await self.store.async_set_dynamic_run(area, None, expected_token=saved.get("token"))
+                    continue
+                await self.start(
+                    scene, None, saved.get("targets", []), excluded=saved.get("excluded", []),
+                    resume_token=saved.get("token"),
+                )
+            except Exception:
+                _LOGGER.exception("Gespeicherte Dynamik konnte nicht fortgesetzt werden")
+                await self.store.async_set_dynamic_run(area, None, expected_token=saved.get("token"))
+
+    async def entity_references_changed(self, old_entity_id, new_entity_id):
+        for area, run in list(self.active.items()):
+            if old_entity_id in run["targets"] or old_entity_id in run["layout_targets"]:
+                await self.stop(area, preserve=True)
+        await self.restore(wait_for_start=False)
+
+    async def exclude_targets(self, targets):
+        from .command_limiter import limiter
+
+        affected = []
+        for run in list(self.active.values()):
+            selected = set(targets).intersection(run["targets"])
+            if selected:
+                run["excluded"].update(selected)  # Fence pending ticks before any await.
+                affected.append(run)
+        for entity in targets:
+            async with limiter(self.hass).entity_lock(entity):
+                pass  # Join the already-dispatched command before the manual command.
+        for run in affected:
+            if self.active.get(run["scene"]["area_id"]) is run:
+                if set(run["targets"]) <= run["excluded"]:
+                    await self.stop(run["scene"]["area_id"])
+                else:
+                    await self._persist(run)
+
+    async def start(self, scene, context, applied_targets=None, *, initial_transition=None,
+                    persist=True, palette_override=None, dispatch_guard=None,
+                    excluded=None, resume_token=None):
+        if resume_token is not None:
+            # A newer recall/explicit off wins a concurrent startup restoration.
+            if scene["area_id"] in self.active:
+                return
+        else:
+            await self.stop(scene["area_id"])
         if self.closed:
             raise ServiceValidationError("Lichtzentrale ist nicht geladen.")
-        targets = [
-            e
-            for e in room_targets(self.hass, self.store, scene["area_id"])
-            if e.startswith("light.")
-        ]
+        targets = [e for e in _current_targets(self.hass, self.store, scene["area_id"])
+                   if e.startswith("light.")]
         layout_targets = list(targets)
         if applied_targets is not None:
             targets = [e for e in targets if e in applied_targets]
+        if resume_token is not None:
+            targets = [e for e in targets if (state := self.hass.states.get(e)) and state.state == "on"]
         if not targets:
+            if persist:
+                await self.store.async_set_dynamic_run(scene["area_id"], None, expected_token=resume_token)
             return
         run = {
-            "scene": deepcopy(scene),
-            "targets": targets,
-            "context": context,
-            "layout_targets": layout_targets,
-            "initial_transition": initial_transition or 0,
+            "scene": deepcopy(scene), "targets": targets, "context": context or Context(),
+            "layout_targets": layout_targets, "initial_transition": initial_transition or 0,
+            "excluded": set(excluded or []), "token": resume_token or uuid4().hex,
+            "persist": persist, "preserve": False, "palette_override": palette_override,
+            "dispatch_guard": dispatch_guard if not persist else None, "last_moon": asyncio.get_running_loop().time(),
         }
+        if persist:
+            saved = await self.store.async_set_dynamic_run(scene["area_id"], {
+                "token": run["token"], "scene_id": scene["id"], "scene": scene,
+                "targets": targets, "excluded": sorted(run["excluded"]),
+            }, expected_token=resume_token)
+            if not saved or self.closed:
+                return
 
         @callback
         def changed(event):
-            if not any((s := self.hass.states.get(e)) and s.state == "on" for e in targets):
+            if self.active.get(scene["area_id"]) is not run or self.closed:
+                return
+            old, new = event.data.get("old_state"), event.data.get("new_state")
+            own = new and (new.context.id == run["context"].id or new.context.parent_id == run["context"].id)
+            fields = ("brightness", "xy_color", "color_temp_kelvin", "hs_color", "rgb_color", "rgbw_color", "rgbww_color")
+            motion = self.hass.data.get(DOMAIN, {}).get("motion")
+            # Motion already owns this exact run/context and deliberately treats
+            # contextless same-on device color reports as automatic. Preserve that
+            # narrow exception; user-originated or excluded-lamp changes are manual.
+            automatic_motion = motion and motion._dynamic_update(
+                scene["area_id"], event.data["entity_id"], old, new
+            )
+            if old and new and not own and not automatic_motion and new.state in {"on", "off"} and (
+                old.state != new.state or any(old.attributes.get(k) != new.attributes.get(k) for k in fields)
+            ):
+                run["excluded"].add(event.data["entity_id"])
+                self.hass.async_create_task(self._persist(run))
+            if not any((s := self.hass.states.get(e)) and s.state == "on"
+                       for e in targets if e not in run["excluded"]):
+                self._unsubscribe(run)
                 if self.active.get(scene["area_id"]) is run:
                     self.active.pop(scene["area_id"], None)
-                self._unsubscribe(run)
                 run["task"].cancel()
+                if run["persist"] and not self.closed:
+                    self.hass.async_create_task(self.store.async_set_dynamic_run(
+                        scene["area_id"], None, expected_token=run["token"]
+                    ))
+
+        @callback
+        def called(event):
+            # A real service invocation disambiguates a contextless physical
+            # control/automation from unsolicited device color reports.
+            if self.active.get(scene["area_id"]) is not run or self.closed:
+                return
+            data = event.data
+            if data.get("domain") != "light" or data.get("service") not in {"turn_on", "turn_off", "toggle"}:
+                return
+            if event.context.id == run["context"].id or event.context.parent_id == run["context"].id:
+                return
+            selected = data.get("service_data", {}).get("entity_id", [])
+            if isinstance(selected, str):
+                selected = targets if selected == "all" else [selected]
+            if not isinstance(selected, (list, tuple, set)):
+                return
+            affected = set(targets).intersection(selected)
+            if affected:
+                run["excluded"].update(affected)
+
+                async def finish_manual():
+                    if self.active.get(scene["area_id"]) is run:
+                        await self.exclude_targets(sorted(affected))
+
+                self.hass.async_create_task(finish_manual())
 
         run["unsubscribe"] = async_track_state_change_event(self.hass, targets, changed)
+        run["service_unsubscribe"] = self.hass.bus.async_listen(EVENT_CALL_SERVICE, called)
         self.active[scene["area_id"]] = run
-        run["task"] = self.hass.async_create_background_task(
-            self._loop(run), "Lichtzentrale Dynamik"
-        )
+        run["task"] = self.hass.async_create_background_task(self._loop(run), "Lichtzentrale Dynamik")
 
-    async def tick(self, run, offset):
+    async def tick(self, run, offset, *, moon_only=False):
+        from .moon import UPDATE_SECONDS, illuminated_fraction
         from .palettes import async_apply_palette
 
         scene = run["scene"]
-        current = next((s for s in self.store.data["scenes"] if s["id"] == scene["id"]), None)
-        execution_fields = (
-            "kind",
-            "area_id",
-            "lights",
-            "palette_id",
-            "brightness",
-            "dynamic",
-            "hue_scene",
-            "verteilung",
-        )
-        if current is None or any(current.get(key) != scene.get(key) for key in execution_fields):
+        if self.active.get(scene["area_id"]) is not run or self.closed:
             return False
-        # Cosmetic edits should neither stop playback nor leave a stale title.
-        scene["name"] = current["name"]
-        # Never grow the original target set after starting. Registry changes,
-        # permission removal and unavailable/off entities take effect each tick.
+        if run["persist"]:
+            current = next((s for s in self.store.data["scenes"] if s["id"] == scene["id"]), None)
+            if current is None or any(current.get(key) != scene.get(key) for key in EXECUTION_FIELDS):
+                return False
+            scene["name"] = current["name"]
         allowed = set(_current_targets(self.hass, self.store, scene["area_id"]))
-        targets = [
-            e
-            for e in run["targets"]
-            if e.startswith("light.")
-            and e in allowed
-            and (s := self.hass.states.get(e))
-            and s.state == "on"
-        ]
+        targets = [e for e in run["targets"] if e not in run["excluded"] and e in allowed
+                   and (s := self.hass.states.get(e)) and s.state == "on"]
         if not targets:
             return False
-        result = await async_apply_palette(
-            self.hass,
-            self.store,
-            scene["palette_id"],
-            targets,
-            scene.get("brightness"),
-            scene["dynamic"]["transition"],
-            run["context"],
-            color_offset=offset,
-            manage=False,
-            verteilung=scene.get("verteilung", "zufall"),
-            welle=scene["dynamic"].get("welle", False),
-            layout_targets=run.get("layout_targets", run["targets"]),
-            tick_area_id=scene["area_id"],
+        now = asyncio.get_running_loop().time()
+        moon_due = now - run["last_moon"] >= UPDATE_SECONDS
+        breath = illuminated_fraction() >= 0.95 and any(
+            s.get("mode") == "moon" and s.get("moon", {}).get("breath")
+            for s in scene.get("lamp_settings", {}).values()
         )
+
+        def valid(entity):
+            return bool(self.active.get(scene["area_id"]) is run and not self.closed
+                        and entity not in run["excluded"]
+                        and (run["dispatch_guard"] is None or run["dispatch_guard"]()))
+
+        result = await async_apply_palette(
+            self.hass, self.store, scene.get("palette_id") or "kupfernest", targets,
+            scene.get("brightness"), scene["dynamic"].get("transition", 10), run["context"],
+            color_offset=offset, manage=False, verteilung=scene.get("verteilung", "zufall"),
+            welle=scene["dynamic"].get("welle", False), layout_targets=run["layout_targets"],
+            tick_area_id=scene["area_id"], lamp_settings=scene.get("lamp_settings"),
+            wave_order=scene.get("wave_order"), gentle=scene["dynamic"].get("gentle", False),
+            palette_override=run["palette_override"], tick_guard=valid,
+            moon_due=moon_due, moon_breath=breath,
+            only_moon=moon_only or scene["kind"] != "palette" or not scene["dynamic"].get("enabled", False),
+        )
+        if moon_due:
+            run["last_moon"] = now
         if result.get("failed"):
             _LOGGER.warning("Dynamische Szene wurde nach einem Gerätefehler gestoppt")
             return False
-        return bool(result.get("applied"))
+        return True  # Fixed lamps and a not-yet-due moon intentionally emit no command.
 
     async def _loop(self, run):
+        from .moon import UPDATE_SECONDS, illuminated_fraction
+
         scene = run["scene"]
         try:
             offset = 1
+            clock = asyncio.get_running_loop().time
+            dynamic = scene.get("dynamic", {})
+            interval = dynamic.get("interval", 60)
+            cycling = dynamic.get("enabled", False)
+            has_moon = any(v.get("mode") == "moon" for v in scene.get("lamp_settings", {}).values())
+            ready_at = clock() + run["initial_transition"]
+            next_cycle = clock() + max(interval, run["initial_transition"]) if cycling else math.inf
+            next_moon = clock() + UPDATE_SECONDS if has_moon else math.inf
             while True:
-                await asyncio.sleep(max(
-                    scene["dynamic"]["interval"],
-                    run.get("initial_transition", 0) if offset == 1 else 0,
-                ))
-                if not await self.tick(run, offset):
+                breathing = illuminated_fraction() >= 0.95 and any(
+                    v.get("mode") == "moon" and v.get("moon", {}).get("breath")
+                    for v in scene.get("lamp_settings", {}).values()
+                )
+                due = max(ready_at, min(next_cycle, next_moon, clock() + 30 if breathing else math.inf))
+                if math.isinf(due):
                     return
-                offset += 1
+                await asyncio.sleep(max(0, due - clock()))
+                started = clock()
+                cycle_due = started >= next_cycle
+                if not await self.tick(run, offset, moon_only=not cycle_due):
+                    return
+                elapsed = clock() - started
+                if cycle_due:
+                    # Delay the next tick from completion: no catch-up backlog.
+                    next_cycle = clock() + interval
+                    offset += 1
+                    if elapsed >= interval:
+                        _LOGGER.warning(
+                            "Dynamik-Takt wegen Geräte-/Zigbee-Auslastung verlängert (%.1f s statt %.1f s); keine Warteschlange",
+                            elapsed + interval, interval,
+                        )
+                if started >= next_moon:
+                    next_moon = clock() + UPDATE_SECONDS
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -188,6 +368,14 @@ class DynamicSceneManager:
             self._unsubscribe(run)
             if self.active.get(scene["area_id"]) is run:
                 self.active.pop(scene["area_id"], None)
+                if run["persist"] and not self.closed and not run["preserve"]:
+                    await self.store.async_set_dynamic_run(scene["area_id"], None, expected_token=run["token"])
+
+
+async def async_exclude_targets(hass, targets):
+    """Manual lamp controls leave peers running until the next explicit scene start."""
+    if active := manager(hass):
+        await active.exclude_targets(targets)
 
 
 def manager(hass):

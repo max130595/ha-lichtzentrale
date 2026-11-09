@@ -9,7 +9,8 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .lights import list_lights, validate_lights
-from .palettes import async_apply_palette, list_palettes
+from .palette_catalogue import list_palettes
+from .palettes import async_apply_palette
 from .positions import DISTRIBUTIONS
 from .rooms import async_room_brightness, async_set_light, async_toggle_room, list_rooms
 from .scenes import (
@@ -47,8 +48,8 @@ def get_store(hass: HomeAssistant) -> LichtzentraleStore:
 def ws_palettes(hass, connection, msg):
     """Return the catalogue only when the integration is loaded."""
     try:
-        get_store(hass)
-        connection.send_result(msg["id"], list_palettes())
+        store = get_store(hass)
+        connection.send_result(msg["id"], list_palettes(store))
     except HomeAssistantError as error:
         connection.send_error(msg["id"], "not_ready", str(error))
 
@@ -132,6 +133,7 @@ def async_setup_websocket_api(hass: HomeAssistant) -> None:
         *BRIGHTNESS_HANDLERS,
         *SCHEDULE_HANDLERS,
         *STAGE_FIVE_B_HANDLERS,
+        *STAGE_FIVE_C_HANDLERS,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -507,4 +509,83 @@ STAGE_FIVE_B_HANDLERS = (
     command("buttons/learn/start", {vol.Required("entity_id"): cv.entity_id}, button_learn_start),
     command("buttons/learn/status", {vol.Required("token"): cv.string}, button_learn_status),
     command("buttons/learn/cancel", {vol.Required("token"): cv.string}, button_learn_cancel),
+)
+
+
+async def palette_save(hass, store, msg, context):
+    return await store.async_save_palette(msg["palette"])
+
+
+async def palette_duplicate(hass, store, msg, context):
+    return await store.async_duplicate_palette(msg["palette_id"], msg.get("name"))
+
+
+async def palette_delete(hass, store, msg, context):
+    await store.async_delete_palette(msg["palette_id"])
+    return {}
+
+
+def preview_command(name, fields):
+    """Keep trial identifiers tied to the authenticated socket, not just its user."""
+    @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/preview/{name}", **fields})
+    @websocket_api.require_admin
+    @websocket_api.async_response
+    async def wrapped(hass, connection, msg):
+        from .live_preview import preview_manager
+
+        try:
+            get_store(hass)
+            active = preview_manager(hass)
+            if name == "begin":
+                result = await active.begin(msg["area_id"], connection, connection.context(msg))
+            elif name == "keepalive":
+                result = active.keepalive(msg["preview_id"], connection)
+            elif name == "cancel":
+                result = await active.cancel(msg["preview_id"], connection)
+            elif name == "apply":
+                result = await active.apply(msg["preview_id"], connection,
+                    sequence=msg["sequence"], scene=msg.get("scene"), palette=msg.get("palette"))
+            else:
+                result = await active.commit(msg["preview_id"], connection,
+                    scene=msg.get("scene"), palette=msg.get("palette"))
+            connection.send_result(msg["id"], result)
+        except HomeAssistantError as error:
+            connection.send_error(msg["id"], "invalid_request", str(error))
+    return wrapped
+
+
+def _references(hass):
+    manager = hass.data.get(DOMAIN, {}).get("entity_references")
+    if manager is None:
+        raise HomeAssistantError("Lichtzentrale ist nicht geladen.")
+    return manager
+
+
+async def light_replace_options(hass, store, msg, context):
+    return _references(hass).options()
+
+
+async def light_replace_preview(hass, store, msg, context):
+    return _references(hass).preview(msg["old_entity_id"], msg["new_entity_id"])
+
+
+async def light_replace(hass, store, msg, context):
+    return await _references(hass).async_replace(msg["old_entity_id"], msg["new_entity_id"], msg["preview_token"])
+
+
+_PREVIEW_ID = {vol.Required("preview_id"): cv.string}
+_PREVIEW_DRAFT = {vol.Optional("scene"): dict, vol.Optional("palette"): dict}
+_REPLACE_IDS = {vol.Required("old_entity_id"): cv.entity_id, vol.Required("new_entity_id"): cv.entity_id}
+STAGE_FIVE_C_HANDLERS = (
+    command("palette/save", {vol.Required("palette"): dict}, palette_save),
+    command("palette/duplicate", {vol.Required("palette_id"): cv.string, vol.Optional("name"): cv.string}, palette_duplicate),
+    command("palette/delete", {vol.Required("palette_id"): cv.string}, palette_delete),
+    preview_command("begin", AREA_FIELDS),
+    preview_command("apply", {**_PREVIEW_ID, **_PREVIEW_DRAFT, vol.Required("sequence"): vol.All(int, vol.Range(min=0))}),
+    preview_command("commit", {**_PREVIEW_ID, **_PREVIEW_DRAFT}),
+    preview_command("cancel", _PREVIEW_ID),
+    preview_command("keepalive", _PREVIEW_ID),
+    command("light/replace_options", {}, light_replace_options),
+    command("light/replace_preview", _REPLACE_IDS, light_replace_preview),
+    command("light/replace", {**_REPLACE_IDS, vol.Required("preview_token"): cv.string}, light_replace),
 )

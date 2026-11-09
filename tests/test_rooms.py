@@ -492,3 +492,72 @@ async def test_switch_guards_at_dispatch_boundary(hass, store, on, mutation):
             result = await async_toggle_room(hass, store, area.id, on=on)
     assert ids[2] in result["skipped"]
     assert all(item.args[2]["entity_id"] != ids[2] for item in call.call_args_list)
+
+
+@pytest.mark.parametrize("mode", ["xy", "rgb", "hs", "rgbw", "rgbww"])
+@pytest.mark.parametrize("initialized", [False, True])
+async def test_explicit_white_temperature_converts_for_color_only_lamps(
+    hass, store, light_calls, mode, initialized
+):
+    from homeassistant.util.color import color_RGB_to_xy, color_temperature_to_rgb
+
+    entity = "light.synthetic_white_color"
+    hass.states.async_set(entity, "off", {
+        "supported_color_modes": [mode], "color_mode": mode if initialized else "unknown",
+        "brightness": 100 if initialized else None,
+    })
+    await store.async_set_lights([entity])
+    await async_set_light(hass, store, entity, on=True, brightness=64, color_temp_kelvin=4000)
+    assert light_calls[0].data == {
+        "entity_id": entity, "brightness": 64,
+        "xy_color": list(color_RGB_to_xy(*color_temperature_to_rgb(4000))),
+    }
+
+
+def test_white_temperature_conversion_is_clamped_to_gamut():
+    from homeassistant.core import State
+    from homeassistant.util.color import color_RGB_to_xy, color_temperature_to_rgb
+
+    from custom_components.lichtzentrale.lights import clamp_xy
+    from custom_components.lichtzentrale.rooms import light_service_data
+
+    state = State("light.synthetic_gamut_white", "on", {
+        "supported_color_modes": ["xy"], "color_mode": "xy",
+        "color_gamut": [[0.4, 0.3], [0.3, 0.4], [0.25, 0.25]],
+    })
+    original = color_RGB_to_xy(*color_temperature_to_rgb(2000))
+    action, params = light_service_data(state, color_temp_kelvin=2000)
+    assert action == "turn_on"
+    assert params["xy_color"] == list(clamp_xy(state, original))
+    assert params["xy_color"] != list(original)
+
+
+@pytest.mark.parametrize("domain,mode", [("light", "onoff"), ("switch", None)])
+def test_white_temperature_never_leaks_into_onoff_payload(domain, mode):
+    from homeassistant.components.light import LightEntityFeature
+    from homeassistant.core import State
+
+    from custom_components.lichtzentrale.rooms import light_service_data
+
+    state = State(f"{domain}.synthetic_onoff_white", "on", {
+        "supported_color_modes": [mode] if mode else [],
+        "supported_features": LightEntityFeature.TRANSITION,
+    })
+    assert light_service_data(state, on=True, brightness=120, color_temp_kelvin=4000, transition=3) == (
+        "turn_on", {"entity_id": state.entity_id},
+    )
+    assert light_service_data(state, color_temp_kelvin=4000) is None
+
+
+def test_native_temperature_takes_priority_over_xy_conversion():
+    from homeassistant.core import State
+
+    from custom_components.lichtzentrale.rooms import light_service_data
+
+    state = State("light.synthetic_dual_white", "on", {
+        "supported_color_modes": ["xy", "color_temp"],
+        "min_color_temp_kelvin": 2500, "max_color_temp_kelvin": 6000,
+    })
+    assert light_service_data(state, color_temp_kelvin=7000) == (
+        "turn_on", {"entity_id": state.entity_id, "color_temp_kelvin": 6000},
+    )

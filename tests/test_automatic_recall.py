@@ -126,7 +126,7 @@ async def test_own_current_day_state_wins_even_against_newer_foreign_state(hass,
         result = await async_execute_action(hass, store, {"type": "return_auto", "area_id": rooms[0].id})
     assert result["applied"] == [ids[0]]
     assert calls.call_count == 1
-    assert calls.call_args.args[2] == {"entity_id": ids[0], "brightness": 70}
+    assert calls.call_args.args[2] == {"entity_id": ids[0], "brightness": 70, "color_temp_kelvin": 2000}
 
 
 async def test_old_own_state_does_not_hide_current_foreign_state_and_both_expire(hass, store, overlap):
@@ -237,7 +237,12 @@ async def test_palette_inheritance_preserves_source_assignment_without_broader_d
             result = await async_execute_action(hass, store, {"type": "return_auto", "area_id": zone})
         assert result["applied"] == [ids[1]]
         assert calls.call_count == 1 and calls.call_args.args[2] == original[ids[1]]
-        assert manager.active == {}
+        if dynamic:
+            assert set(manager.active) == {rooms[0].id}
+            assert manager.active[rooms[0].id]["excluded"] == {ids[1]}
+            assert set(manager.active[rooms[0].id]["targets"]) == {ids[0], ids[1]}
+        else:
+            assert manager.active == {}
         assert bool(result.get("notes")) is dynamic
     finally:
         await manager.shutdown()

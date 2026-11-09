@@ -120,3 +120,62 @@ def list_lights(
             }
         )
     return sorted(result, key=lambda item: (item["area_name"] or "", item["name"]))
+
+
+def color_modes(state):
+    """Capabilities, never the uninitialized current Z2M color_mode."""
+    if state.domain != "light":
+        return set()
+    return set(state.attributes.get("supported_color_modes") or []) - {"unknown"}
+
+
+def clamp_xy(state, xy):
+    """Project outside colors onto the actual reported triangle, if available."""
+    import math
+
+    point = tuple(xy)
+    gamut = state.attributes.get("color_gamut")
+    if not isinstance(gamut, (list, tuple)) or len(gamut) != 3:
+        return point
+    if any(not isinstance(p, (list, tuple)) or len(p) != 2 or any(
+        type(v) not in (int, float) or not math.isfinite(v) or not 0 <= v <= 1
+        for v in p
+    ) for p in gamut):
+        return point
+    a, b, c = gamut
+    def cross(u, v, w):
+        return (v[0] - u[0]) * (w[1] - u[1]) - (v[1] - u[1]) * (w[0] - u[0])
+
+    if abs(cross(a, b, c)) < 1e-10:
+        return point
+    signs = [cross(a, b, point), cross(b, c, point), cross(c, a, point)]
+    if min(signs) >= -1e-10 or max(signs) <= 1e-10:
+        return point
+    candidates = []
+    for start, end in ((a, b), (b, c), (c, a)):
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        length = dx * dx + dy * dy
+        t = max(0, min(1, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length))
+        candidates.append((start[0] + t * dx, start[1] + t * dy))
+    return min(candidates, key=lambda p: (p[0] - point[0]) ** 2 + (p[1] - point[1]) ** 2)
+
+
+def supports_payload(state, params):
+    """Drop prepared commands when capabilities changed while they were waiting."""
+    from homeassistant.components.light import LightEntityFeature
+
+    modes = color_modes(state)
+    if state.domain == "switch":
+        return set(params) == {"entity_id"}
+    if "brightness" in params and not modes - {"onoff"}:
+        return False
+    if "xy_color" in params and not modes & {"xy", "hs", "rgb", "rgbw", "rgbww"}:
+        return False
+    if "color_temp_kelvin" in params and "color_temp" not in modes:
+        return False
+    if "transition" in params and not (
+        modes - {"onoff"}
+        and state.attributes.get("supported_features", 0) & LightEntityFeature.TRANSITION
+    ):
+        return False
+    return True

@@ -61,13 +61,14 @@ async def test_zone_palette_uses_zone_positions_initially_and_on_ticks(hass, sto
     assert [c.data["entity_id"] for c in light_calls] == [ids[0]]
 
 
-async def test_single_lamp_action_cancels_intersecting_zone_loop(hass, store, zone_runtime):
+async def test_single_lamp_action_preserves_intersecting_zone_peers(hass, store, zone_runtime):
     _, ids, zone, scene, manager = zone_runtime
     await manager.start(scene, Context())
     task = manager.active[zone]["task"]
     hass.services.async_register("light", "turn_off", lambda call: None)
     await async_control_lights(hass, store, [ids[0]], on=False)
-    assert not manager.active and task.done()
+    assert manager.active[zone]["excluded"] == {ids[0]}
+    assert not task.done()
 
 
 async def test_zone_stop_freezes_only_on_members_and_stops_overlapping_room_loop(hass, store, zone_runtime, light_calls):

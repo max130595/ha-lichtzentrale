@@ -68,6 +68,9 @@ def recall_actions(hass, store, area_id):
             shared.intersection_update(action_targets(hass, store, resolved, _entity_ids=shared))
             if resolved["type"] == "scene":
                 scene = next(s for s in store.data["scenes"] if s["id"] == resolved["scene_id"])
+                from .seasonal_scenes import resolve_scene
+
+                scene, _ = resolve_scene(hass, store, scene)
                 if scene["kind"] == "palette":
                     shared = {e for e in shared if e.startswith("light.")}
         except ServiceValidationError:

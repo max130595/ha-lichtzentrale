@@ -174,8 +174,8 @@ async def run(config_dir: str) -> None:
         assert len(list_lights(hass, targets)) == 6
 
         palettes = list_palettes()
-        assert len(palettes) == 12
-        assert len({item["category"] for item in palettes}) == 4
+        assert len(palettes) >= 20
+        assert {"Herbst", "Winter", "Weihnachten", "Frühling", "Sommer", "Party", "Entspannen", "Romantik"} <= {item["category"] for item in palettes}
         result = await async_apply_palette(hass, restored, palettes[0]["id"], targets, 123)
         assert result == {"applied": targets[:-1], "skipped": ["light.fixture_unavailable"]}
         assert len(calls) == 5
@@ -185,7 +185,8 @@ async def run(config_dir: str) -> None:
         assert calls[3].data["brightness"] == 123
         assert "xy_color" not in calls[3].data
         assert "brightness" not in calls[4].data
-        assert all(call.data["transition"] == 1 for call in calls)
+        assert all(call.data["transition"] == 1 for call in calls[:-1])
+        assert "transition" not in calls[-1].data
 
         for forbidden in ("switch.fixture_a", "lock.fixture_a", "light.fixture_group"):
             hass.states.async_set(forbidden, "on", {"is_hue_group": True})
@@ -863,6 +864,78 @@ async def run(config_dir: str) -> None:
             assert {call.data["entity_id"] for call in calls[count:]} == {brightness_lamp.entity_id}
         finally:
             await learned_manager.shutdown()
+        # Stage 5c uses the real target-version Store and native service dispatch.
+        custom = await after_restart.async_save_palette({
+            "name": "Synthetic custom autumn", "category": "Herbst",
+            "preview": ["#FF9A2E", "#FF6A13", "#FFC247"], "bri": 150, "tempo": "slow",
+        })
+        authored = await async_save_scene(hass, after_restart, {
+            "name": "Synthetic authored scene", "area_id": brightness_area.id,
+            "kind": "palette", "palette_id": custom["id"], "brightness": 160,
+            "dynamic": {"enabled": True, "tempo": "slow"},
+            "lamp_settings": {brightness_lamp.entity_id: {"mode": "cycle", "brightness": 31}},
+            "wave_order": [brightness_lamp.entity_id],
+        })
+        reload_5c = LichtzentraleStore(hass)
+        await reload_5c.async_load()
+        assert reload_5c.data["palettes"][-1]["id"] == custom["id"]
+        assert next(item for item in reload_5c.data["scenes"] if item["id"] == authored["id"])["lamp_settings"][brightness_lamp.entity_id]["brightness"] == 31
+        try:
+            await reload_5c.async_delete_palette(custom["id"])
+        except ServiceValidationError as error:
+            assert authored["name"] in str(error)
+        else:
+            raise AssertionError("Referenced custom palette deleted")
+        native_dynamic = DynamicSceneManager(hass, reload_5c)
+        hass.data[DOMAIN]["dynamic"] = native_dynamic
+        await async_apply_scene(hass, reload_5c, authored["id"])
+        assert hass.states.get(brightness_lamp.entity_id).attributes["brightness"] == 31
+        assert brightness_area.id in reload_5c.data["active_dynamic"]
+        await native_dynamic.shutdown()
+        restart_5c = LichtzentraleStore(hass)
+        await restart_5c.async_load()
+        resumed = DynamicSceneManager(hass, restart_5c)
+        hass.data[DOMAIN]["dynamic"] = resumed
+        await resumed.restore(wait_for_start=False)
+        assert brightness_area.id in resumed.active
+        await resumed.stop(brightness_area.id)
+        assert brightness_area.id not in restart_5c.data["active_dynamic"]
+        await resumed.shutdown()
+        from custom_components.lichtzentrale.bindings import validate_binding
+        fixed = validate_binding(hass, restart_5c, {
+            "event_entity": button.entity_id, "event_type": "dial_rotate", "action": "turn_on_lights",
+            "area_id": None, "params": {"entity_ids": [brightness_lamp.entity_id],
+                                        "on_behavior": {"mode": "brightness", "brightness": 255}},
+        })
+        await BindingManager(hass, restart_5c)._action(fixed, Context())
+        assert hass.states.get(brightness_lamp.entity_id).attributes["brightness"] == 255
+        time_on = validate_binding(hass, restart_5c, {
+            "event_entity": button.entity_id, "event_type": "dial_rotate", "action": "turn_on_lights",
+            "area_id": None, "params": {"entity_ids": [brightness_lamp.entity_id],
+                "on_behavior": {"mode": "time", "windows": [{
+                    "window": {"after": {"type": "time", "value": "00:00"},
+                               "before": {"type": "time", "value": "00:00"}},
+                    "mode": "brightness", "brightness": 76, "color_temp_kelvin": 2200,
+                }]}},
+        })
+        await BindingManager(hass, restart_5c)._action(time_on, Context())
+        assert hass.states.get(brightness_lamp.entity_id).attributes["brightness"] == 76
+        seasonal = await async_save_scene(hass, restart_5c, {
+            "name": "Synthetic seasonal scene", "area_id": brightness_area.id,
+            "kind": "seasonal", "seasonal": {"scenes": {"autumn": authored["id"]}},
+        })
+        from custom_components.lichtzentrale.seasonal_scenes import resolve_scene
+        resolved, info = resolve_scene(hass, restart_5c, seasonal,
+                                      now=datetime(2026, 7, 2, 12, tzinfo=ZoneInfo("UTC")))
+        assert resolved["id"] == authored["id"] and info["resolution_note"]
+        seasonal_run = DynamicSceneManager(hass, restart_5c)
+        hass.data[DOMAIN]["dynamic"] = seasonal_run
+        result = await async_apply_scene(hass, restart_5c, seasonal["id"])
+        assert result["resolved_scene_id"] == authored["id"]
+        assert restart_5c.data["rooms"][brightness_area.id]["last_scene_id"] == seasonal["id"]
+        assert restart_5c.data["active_dynamic"][brightness_area.id]["scene_id"] == authored["id"]
+        await seasonal_run.stop(brightness_area.id)
+        await seasonal_run.shutdown()
         await final.async_remove()
         assert not path.exists()
     finally:
@@ -876,7 +949,7 @@ def main() -> None:
     print(f"PASS native smoke: Home Assistant {version('homeassistant')}")
     print(
         "Verified: integration imports; native registries/discovery; real Store create, "
-        "reload and removal; 12 palettes/4 categories; XY, RGBWW, CT clamp, brightness, "
+        "reload and removal; at least 20 palettes/8 requested categories; XY, RGBWW, CT clamp, brightness, "
         "on/off; unavailable skip; allowlist and unrelated-switch/lock/group rejection; "
         "area rooms; XY/brightness and Shelly on/off snapshot restore; last-scene "
         "persistence/reload/deletion; aiohue 4.9.0 scene/action models, color previews and "
@@ -896,7 +969,7 @@ def main() -> None:
         "brightness-stage native dispatch/payload, minimum interval, manual-service pause, "
         "configuration and learning persistence, target-edit ownership/bright-light removal, "
         "disable with/without keep_lights and unload; cross-room zones, night scene tagging, "
-        "full neutral brightness, manual state preservation, day-state disk reload and return to off; room night/rounded recall from zone restricted to shared lamps; persisted dial direction matching with wildcard speed."
+        "full neutral brightness, manual state preservation, day-state disk reload and return to off; room night/rounded recall from zone restricted to shared lamps; persisted dial direction matching with wildcard speed; Stufe5c custom palette disk reload/reference protection, per-lamp brightness, dynamic persisted shutdown/restart/stop, fixed 100-percent and time-window button-on; seasonal resolution/fallback with concrete dynamic persistence and wrapper last-scene identity."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "

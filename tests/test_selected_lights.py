@@ -19,7 +19,7 @@ from custom_components.lichtzentrale.selected_lights import (
 )
 from custom_components.lichtzentrale.storage import LichtzentraleStore
 
-DYNAMIC = "custom_components.lichtzentrale.dynamic_scenes.stop_dynamic"
+DYNAMIC = "custom_components.lichtzentrale.dynamic_scenes.async_exclude_targets"
 
 
 @pytest.fixture
@@ -289,12 +289,12 @@ async def test_final_dispatch_rechecks_revocation(hass, store, selection):
     assert set(result["skipped"]) == set(selection["ids"])
 
 
-async def test_only_selected_light_areas_have_dynamics_stopped(hass, store, selection):
+async def test_only_selected_lights_leave_dynamics(hass, store, selection):
     ids = [selection["ids"][0], selection["ids"][4]]
     with (patch(DYNAMIC, AsyncMock()) as stop,
           patch.object(type(hass.services), "async_call", AsyncMock()) as call):
         await async_control_lights(hass, store, ids, on=True)
-    stop.assert_awaited_once_with(hass, selection["areas"][0])
+    stop.assert_awaited_once_with(hass, ids)
     assert set(payloads(call)) == set(ids)
 
 

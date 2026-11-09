@@ -131,6 +131,7 @@ class MotionManager:
         if (
             not scene or entity not in runtime["owned"] or not entity.startswith("light.")
             or old is None or new is None or old.state != "on" or new.state != "on"
+            or new.context.user_id is not None
             or not _still_allowed(self.hass, self.store, entity, runtime["owned"])
         ):
             return False
@@ -143,7 +144,7 @@ class MotionManager:
         return bool(
             run and run["scene"]["id"] == scene["id"]
             and run["context"] is not None and run["context"].id == scene["context_id"]
-            and entity in run["targets"]
+            and entity in run["targets"] and entity not in run.get("excluded", set())
         )
 
     def _targets(self, area):
@@ -164,6 +165,9 @@ class MotionManager:
                     scene = _scene(self.store, action["scene_id"])
                     if scene["area_id"] != area:
                         continue
+                    from .seasonal_scenes import resolve_scene
+
+                    scene, _ = resolve_scene(self.hass, self.store, scene)
                     targets.update(scene["lights"] if scene["kind"] == "snapshot" else
                         hue_scene_targets(self.hass, scene["hue_scene"]) if scene["kind"] == "hue"
                         else room_targets(self.hass, self.store, area))
@@ -330,6 +334,8 @@ class MotionManager:
                     if runtime["paused"] or self._occupancy(area) is not True:
                         return
                     result = await async_apply_scene_locked(self.hass, self.store, scene["id"], context)
+                    if result.get("resolved_scene_id"):
+                        scene = _scene(self.store, result["resolved_scene_id"])
                     hue = self.hass.states.get(scene.get("hue_scene", "")) if scene["kind"] == "hue" else None
                     if (scene["kind"] == "palette" and scene.get("dynamic", {}).get("enabled")) or (
                         hue is not None and hue.attributes.get("is_dynamic")

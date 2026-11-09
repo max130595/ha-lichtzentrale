@@ -10,6 +10,7 @@ const palette: Palette = {id: 'test-palette', name: 'Testpalette', category: 'Te
 const lamp: Light = {entity_id: 'light.test_fixture', name: 'Testlampe', area_id: null, area_name: null, available: true, allowed: false};
 function setup(lights: Light[] = [lamp]) {
   const callWS = vi.fn(async (request: {type: string; [key: string]: unknown}): Promise<unknown> => {
+    if (request.type === 'lichtzentrale/light/replace_options') return {sources: [], targets: []};
     if (request.type === 'lichtzentrale/palettes/list') return [palette];
     if (request.type === 'lichtzentrale/lights/list') return lights;
     if (request.type === 'lichtzentrale/schedules/list') return {time_zone: 'Europe/Berlin', schedules: [], lux_sensors: [], persons: []};
@@ -142,7 +143,7 @@ describe('Freigaben und Teilergebnisse', () => {
   it('explicitly requests hidden printer lights without discarding unsaved grants', async () => {
     const printer = {...lamp, entity_id: 'light.test_printer', name: 'Testdrucker', hidden_by_default: true};
     const approvedPrinter = {...printer, entity_id: 'light.test_approved_printer', name: 'Freigegebener Testdrucker', allowed: true};
-    const callWS = vi.fn(async (req: {type: string; [key: string]: unknown}): Promise<unknown> => req.type.endsWith('lights/list') ? [lamp, approvedPrinter, ...(req.include_hidden ? [printer] : [])] : []);
+    const callWS = vi.fn(async (req: {type: string; [key: string]: unknown}): Promise<unknown> => req.type.endsWith('lights/list') ? [lamp, approvedPrinter, ...(req.include_hidden ? [printer] : [])] : req.type.endsWith('replace_options') ? {sources: [], targets: []} : []);
     render(<App hass={{callWS} as Hass}/>); fireEvent.click(screen.getByRole('button', {name: 'Farben'}));
     fireEvent.click(screen.getByRole('button', {name: 'Mehr'}));
     await waitFor(() => expect(screen.getByRole('button', {name: 'Lampen freigeben'})).toBeEnabled());

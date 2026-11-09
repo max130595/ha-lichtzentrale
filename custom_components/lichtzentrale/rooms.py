@@ -12,7 +12,7 @@ from homeassistant.helpers import area_registry as ar
 
 from .color_temperature import find_closest_ct_match
 from .const import DOMAIN
-from .lights import entity_area_id, list_lights, validate_lights
+from .lights import clamp_xy, color_modes, entity_area_id, list_lights, validate_lights
 from .storage import LichtzentraleStore
 from .zones import contains, validate_area, zone_id
 
@@ -130,6 +130,7 @@ def light_service_data(
     if (
         transition is not None
         and state.domain == "light"
+        and color_modes(state) - {"onoff"}
         and state.attributes.get("supported_features", 0) & LightEntityFeature.TRANSITION
     ):
         params["transition"] = transition
@@ -137,19 +138,38 @@ def light_service_data(
         return "turn_off", params
     if state.domain == "switch":
         return ("turn_on", params) if on is True else None
-    modes = set(state.attributes.get("supported_color_modes") or [])
+    modes = color_modes(state)
     if brightness is not None and modes - {"onoff", "unknown"}:
         params["brightness"] = brightness
     if xy is not None:
         if modes & COLOR_MODES:
-            params["xy_color"] = list(xy)
+            params["xy_color"] = list(clamp_xy(state, xy))
         elif "color_temp" in modes:
             color_temp_kelvin = find_closest_ct_match(*xy)
     if color_temp_kelvin is not None and "color_temp" in modes:
         minimum = state.attributes.get("min_color_temp_kelvin") or 2000
         maximum = state.attributes.get("max_color_temp_kelvin") or 6500
         params["color_temp_kelvin"] = max(minimum, min(maximum, color_temp_kelvin))
-    return ("turn_on", params) if on is True or len(params) > 1 else None
+    elif color_temp_kelvin is not None and modes & COLOR_MODES:
+        # Time-window white tones also work on color-only lamps. Prefer native
+        # CT above; otherwise express the requested white point in their gamut.
+        from homeassistant.util.color import color_RGB_to_xy, color_temperature_to_rgb
+
+        params["xy_color"] = list(clamp_xy(
+            state, color_RGB_to_xy(*color_temperature_to_rgb(color_temp_kelvin))
+        ))
+    if on is True or len(params) > 1:
+        # Newly paired Z2M color lamps can report brightness=None/mode=unknown.
+        # Initialize a supported native mode instead of interpreting that as off.
+        if state.attributes.get("color_mode") in {None, "unknown"} and not (
+            "xy_color" in params or "color_temp_kelvin" in params
+        ):
+            if "color_temp" in modes:
+                params["color_temp_kelvin"] = state.attributes.get("min_color_temp_kelvin") or 2000
+            elif modes & COLOR_MODES:
+                params["xy_color"] = list(clamp_xy(state, (0.4599, 0.4106)))
+        return "turn_on", params
+    return None
 
 
 async def async_dispatch(hass, calls, skipped=None, context=None, guard=None):
@@ -193,6 +213,12 @@ async def async_set_light(
 ) -> dict:
     """Set one explicitly approved lighting entity."""
     validate_control_options(on, brightness, xy, color_temp_kelvin)
+    validate_lights(hass, [entity_id])
+    if entity_id not in store.data["settings"]["light_entity_ids"]:
+        raise ServiceValidationError("Bitte die Lampe zuerst freigeben.")
+    from .dynamic_scenes import async_exclude_targets
+
+    await async_exclude_targets(hass, [entity_id])
     validate_lights(hass, [entity_id])
     if entity_id not in store.data["settings"]["light_entity_ids"]:
         raise ServiceValidationError("Bitte die Lampe zuerst freigeben.")
