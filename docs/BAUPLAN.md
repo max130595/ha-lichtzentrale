@@ -379,7 +379,7 @@ diese Taste überhaupt ein Doppelklick belegt ist.
 - Separater Bedienentwurf unter [vorschau-5b/index.html](vorschau-5b/index.html), vollständig
   mit synthetischen Daten und ohne Verbindung zu Home Assistant. Keine Produktivänderung,
   kein Speichern von Nutzerdaten, keine Gerätebefehle.
-- Vorgeschlagene Reiter: Zuhause, Szenen, Automationen, Taster, Mehr. Räume/Zonen direkt
+- Vorgeschlagene Reiter: Zuhause, Farben, Automationen, Taster, Mehr. Räume/Zonen direkt
   schalten und dimmen; Automationen mit Wann → Wo → Was; Taster über ihre Zeichnung belegen.
 - Klickbare Kernabläufe für Zonen, Sonnenversatz, mehrere Aktionen und Nachtlicht ⇄ Automatik.
   Erweiterte Funktionen bleiben unter „Mehr Optionen“ auffindbar.

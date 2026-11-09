@@ -28,6 +28,7 @@ function setup(t, width = 390) {
   const change = (s, value) => {
     const el = find(s);
     if (el.type === 'checkbox') el.checked = value; else el.value = value;
+    el.dispatchEvent(new w.Event('input', { bubbles: true }));
     el.dispatchEvent(new w.Event('change', { bubbles: true }));
   };
   const nav = name => click(`[data-testid="nav-${name}"]`);
@@ -81,7 +82,7 @@ test('sunset minus15 wizard saves a readable disabled plan with all weekdays', t
   assert.equal(plan.trigger, 'sunset'); assert.equal(plan.offset, -15); assert.equal(plan.days.length, 7);
   assert.deepEqual(Array.from(plan.actions[0].targets), ['z1']); assert.equal(plan.actions[0].scene, 'Abend');
   assert.equal(plan.enabled, false); assert.match(a.find('main').textContent, /15 Min. vor Sonnenuntergang · Wohnbereich → Szene Abend/);
-  a.change(`[data-change="automation-toggle"][data-id="${plan.id}"]`, true);
+  a.click(`[data-testid="toggle-${plan.id}"]`);
   assert.equal(a.state().automations.at(-1).enabled, true);
 });
 
@@ -106,20 +107,30 @@ test('22:30 multi-action creation and test preserve each target automatic state'
   assert.equal(a.state().automatic.z1.label, 'Aus'); assert.equal(a.state().automatic.r3.label, 'Nachtlicht');
 });
 
-test('night toggle returns to last automation; manual change does not replace it', t => {
+test('room night button and dimmer toggle return to automatic without room automation controls', t => {
   const a = setup(t); a.nav('automations'); a.click('[data-testid="test-a1"]');
   a.nav('home'); a.click('[data-testid="open-z1"]');
   assert.equal(a.find('h1').textContent, 'Wohnbereich');
-  a.click('[data-testid="night-auto"]'); assert.equal(a.state().current.z1, 'Nachtlicht');
+  assert.equal(a.d.querySelector('[data-testid="automatic-status"]'), null);
+  assert.equal(a.d.querySelector('[data-testid="return-auto"]'), null);
+  assert.doesNotMatch(a.find('main').textContent, /Automatik heute|Zurück zur Automatik/);
+  a.click('[data-testid="night-light"]'); assert.equal(a.state().current.z1, 'Nachtlicht');
   assert.equal(a.state().automatic.z1.label, 'Abend');
-  a.click('[data-testid="night-auto"]'); assert.equal(a.state().current.z1, 'Abend');
-  a.change('#detail-brightness', '87'); assert.equal(a.state().automatic.z1.label, 'Abend');
-  a.click('[data-testid="return-auto"]'); assert.equal(a.state().current.z1, 'Abend');
+  a.nav('buttons'); a.click('[data-testid="device-0"]'); a.click('[data-testid="dimmer-template"]');
+  a.click('[data-action="physical-button"][data-button="Hue"]'); a.click('[data-testid="test-binding"]');
+  assert.equal(a.state().current.z1, 'Abend');
+  a.change('#binding-action', 'auto'); a.click('[data-testid="save-binding"]');
+  a.nav('home'); a.click('[data-testid="open-z1"]'); a.change('#detail-brightness', '87');
+  assert.equal(a.state().automatic.z1.label, 'Abend');
+  a.nav('buttons'); a.click('[data-testid="device-0"]');
+  a.click('[data-action="physical-button"][data-button="Hue"]'); a.click('[data-testid="test-binding"]');
+  assert.equal(a.state().current.z1, 'Abend');
 });
 
-test('missing automatic state leaves lights unchanged, logs, and new day clears it', t => {
-  const a = setup(t); a.click('[data-testid="open-z1"]'); const before = JSON.stringify(a.state().lights);
-  a.click('[data-testid="return-auto"]'); assert.equal(JSON.stringify(a.state().lights), before);
+test('missing automatic state leaves lights unchanged through button action and new day clears it', t => {
+  const a = setup(t); a.nav('buttons'); a.click('[data-testid="device-0"]');
+  a.change('#binding-action', 'auto'); const before = JSON.stringify(a.state().lights);
+  a.click('[data-testid="test-binding"]'); assert.equal(JSON.stringify(a.state().lights), before);
   assert.match(a.state().logs[0], /kein Automatik-Stand/);
   a.nav('automations'); a.click('[data-testid="test-a1"]'); a.nav('more'); a.click('[data-testid="new-day"]');
   assert.equal(Object.keys(a.state().automatic).length, 0);
@@ -128,7 +139,7 @@ test('missing automatic state leaves lights unchanged, logs, and new day clears 
 test('night scene name and brightness are editable per target', t => {
   const a = setup(t); a.click('[data-testid="open-z1"]');
   a.find('#night-name').value = 'Sanftes Licht'; a.find('#night-bri').value = '7';
-  a.click('[data-action="night-save"]'); a.click('[data-testid="night-auto"]');
+  a.click('[data-action="night-save"]'); a.click('[data-testid="night-light"]');
   assert.equal(a.state().night.z1.name, 'Sanftes Licht');
   for (const id of ['l1', 'l3', 'l5']) assert.equal(a.state().lights.find(l => l.id === id).bri, 7);
 });
@@ -176,4 +187,101 @@ test('revoked light excluded from scene and reset restores only synthetic defaul
   assert.equal(JSON.stringify(a.state().lights.find(l => l.id === 'l1')), before);
   a.nav('more'); a.click('[data-testid="reset-demo"]');
   assert.equal(a.state().lights.find(l => l.id === 'l1').grant, true); assert.equal(Object.keys(a.state().automatic).length, 0);
+});
+
+
+test('home is compact, zones precede rooms, and Farben replaces Szenen tab', t => {
+  const a = setup(t, 430);
+  assert.equal(a.find('h1').textContent, 'Zuhause');
+  assert.equal(a.d.querySelector('.hero'), null);
+  assert.doesNotMatch(a.find('main').textContent, /gut anfühlt|Feierabend|Abendruhe|Alles an seinem Platz/);
+  const headings = [...a.d.querySelectorAll('main h2')].map(x => x.textContent);
+  assert.ok(headings.indexOf('Zonen') < headings.indexOf('Räume'));
+  for (const card of a.d.querySelectorAll('.room')) {
+    assert.equal(card.querySelectorAll('p,.hint').length, 0);
+    assert.ok(card.querySelector('.power')); assert.ok(card.querySelector('input[type="range"]'));
+  }
+  assert.match(a.find('[data-testid="nav-scenes"]').textContent, /Farben/);
+  assert.doesNotMatch(a.find('nav').textContent, /Szenen/);
+});
+
+test('automation switch has accessible on/off semantics and sits after the sentence', t => {
+  const a = setup(t); a.nav('automations');
+  const card = a.find('[data-testid="automation-a1"]'), sw = a.find('[data-testid="toggle-a1"]');
+  assert.equal(sw.getAttribute('role'), 'switch'); assert.equal(sw.getAttribute('aria-checked'), 'false');
+  assert.equal(card.querySelector('input[type="checkbox"]'), null);
+  assert.match(sw.getAttribute('aria-label'), /Automation/);
+  a.click('[data-testid="toggle-a1"]'); assert.equal(a.find('[data-testid="toggle-a1"]').getAttribute('aria-checked'), 'true');
+  a.click('[data-testid="toggle-a1"]'); assert.equal(a.state().automations[0].enabled, false);
+});
+
+test('first targets appear only in step2 and survive editing extra actions and Back', t => {
+  const a = setup(t); a.nav('automations'); a.click('[data-action="automation-edit"][data-id="a2"]');
+  a.click('[data-testid="wizard-next"]');
+  assert.deepEqual(Array.from(a.state().wizard.targets), ['z1']);
+  assert.equal(a.find('[data-change="wizard-target"][value="r3"]').checked, false);
+  a.click('[data-testid="wizard-next"]');
+  assert.match(a.find('[data-testid="primary-targets"]').textContent, /Wohnbereich/);
+  assert.equal(a.d.querySelectorAll('[data-change="action-target"][data-index="0"]').length, 0);
+  assert.ok(a.find('[data-change="action-target"][data-index="1"][value="r3"]').checked);
+  a.click('[data-action="wizard-prev"]');
+  a.change('[data-change="wizard-target"][value="z1"]', false);
+  a.change('[data-change="wizard-target"][value="r1"]', true);
+  a.click('[data-testid="wizard-next"]'); a.click('[data-testid="wizard-next"]');
+  const plan = a.state().automations.find(p => p.id === 'a2');
+  assert.deepEqual(Array.from(plan.actions[0].targets), ['r1']);
+  assert.deepEqual(Array.from(plan.actions[1].targets), ['r3']);
+});
+
+test('ordered overlapping actions: later night wins, reverse order later off wins', t => {
+  const a = setup(t); a.nav('automations'); a.click('[data-testid="test-a2"]');
+  const get = id => a.state().lights.find(l => l.id === id);
+  assert.equal(get('l1').on, false); assert.equal(get('l3').on, false);
+  assert.equal(get('l5').on, true); assert.equal(get('l5').bri, 12);
+  assert.match(a.state().logs[0], /Flur: Nachtlicht/); assert.match(a.state().logs[1], /Wohnbereich: Aus/);
+  a.click('[data-action="automation-edit"][data-id="a2"]'); a.click('[data-testid="wizard-next"]');
+  a.change('[data-change="wizard-target"][value="z1"]', false); a.change('[data-change="wizard-target"][value="r3"]', true);
+  a.click('[data-testid="wizard-next"]'); a.change('[data-testid="action-type-0"]', 'night');
+  a.change('[data-testid="action-type-1"]', 'off');
+  a.change('[data-change="action-target"][data-index="1"][value="r3"]', false);
+  a.change('[data-change="action-target"][data-index="1"][value="z1"]', true);
+  a.click('[data-testid="wizard-next"]'); a.click('[data-testid="test-a2"]');
+  assert.equal(get('l5').on, false);
+  assert.match(a.state().logs[0], /Wohnbereich: Aus/); assert.match(a.state().logs[1], /Flur: Nachtlicht/);
+});
+
+test('button scene field exists only for scene action and saving others never throws', t => {
+  const a = setup(t); a.nav('buttons'); a.click('[data-testid="device-0"]');
+  assert.equal(a.d.querySelector('#binding-scene'), null); a.click('[data-testid="save-binding"]');
+  a.change('#binding-action', 'scene'); assert.ok(a.find('#binding-scene'));
+  a.change('#binding-scene', 'Morgentau'); a.click('[data-testid="save-binding"]'); a.click('[data-testid="test-binding"]');
+  assert.equal(a.state().current.z1, 'Morgentau');
+  a.change('#binding-action', 'off'); assert.equal(a.d.querySelector('#binding-scene'), null);
+  a.click('[data-testid="save-binding"]'); a.click('[data-testid="test-binding"]');
+  assert.equal(a.state().current.z1, 'Aus');
+});
+
+test('visible new-scene flow edits isolated lamps and saves a named snapshot', t => {
+  const a = setup(t); a.click('[data-testid="open-r1"]');
+  const button = a.find('[data-testid="new-scene"]'); assert.equal(button.textContent, '+ Neue Szene');
+  assert.equal(button.closest('details'), null); a.click('[data-testid="new-scene"]');
+  a.change('#snapshot-name', 'Lesestimmung'); a.change('#scene-lamp-l1', '31');
+  assert.equal(a.find('#snapshot-name').value, 'Lesestimmung');
+  a.click('[data-testid="save-scene"]');
+  const s = a.state().scenes.at(-1); assert.equal(s.name, 'Lesestimmung'); assert.equal(s.target, 'r1');
+  assert.equal(s.lights.find(l => l.id === 'l1').bri, 31);
+  assert.equal(a.d.querySelector('[data-testid="save-scene"]'), null);
+  assert.equal(a.state().lights.find(l => l.id === 'l1').bri, 62);
+  a.click(`[data-action="snapshot-apply"][data-id="${s.id}"]`);
+  assert.equal(a.state().lights.find(l => l.id === 'l1').bri, 31);
+});
+
+test('new-scene cancel and navigation save nothing; empty name is rejected', t => {
+  const a = setup(t); a.click('[data-testid="open-z1"]'); const before = JSON.stringify(a.state().lights);
+  a.click('[data-testid="new-scene"]'); a.change('#scene-lamp-l1', '22');
+  a.click('[data-testid="save-scene"]'); assert.equal(a.state().scenes.length, 0);
+  a.click('[data-testid="cancel-scene"]');
+  assert.equal(JSON.stringify(a.state().lights), before); assert.equal(a.state().scenes.length, 0);
+  a.click('[data-testid="new-scene"]'); a.change('#snapshot-name', 'Nicht speichern'); a.nav('scenes');
+  assert.equal(a.state().scenes.length, 0); assert.equal(JSON.stringify(a.state().lights), before);
 });

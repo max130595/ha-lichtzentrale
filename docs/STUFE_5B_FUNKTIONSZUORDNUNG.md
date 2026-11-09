@@ -6,9 +6,9 @@ Die bestehende Integration, ihr Bundle und alle gespeicherten Daten bleiben unve
 
 ## Fünf Reiter, ein gemeinsamer Ablauf
 
-- **Zuhause:** Räume und Zonen auf einen Blick, direkt schalten und dimmen. Ein Tipp auf den
+- **Zuhause:** Zonen vor Räumen, kompakte Kacheln mit Name, Schalter und Helligkeit. Ein Tipp auf den
   Namen öffnet Szenen und Lampen. Ein reiner Lichtschalter bekommt keinen Helligkeitsregler.
-- **Szenen:** Eigene Szenen und Farbpaletten. Eine Farbe wählen, dann Raum oder Zone.
+- **Farben:** Farbpaletten auswählen, dann Raum oder Zone. Eigene Szenen entstehen direkt im Ziel.
 - **Automationen:** Verständliche Sätze statt technischer Regeln. Neu anlegen mit **Wann → Wo → Was**.
 - **Taster:** Ein Bild des Geräts, darauf die Taste wählen und ihre Aufgabe festlegen.
 - **Mehr:** Lampenfreigaben, seltene Einstellungen, Protokoll und Hinweise zur Vorschau.
@@ -25,12 +25,12 @@ Formulare und aufklappbare „Mehr Optionen“ bleiben innerhalb dieser zweiten 
 | Raum an/aus | Direkt auf der Raumkachel und in den Details | Freigaben und bisherige Wiederherstellung; keine unerwünschten Deckenlichter einschalten |
 | Raumhelligkeit | Schieberegler auf Kachel und in Details | Nur dimmbare Lampen; Schalter niemals dimmen |
 | Einzellampen schalten, Farbe, Weißton | Zuhause → Raum/Zone → Lampen | Geräteeigene Fähigkeiten und Temperaturgrenzen |
-| Snapshot speichern | Zuhause → Raum/Zone → Szene speichern | Aktuellen Zustand sichern; fehlende Lampen ausdrücklich melden |
-| Gespeicherte Szenen starten | Szenen oder Raum-/Zonendetails | Snapshot, Palette, Hue; Favoriten, Namen und Reihenfolge |
-| Szenen umbenennen, favorisieren, sortieren, löschen | Szenen → Bearbeiten | Bestehende IDs und Verweise; Löschbestätigung |
-| Hue-Szene importieren | Szenen → Mehr Optionen → Von Hue übernehmen | Nur verifizierte Ziele; keine Hue-Bilder oder mitgelieferten Hue-Namen |
-| Farbpaletten nach Kategorie | Szenen → Farbpaletten | Eigene Namen, Farben und erzeugte Farbverläufe |
-| Palette direkt anwenden / als Szene speichern | Szenen → Palette wählen | Zielauswahl, Helligkeit, optional Dynamik |
+| Snapshot speichern | Zuhause → Raum/Zone → + Neue Szene | Aktuellen Zustand sichern; fehlende Lampen ausdrücklich melden |
+| Gespeicherte Szenen starten | Raum-/Zonendetails | Snapshot, Palette, Hue; Favoriten, Namen und Reihenfolge |
+| Szenen umbenennen, favorisieren, sortieren, löschen | Raum-/Zonendetails → Szene bearbeiten | Bestehende IDs und Verweise; Löschbestätigung |
+| Hue-Szene importieren | Farben → Mehr Optionen → Von Hue übernehmen | Nur verifizierte Ziele; keine Hue-Bilder oder mitgelieferten Hue-Namen |
+| Farbpaletten nach Kategorie | Farben → Farbpaletten | Eigene Namen, Farben und erzeugte Farbverläufe |
+| Palette direkt anwenden / als Szene speichern | Farben → Palette wählen | Zielauswahl, Helligkeit, optional Dynamik |
 | Dynamische Szene starten | Szene → Mehr Optionen | Intervall und Übergang; ausgeschaltete Lampen bleiben aus |
 | Lokale und Hue-Dynamik stoppen | Raum-/Zonendetails → Dynamik stoppen | Eingeschaltete Ziele einfrieren, ohne andere Lampen einzuschalten |
 | Räumliche Farbverteilung / Welle | Szene → Mehr Optionen | Zufall, beide Achsen, Höhe und Welle |
@@ -61,11 +61,11 @@ Sensorberechnung, Importfunktion oder Gerätevalidierung ist damit noch nicht um
 | Funktion | Vorgesehener Ablauf |
 |---|---|
 | Zonen | Zuhause → Zone hinzufügen → Lampen aus mehreren Räumen wählen; Mehrfachmitgliedschaft erlaubt |
-| Mehrere Ziele | Räume, Zonen und Einzellampen in derselben Auswahl; überall verständliche Namen |
-| Mehrere Aktionen pro Automation | In „Was“ weitere Aktion samt Zielauswahl hinzufügen |
+| Mehrere Ziele | Erste Aktion übernimmt die Auswahl aus „Wo“; in „Was“ nur eine Zusammenfassung. Zusätzliche Aktionen wählen eigene Ziele |
+| Mehrere Aktionen pro Automation | In „Was“ weitere Aktion samt Zielauswahl hinzufügen; streng nacheinander in angezeigter Reihenfolge, spätere Aktion gilt bei Überschneidung |
 | Nachtlicht | Eine normale Szene je Raum/Zone als Nachtlicht markieren und frei einstellen |
-| Zurück zur Automatik | Letzten heutigen Automatikstand wiederherstellen; ohne Stand nur Protokollhinweis |
-| Nachtlicht ⇄ Automatik | Aus Nachtlicht zurück zur Automatik, sonst Nachtlicht starten |
+| Zurück zur Automatik | Aktion für Taster und Automationen; letzten heutigen Automatikstand wiederherstellen; ohne Stand nur Protokollhinweis |
+| Nachtlicht ⇄ Automatik | Aktion für Taster und Automationen; aus Nachtlicht zurück zur Automatik, sonst Nachtlicht starten |
 | Volle Helligkeit | 100 % und neutrales Weiß für geeignete Lampen; keine Helligkeits-/Farbwerte für Switches |
 | Zigbee2MQTT-Taster | Taste anlernen: Event-Quelle, Ereignistyp und aktuelle Tasten-/Drehrichtungsattribute gemeinsam zuordnen |
 
