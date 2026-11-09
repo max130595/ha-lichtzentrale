@@ -11,7 +11,7 @@ Bad oben in Tests oder Beispielen, Schalter (`switch`) werden nie gedimmt.
 | 4a Zeitfenster-Bedingung | `stufe-4a-zeitfenster` | erledigt (PR #9, getestet 08.11.) |
 | 5 Grundhelligkeit | `stufe-5-grundhelligkeit` | erledigt (PR #10, #11) |
 | 5b Einfache Bedienung wie die Hue-App | `stufe-5b-einfach` | erledigt (PR #12, am echten System getestet 09.11.) |
-| 5c Eigene Paletten und Helligkeit pro Lampe | `stufe-5c-paletten` | offen – **als Nächstes** |
+| 5c Stimmungen, eigene Paletten, Helligkeit pro Lampe | `stufe-5c-paletten` | offen – **als Nächstes** |
 | 6 Anwesenheitssimulation | `stufe-6-urlaub` | offen |
 | 7 Sicherung, „Alles aus“, Öffnung für andere | `stufe-7-sicherung` | offen |
 
@@ -113,49 +113,108 @@ Die Lichtzentrale ersetzt danach die Hue-App vollständig, auch für Lampen ohne
 Sonnenuntergangs-Automation mit −15 Min. für eine Zone anlegen, einen Hue Dimmer wie oben belegen
 und „Nachtlicht ⇄ Automatik“ auslösen, und alle bisherigen Daten bleiben erhalten.
 
-## Stufe 5c – Eigene Paletten und Helligkeit pro Lampe
+## Stufe 5c – Stimmungen, eigene Paletten, Helligkeit pro Lampe
 
-**Anlass (Test am echten System, 09.11.):** Eine dynamische Herbstszene für eine Zone ließ sich nicht
-schön einstellen. Es fehlten eigene Farben (kein sattes Orange in den eingebauten Paletten), und alle
-Lampen der Zone liefen mit derselben Helligkeit – Deckenspots direkt über dem Sofa blendeten, während
-andere Lampen zu dunkel waren. Der Raum hat schwarze, Eichen- und Birkenholzflächen, olivgrüne und
-dunkelgraue Wände; rosastichige Rottöne wirken darauf schmutzig.
+**Termin:** Muss am Folgetag bis 15:00 auf dem echten System laufen (eine Sonnenuntergangs-Automation
+startet dort täglich eine Zonen-Szene). Deshalb **keine getrennte Vorschau-Phase**: direkt umsetzen,
+Draft-PR mit Screenshots (Handy 390 px) der neuen Bildschirme; Claude macht Code-Review und Sichtprüfung.
 
-### Eigene Paletten
-- Reiter **Farben → + Neue Palette**: Name, 2–6 Farben über Farbwähler, Live-Vorschau als Verlauf.
-  Speichern, bearbeiten, löschen. Serverseitig im Store, Migration nur ergänzend.
-- **Live-Probe**: Beim Bearbeiten optional auf ein Ziel (Raum/Zone) anwenden, damit man die Farben
-  am echten Raum sieht, bevor man speichert. Abbrechen stellt den vorherigen Zustand wieder her.
-- Eigene Paletten sind überall wählbar wie eingebaute (Szenen, Automationen, Galerie).
-- Eine gelöschte Palette, die noch von Szenen benutzt wird: Löschen mit Hinweis verweigern.
+**Anlass (Test am echten System, 09.11.):** Eine dynamische Herbstszene für eine Zone mit elf Lampen
+ließ sich nicht schön einstellen:
+- In den eingebauten Paletten fehlt ein sattes Orange; die Töne wirkten auf dem Raum schmutzig.
+  Der Raum hat schwarze, Eichen- und Birkenholzflächen, olivgrüne und dunkelgraue Wände.
+- Alle Lampen liefen mit derselben Helligkeit: Deckenspots direkt über dem Sofa blendeten, ein Flur
+  im offenen Treppenhaus war zu hell, andere Lampen zu dunkel.
+- Eigene Farben und Feinabstimmung pro Lampe fehlten; man konnte nicht live am Raum einstellen.
 
-### Neue eingebaute Palette „Herbstglut“
-- Kategorie Jahreszeiten, Farben (sRGB): Bernstein `#FF9A2E`, sattes Orange `#FF6A13`, Kupfer
-  `#D9541E`, Goldgelb `#FFC247`, gedämpftes Weinrot `#9E2A2B`. Keine Rosa- oder Lilatöne.
-- Prüfen, dass Hue-Farblampen diese Töne gesättigt wiedergeben (xy im Farbraum der Lampe, nicht über
-  einen Weißton angenähert). Lampen nur mit Weißtönen erhalten den wärmsten Weißton.
+Ziel: Bedienung und Ergebnis wie in der Hue-App – fertige Stimmungen antippen, eigene Szenen live
+am echten Raum einstellen, pro Lampe Helligkeit und Verhalten festlegen.
 
-### Mitgelieferte Stimmungen (wie die Szenen-Galerie der Hue-App)
-- Mindestens **20 eingebaute Paletten** in Kategorien: Herbst, Winter, Weihnachten, Frühling,
-  Sommer, Party, Entspannen, Romantik. Je 3–5 Farben, eine sinnvolle Grundhelligkeit und eine
-  Empfehlung „ruhig“ oder „dynamisch“ (Intervall/Übergang), die beim Anwenden vorausgewählt ist.
+### 1. Mitgelieferte Stimmungen (Galerie wie in der Hue-App)
+- Mindestens **20 eingebaute Paletten** in Kategorien **Herbst, Winter, Weihnachten, Frühling,
+  Sommer, Party, Entspannen, Romantik**. Je 3–5 Farben, eine passende Grundhelligkeit und ein
+  vorausgewähltes Tempo (siehe 4.).
 - **Eigene Namen und eigene Farben**, keine Namen, Farben oder Bilder aus der Hue-App (AGENTS.md).
-- Farben passend zu warmen Wohnräumen mit Holz- und Grüntönen; Party darf kräftig sein.
-- Die bisherigen 12 Paletten bleiben erhalten (gleiche IDs), „Herbstglut“ ist eine der neuen.
-- Galerie nach Kategorien, Vorschau als Verlauf, „Auf Raum/Zone anwenden“ und „Als Szene speichern“.
+- Farben passend zu warmen Wohnräumen mit Holz- und Grüntönen. Keine schmutzigen Rosa-/Lilatöne in
+  Herbst/Romantik. Party darf kräftig und schnell sein.
+- Darunter **„Herbstglut“** (Herbst): Bernstein `#FF9A2E`, sattes Orange `#FF6A13`, Kupfer `#D9541E`,
+  Goldgelb `#FFC247`, gedämpftes Weinrot `#9E2A2B`.
+- Die bisherigen 12 Paletten bleiben mit gleichen IDs erhalten (Szenen verweisen darauf).
+- Galerie nach Kategorien, Vorschau als Verlauf. Antippen → Ziel (Raum/Zone) wählen → sofort
+  anwenden; „Als Szene speichern“ öffnet den Szenen-Editor (3.) mit dieser Palette.
 
-### Helligkeit pro Lampe in Farbpaletten-Szenen
-- In einer Paletten-Szene (auch dynamisch) für jede Lampe eine eigene Helligkeit 1–100 % oder „wie
-  Szene“. Standard bleibt „wie Szene“, bestehende Szenen ändern sich nicht.
-- Optional pro Lampe **„feste Farbe“** statt Farbwechsel (eine Palettenfarbe oder ein Weißton), z. B.
-  ein Akzent, der ruhig bleiben soll.
-- Dynamische Wechsel behalten die Helligkeit pro Lampe bei jedem Takt bei.
-- Bedienung im Szenen-Editor: Liste der Lampen mit Schieberegler, Änderungen sofort live sichtbar
-  (wie Hue), „Speichern“ übernimmt.
+### 2. Eigene Paletten
+- **Farben → + Neue Palette**: Name, Kategorie, 2–6 Farben per Farbwähler, Live-Vorschau als Verlauf.
+  Bearbeiten, duplizieren („Eigene Variante aus eingebauter Palette“), löschen.
+- **Live-Probe** auf ein Ziel während der Bearbeitung; „Abbrechen“ stellt den vorherigen Zustand der
+  Lampen wieder her.
+- Serverseitig im Store, Migration nur ergänzend. Eigene Paletten sind überall wählbar wie eingebaute.
+- Löschen einer Palette, die von Szenen benutzt wird: verweigern und die Szenen nennen.
 
-**Fertig wenn:** Eine eigene Palette angelegt und live ausprobiert werden kann, mindestens 20
-Stimmungen inklusive „Herbstglut“ mitgeliefert sind, und in einer dynamischen Zonen-Szene zwei Lampen dauerhaft dunkler laufen als die
-übrigen. Tests synthetisch, keine echten Entity-IDs. Nach dem Draft-PR stoppen.
+### 3. Szenen-Editor mit Einstellungen pro Lampe (Kern dieser Stufe)
+- Neue und **bestehende** Szenen bearbeiten (Name, Palette/Momentaufnahme, Tempo, Lampen).
+- Für **jede Lampe** des Ziels eine Zeile mit:
+  - **Helligkeit**: „wie Szene“ oder fest 1–100 %. Bestehende Szenen bleiben „wie Szene“.
+  - **Verhalten**: „Farbwechsel“ (Standard) · „feste Farbe“ (Palettenfarbe, Farbwähler oder Weißton) ·
+    **„Mondlicht nach Mondphase“** (siehe 5.) · „in dieser Szene aus“.
+- **Gesamthelligkeit** der Szene als eigener Regler; feste Lampenwerte bleiben fest, „wie Szene“ folgt.
+- **Live**: Jede Änderung wirkt sofort auf die echte Lampe (wie Hue), entprellt. „Speichern“ übernimmt,
+  „Abbrechen“ stellt den Zustand vor dem Öffnen wieder her.
+- Lampen nur mit Ein/Aus (auch `switch_as_x`-Lichter) zeigen „An / Aus“ statt „0 %“.
+- Gilt gleichermaßen für Räume und Zonen; eine Lampe in mehreren Zonen hat pro Szene eigene Werte.
+
+### 4. Dynamik verständlich und stabil
+- Tempo als Auswahl statt Sekunden: **Sehr langsam** (≈180 s/60 s Übergang), **Langsam** (≈90/40),
+  **Mittel** (≈30/15), **Schnell** (≈8/3, Party). Sekunden nur unter „Mehr Optionen“.
+- **Welle**: Reihenfolge der Lampen als **sortierbare Liste** („Welle läuft von … nach …“) statt
+  3×3-Raster. Das bisherige Raster bleibt unter „Mehr Optionen“.
+- Optional **„sanft lebendig“**: Helligkeit jeder Farbwechsel-Lampe schwankt langsam um ±10 % ihres Werts.
+- Jeder Takt hält Helligkeit, feste Farben und „aus“ pro Lampe exakt ein.
+- **Zigbee schonen**: Befehle eines Takts zeitlich verteilen; global höchstens ~5 Lichtbefehle pro
+  Sekunde; bei Engpass Takt verlängern statt Befehle zu stauen. Im Protokoll vermerken.
+- **Nach Neustart von Home Assistant** laufen aktive dynamische Szenen weiter (bis „aus“, eine andere
+  Szene oder eine Automation sie ablöst).
+- **Handbedienung einer einzelnen Lampe** während der Dynamik: nur diese Lampe verlässt den Farbwechsel
+  bis zum nächsten Szenenstart; die übrigen laufen weiter.
+
+### 5. Akzent „Mondlicht nach Mondphase“
+- Pro Lampe wählbar (3.). Berechnet die beleuchtete Mondfläche lokal (synodischer Monat, ohne Cloud
+  und ohne zusätzliche Integration).
+- Einstellbar: Helligkeit bei Neumond und bei Vollmond (Standard 10 % / 80 %), Farbe bei Neumond und
+  bei Vollmond (Standard kühles Blauweiß → helles Kaltweiß), fließend dazwischen. Optional „bei
+  Vollmond langsam atmen“.
+- Aktualisierung alle 30 Minuten während die Szene läuft. Anzeige in der Szene: „Mond heute: 37 %“.
+
+### 6. Startseite und schnelle Bedienung
+- Auf jeder Raum-/Zonenkachel die **Lieblingsszenen als Chips** (antippen = starten), wie in Hue.
+- Kachel zeigt laufende Szene und ob sie dynamisch ist; Antippen der Szene stoppt/startet die Dynamik.
+
+### 7. Umbenennen und Ersetzen von Lampen überstehen
+- Beim echten System wurden Lampen umbenannt und von der Hue-Bridge zu Zigbee2MQTT umgezogen; dabei
+  gingen u. a. Positionen verloren.
+- Auf `entity_registry_updated` mit `old_entity_id` reagieren und **alle** Verweise im Store
+  mitziehen: Freigaben, Zonen, Szenen (inkl. Werte pro Lampe), Positionen, Taster, Zeitpläne,
+  Bewegung, Grundhelligkeit, Automatik-Stand.
+- Unter „Mehr“: **„Lampe ersetzen“** – alle Verweise von Lampe A auf Lampe B übertragen (mit Vorschau
+  der betroffenen Einträge).
+
+### 8. Robustheit, am echten System beobachtet
+- Hue-Farblampen über Zigbee2MQTT melden nach dem Anlernen `color_mode: unknown` und `brightness: null`,
+  bis einmal Farbe oder Weißton gesetzt wurde. Solche Lampen nicht als „0 %“/„aus“ werten und beim
+  ersten Befehl immer Farbe bzw. Weißton mitsenden.
+- Farben so umsetzen, dass Farblampen gesättigt leuchten (xy im Gamut der Lampe begrenzen). Lampen nur
+  mit Weißton erhalten den nächstliegenden bzw. wärmsten Weißton, nie eine Fehlermeldung.
+
+### Abnahme
+Synthetisch in Tests (keine echten Entity-IDs). Fertig, wenn:
+1. Mindestens 20 Stimmungen inkl. „Herbstglut“ in Kategorien erscheinen und mit einem Tipp starten.
+2. Eine eigene Palette angelegt, live probiert, gespeichert und in einer Szene benutzt werden kann.
+3. In einer dynamischen Zonen-Szene zwei Lampen dauerhaft dunkler, eine Lampe mit fester Farbe und eine
+   Lampe mit „Mondlicht“ laufen, während die übrigen die Farben wechseln – über mindestens drei Takte.
+4. Eine aktive dynamische Szene einen Neustart übersteht.
+5. Das Umbenennen einer Lampen-Entity alle Verweise mitzieht.
+6. Bestehende Szenen, Zeitpläne, Taster und Zonen unverändert weiterlaufen.
+Nach dem Draft-PR stoppen.
 
 ## Stufe 6 – Anwesenheitssimulation
 
