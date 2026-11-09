@@ -10,6 +10,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, STORAGE_KEY, STORAGE_VERSION
 
@@ -217,7 +218,7 @@ class LichtzentraleStore:
 
     async def async_save_binding(self, binding: dict, *, is_update: bool = False) -> dict:
         """Validate and persist one unique button/event action atomically."""
-        from .bindings import validate_binding
+        from .bindings import binding_patterns_conflict, validate_binding
 
         async with self._lock:
             binding = validate_binding(self._hass, self, binding)
@@ -232,15 +233,18 @@ class LichtzentraleStore:
                 item["id"] != binding["id"]
                 and item["event_entity"] == binding["event_entity"]
                 and item["event_type"] == binding["event_type"]
-                and item.get("event_attributes", {}) == binding.get("event_attributes", {})
+                and binding_patterns_conflict(item, binding)
                 for item in updated["bindings"]
             ):
-                raise ServiceValidationError("Für dieses Ereignis gibt es bereits eine Belegung.")
+                raise ServiceValidationError(
+                    "Für dieses Ereignis gibt es bereits eine gleich genaue Belegung. "
+                    "Bitte die Merkmale genauer zuordnen oder die vorhandene Belegung bearbeiten."
+                )
             if index is None:
                 updated["bindings"].append(deepcopy(binding))
             else:
                 previous = updated["bindings"][index]
-                for optional in ("event_attributes", "control_label"):
+                for optional in ("event_attributes", "ignored_event_attributes", "control_label"):
                     if optional not in binding:
                         previous.pop(optional, None)
                 updated["bindings"][index] = {**previous, **deepcopy(binding)}
@@ -534,7 +538,15 @@ class LichtzentraleStore:
     async def async_set_automatic_state(self, key, action, day):
         async with self._lock:
             updated = deepcopy(self._data)
-            updated["automatic_state"][key] = {"day": day, "action": deepcopy(action)}
+            sequence = 1 + max(
+                (value.get("sequence", 0) for value in updated["automatic_state"].values()
+                 if type(value.get("sequence", 0)) is int), default=0,
+            )
+            value = {
+                "day": day, "action": deepcopy(action),
+                "updated_at": dt_util.utcnow().isoformat(), "sequence": sequence,
+            }
+            updated["automatic_state"][key] = value
             await self._store.async_save(updated)
             self._data = updated
 

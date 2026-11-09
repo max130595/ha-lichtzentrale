@@ -155,7 +155,7 @@ verwenden ausschließlich synthetische Daten; eine Prüfung mit echten Geräten 
 **Haltepunkt:** Nach Aktualisierung des Draft-PRs mit Teil 2 endet die Arbeit wieder.
 Keine weitere Branch-Änderung, Live-Aktion oder CI-Überwachung bis zur Rückmeldung.
 
-## Ausgeführter Entwicklungsstand, Teil 2
+## Bereits geprüfter Entwicklungsstand 7c8ce3c, Teil 2
 
 - Python-Gesamtsuite: **821 bestanden** unter HA 2026.10.4 / Python 3.14.
 - Frontend: **141 bestanden in 10 Dateien** mit `npm test -- --maxWorkers=1`.
@@ -167,3 +167,65 @@ Keine weitere Branch-Änderung, Live-Aktion oder CI-Überwachung bis zur Rückme
   Größenhinweise von Webpack (Bundle über der empfohlenen Grenze) sind keine Buildfehler.
 - Keine visuelle Handy-/Browser-Abnahme, echte Installation oder Hardwareprüfung erfolgt.
   GitHub-CI, HACS-Action und hassfest werden nach Übergabe ausdrücklich nicht überwacht.
+
+
+## Review-Korrekturen nach 7c8ce3c
+
+Nur die vier vom Nutzer weitergegebenen Reviewpunkte, als neues Git-Bundle ohne eigene
+Veröffentlichung. Vor Beginn wurde `origin/stufe-5b-einfach` geholt und per Fast-forward
+abgeglichen; Remote und lokal standen auf 7c8ce3c. Keine fremden Änderungen überschrieben.
+
+1. **Überlappende Automatikstände:** Synthetische Zone Wohnbereich enthält eine Flurlampe
+   und eine Lampe aus einem anderen Raum. Sonnenuntergang setzt eine Zonenszene. Flur
+   besitzt keinen eigenen heutigen Automatikstand. Erster `night_auto`-Druck setzt sein
+   Nachtlicht, zweiter stellt nur die Flurlampe aus der Zonenszene wieder her. Die andere
+   Zonenlampe bleibt unverändert, auch wenn sie zwischenzeitlich manuell geändert wurde.
+   Umgekehrte Richtung Raum → Zone sowie mehrere überlappende Stände prüfen. Ein eigener
+   heutiger Stand hat Vorrang; sonst gewinnt je Lampe der jüngste passende Stand. Neustart,
+   lokale Tagesgrenze, entfernte Mitgliedschaften und entzogene Freigaben berücksichtigen.
+2. **Rundungstoleranz:** Nachtlicht bleibt bei Helligkeit ±3, Farbtemperatur ±50 K und xy
+   ±0,01 je Koordinate erkannt. Exakte Grenzwerte und knapp außerhalb testen. Ungültige
+   Werte oder geänderter Ein/Aus-Zustand dürfen nicht als aktives Nachtlicht gelten.
+3. **Teilergebnisse:** Szene/Nachtlicht/Aus mit mindestens einer erfolgreich geschalteten
+   Lampe bleibt als Automatikstand gespeichert, auch wenn andere Ziele übersprungen wurden
+   oder fehlschlugen. Protokoll nennt das Teilergebnis. Ohne jede erfolgreiche Lampe keinen
+   neuen Stand erfinden. Eine spätere Rückkehr darf wieder verfügbare gemeinsame Ziele
+   erneut versuchen; die gespeicherte Aktion wird nicht auf erfolgreiche Lampen reduziert.
+4. **Attribute „egal“:** Beim Anlernen jedes beobachtete Attribut einzeln umstellen.
+   `press`/`press_release` mit `button_1` und `button_2` bleiben getrennt; `dial_rotate`
+   rechts mit verschiedenen `speed`-Werten trifft dieselbe Belegung, links nicht.
+   `brightness_step` unterscheidet die Richtung. Unbekannte Attribute sind ebenfalls
+   konfigurierbar. Abbrechen schreibt nichts, Bearbeiten/Neustart erhalten die Wahl.
+   Alte genaue Belegungen werden nicht migriert. Überlappende Muster dürfen pro Ereignis
+   nicht mehrere Aktionen ungewollt auslösen.
+
+Der native HA-2026.11-Smoke wurde um den Zweifach-Druck am Raum mit gerundeter Helligkeit
+und unveränderter anderer Zonenlampe sowie persistierte Drehrichtung mit beliebiger
+Geschwindigkeit ergänzt. Eine echte Geräte-/Handyprüfung bleibt Claude vorbehalten.
+
+### Bewusste Grenzen beim geerbten Szenenabruf
+
+- Eine geerbte Palette behält ihre Farbpositionen relativ zur vollständigen Quelle, wird
+  aber nur auf gemeinsame Lampen angewendet. Eine geerbte dynamische Szene wird dort
+  statisch wiederhergestellt, damit kein größerer Quellenlauf neu gestartet wird.
+- Eine geerbte Hue-Szene wird in verifizierte einzelne Lichtbefehle zerlegt. Es wird nie
+  die gesamte Hue-Szene aktiviert. Nicht sicher abbildbare native Gradienten/Effekte
+  werden mit Hinweis übersprungen; sie lösen keine breitere Ersatzaktion aus.
+- Alte Tagesstände ohne Zeitstempel bleiben lesbar. Neu gespeicherte Stände tragen UTC-Zeit
+  und eine persistierte Reihenfolge. Bei identischer Zeit gewinnt der spätere Schreibvorgang;
+  bei vollständig alten Gleichständen ist die Auswahl stabil, nicht eine erfundene Historie.
+- Bei mehreren passenden Tasterbelegungen gewinnt die spezifischere. Gleich spezifische,
+  überschneidende Muster werden beim Speichern zurückgewiesen. Alte genaue Belegungen
+  bleiben genau; nur neu angelerntes `dial_rotate.speed` wird zunächst „egal“.
+
+### Nachgewiesener Stand der Review-Korrekturen
+
+- Gesamte Python-Suite: **883 bestanden**, HA 2026.10.4 / Python 3.14.
+- Gesamtes Frontend: **145 bestanden in 10 Dateien**, seriell mit `--maxWorkers=1`.
+- Getrennte Vorschau: **22 bestanden**.
+- Erweiterter nativer Smoke mit **Home Assistant 2026.11.0**: bestanden.
+- TypeScript, ESLint, Ruff und `git diff --check`: bestanden.
+- Frontend zweimal gebaut; Bundle und Lizenzdateien bytegleich. Die drei bekannten
+  Webpack-Größenhinweise bleiben unverändert, keine Buildfehler.
+- Keine GitHub-Veröffentlichung, CI-Überwachung, Live-Installation oder Geräteaktion.
+  Übergabe als Git-Bundle auf Basis von 7c8ce3c; danach Arbeit stoppen.

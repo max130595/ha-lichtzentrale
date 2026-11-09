@@ -133,15 +133,73 @@ def event_attributes(state):
     return validate_event_attributes({key: value for key, value in state.attributes.items() if key not in _EVENT_METADATA})
 
 
-def matches_attributes(binding, state):
-    # Legacy bindings intentionally retain their old type-only behaviour. Learned
-    # bindings match the complete payload, so missing/changed keys cannot cross-fire.
+def validate_ignored_attributes(value, attributes):
+    """Only explicitly observed fields may become wildcards."""
+    if (
+        not isinstance(attributes, dict)
+        or not isinstance(value, list)
+        or len(value) > 64
+        or any(not isinstance(key, str) or key not in attributes for key in value)
+    ):
+        raise ServiceValidationError("Ungültige als egal markierte Ereignisattribute.")
+    return sorted(set(value))
+
+
+def _attribute_pattern(binding):
+    attributes = validate_event_attributes(binding["event_attributes"])
+    ignored = validate_ignored_attributes(binding.get("ignored_event_attributes", []), attributes)
+    return {key: value for key, value in attributes.items() if key not in ignored}, ignored
+
+
+def _same_attributes(left, right):
+    # JSON comparison keeps booleans distinct from numeric selector values.
+    return json.dumps(left, sort_keys=True, allow_nan=False) == json.dumps(
+        right, sort_keys=True, allow_nan=False
+    )
+
+
+def _matches_payload(binding, attributes):
+    # Old type-only bindings and exact learned bindings retain their semantics.
+    # Only fields explicitly marked as ignored may change or disappear.
     if "event_attributes" not in binding:
         return True
     try:
-        return json.dumps(binding["event_attributes"], sort_keys=True, allow_nan=False) == json.dumps(event_attributes(state), sort_keys=True, allow_nan=False)
+        required, ignored = _attribute_pattern(binding)
+        return _same_attributes(
+            required, {key: value for key, value in attributes.items() if key not in ignored}
+        )
     except (ServiceValidationError, TypeError, ValueError):
         return False
+
+
+def matches_attributes(binding, state):
+    try:
+        return _matches_payload(binding, event_attributes(state))
+    except ServiceValidationError:
+        return False
+
+
+def _specificity(binding):
+    if "event_attributes" not in binding:
+        return (-1, 0)
+    required, ignored = _attribute_pattern(binding)
+    return (len(required), -len(ignored))
+
+
+def binding_patterns_conflict(left, right):
+    """Reject equally specific overlapping patterns, regardless of ignored values."""
+    if _specificity(left) != _specificity(right):
+        return False
+    if "event_attributes" not in left:
+        return True
+    left_values, left_ignored = _attribute_pattern(left)
+    right_values, right_ignored = _attribute_pattern(right)
+    left_keys, right_keys = set(left_values), set(right_values)
+    return (
+        left_keys <= right_keys | set(right_ignored)
+        and right_keys <= left_keys | set(left_ignored)
+        and all(_same_attributes(left_values[key], right_values[key]) for key in left_keys & right_keys)
+    )
 
 
 def _scene_for_room(store, scene_id, area_id):
@@ -163,6 +221,7 @@ def validate_binding(hass, store, raw) -> dict:
         "area_id",
         "params",
         "event_attributes",
+        "ignored_event_attributes",
         "control_label",
     }:
         raise ServiceValidationError("Ungültige Tasterbelegung.")
@@ -186,6 +245,9 @@ def validate_binding(hass, store, raw) -> dict:
     attributes = raw.get("event_attributes")
     if attributes is not None:
         attributes = validate_event_attributes(attributes)
+    ignored = None
+    if "ignored_event_attributes" in raw:
+        ignored = validate_ignored_attributes(raw["ignored_event_attributes"], attributes)
     label = raw.get("control_label")
     if label is not None and (not isinstance(label, str) or not label.strip() or len(label) > 80):
         raise ServiceValidationError("Ungültige Tastenbezeichnung.")
@@ -221,6 +283,7 @@ def validate_binding(hass, store, raw) -> dict:
         "area_id": area_id,
         "params": deepcopy(params),
         **({"event_attributes": attributes} if attributes is not None else {}),
+        **({"ignored_event_attributes": ignored} if ignored is not None else {}),
         **({"control_label": label.strip()} if label is not None else {}),
     }
 
@@ -338,9 +401,9 @@ class BindingManager:
             if binding not in current:
                 task.cancel()
         for entity_id, pending in list(self._pending.items()):
-            if pending["bindings"] != self._bindings(entity_id, "short_release") or pending[
+            if pending["bindings"] != self._matching_bindings(entity_id, "short_release", pending["attributes"]) or pending[
                 "doubles"
-            ] != self._bindings(entity_id, DOUBLE_RELEASE):
+            ] != self._matching_bindings(entity_id, DOUBLE_RELEASE, pending["attributes"]):
                 self._cancel_pending(entity_id)
 
     @callback
@@ -354,6 +417,15 @@ class BindingManager:
             for b in self.store.data["bindings"]
             if b.get("event_entity") == entity_id and b.get("event_type") == event_type
         ]
+
+    def _matching_bindings(self, entity_id, event_type, attributes):
+        matches = [
+            binding for binding in self._bindings(entity_id, event_type)
+            if _matches_payload(binding, attributes)
+        ]
+        # A precise learned gesture overrides a wildcard or legacy fallback.
+        # Store validation prevents ties; old/corrupt duplicates still run only once.
+        return [max(matches, key=_specificity)] if matches else []
 
     @callback
     def _queue(self, bindings, context):
@@ -402,19 +474,20 @@ class BindingManager:
             or event_type == DOUBLE_RELEASE
         ):
             return
+        try:
+            attributes = event_attributes(new)
+        except ServiceValidationError:
+            return
         self._prune_learning()
         learning = [session for session in self._learning.values() if session["entity_id"] == entity_id and session["observation"] is None]
         if learning:
-            try:
-                observed = {"event_entity": entity_id, "event_type": event_type, "event_attributes": event_attributes(new)}
-            except ServiceValidationError:
-                return
+            observed = {"event_entity": entity_id, "event_type": event_type, "event_attributes": attributes}
             for session in learning:
                 session["observation"] = deepcopy(observed)
             self._cancel_pending(entity_id)
             return  # Learning does not run a previously saved action for this gesture.
-        bindings = [b for b in self._bindings(entity_id, event_type) if matches_attributes(b, new)]
-        doubles = [b for b in self._bindings(entity_id, DOUBLE_RELEASE) if matches_attributes(b, new)]
+        bindings = self._matching_bindings(entity_id, event_type, attributes)
+        doubles = self._matching_bindings(entity_id, DOUBLE_RELEASE, attributes)
         if event_type != "short_release" or not doubles:
             # A removed double binding must not leave a stale delayed single behind.
             if event_type == "short_release":
@@ -424,8 +497,12 @@ class BindingManager:
             return
         now = monotonic()
         pending = self._pending.get(entity_id)
+        ignored = doubles[0].get("ignored_event_attributes", [])
         if (pending and now <= pending["deadline"] and pending["doubles"] == doubles
-                and pending.get("attributes") == event_attributes(new)):
+                and _same_attributes(
+                    {key: value for key, value in pending["attributes"].items() if key not in ignored},
+                    {key: value for key, value in attributes.items() if key not in ignored},
+                )):
             self._cancel_pending(entity_id)
             self._queue(doubles, event.context)
             return
@@ -436,7 +513,7 @@ class BindingManager:
             milliseconds = 500
         pending = {
             "bindings": bindings,
-            "attributes": event_attributes(new),
+            "attributes": attributes,
             "doubles": doubles,
             "context": event.context,
             "deadline": now + milliseconds / 1000,

@@ -816,6 +816,53 @@ async def run(config_dir: str) -> None:
         await async_execute_action(hass, after_restart, {"type": "full_brightness", "area_ids": [zone_area]})
         await async_execute_action(hass, after_restart, {"type": "return_auto", "area_ids": [zone_area]})
         assert all(hass.states.get(e).state == "off" for e in zone["entity_ids"])
+        # Review fixes: a room inherits only its overlap with a zone, including
+        # device brightness rounding. The unrelated zone lamp stays untouched.
+        evening = await async_save_scene(hass, after_restart, {
+            "name": "Synthetic inherited evening", "area_id": zone_area, "kind": "snapshot",
+            "lights": {lamp.entity_id: {"on": True, "brightness": 130},
+                       brightness_lamp.entity_id: {"on": True, "brightness": 85}},
+        })
+        await async_execute_action(hass, after_restart, {"type": "scene", "scene_id": evening["id"]}, automatic=True)
+        await async_save_scene(hass, after_restart, {
+            "name": "Synthetic corridor night", "area_id": brightness_area.id, "kind": "snapshot", "night": True,
+            "lights": {brightness_lamp.entity_id: {"on": True, "brightness": 30}},
+        })
+        assert current_action(hass, after_restart, brightness_area.id) is None
+        await hass.services.async_call("light", "turn_on", {"entity_id": lamp.entity_id, "brightness": 145}, blocking=True)
+        await async_execute_action(hass, after_restart, {"type": "night_auto", "area_id": brightness_area.id})
+        night_state = hass.states.get(brightness_lamp.entity_id)
+        assert night_state.attributes["brightness"] == 30
+        hass.states.async_set(brightness_lamp.entity_id, "on", {**night_state.attributes, "brightness": 33})
+        count = len(calls)
+        await async_execute_action(hass, after_restart, {"type": "night_auto", "area_id": brightness_area.id})
+        assert hass.states.get(brightness_lamp.entity_id).attributes["brightness"] == 85
+        assert hass.states.get(lamp.entity_id).attributes["brightness"] == 145
+        assert {call.data["entity_id"] for call in calls[count:]} == {brightness_lamp.entity_id}
+        # Persisted wildcard learning matches any speed, never the wrong direction.
+        dial_attributes = {"event_types": ["dial_rotate"], "event_type": "dial_rotate", "direction": "right", "speed": 1}
+        hass.states.async_set(button.entity_id, "2026-01-02T00:00:00+00:00", dial_attributes)
+        await after_restart.async_save_binding({
+            "event_entity": button.entity_id, "event_type": "dial_rotate",
+            "event_attributes": {"direction": "right", "speed": 1}, "ignored_event_attributes": ["speed"],
+            "action": "turn_off_room", "area_id": brightness_area.id, "params": {},
+        })
+        learned_store = LichtzentraleStore(hass)
+        await learned_store.async_load()
+        learned_manager = BindingManager(hass, learned_store)
+        learned_manager.start()
+        try:
+            count = len(calls)
+            hass.states.async_set(button.entity_id, "2026-01-02T00:00:01+00:00", {**dial_attributes, "direction": "left", "speed": 12})
+            await hass.async_block_till_done()
+            assert len(calls) == count
+            hass.states.async_set(button.entity_id, "2026-01-02T00:00:02+00:00", {**dial_attributes, "speed": 12})
+            await hass.async_block_till_done()
+            assert hass.states.get(brightness_lamp.entity_id).state == "off"
+            assert hass.states.get(lamp.entity_id).attributes["brightness"] == 145
+            assert {call.data["entity_id"] for call in calls[count:]} == {brightness_lamp.entity_id}
+        finally:
+            await learned_manager.shutdown()
         await final.async_remove()
         assert not path.exists()
     finally:
@@ -849,7 +896,7 @@ def main() -> None:
         "brightness-stage native dispatch/payload, minimum interval, manual-service pause, "
         "configuration and learning persistence, target-edit ownership/bright-light removal, "
         "disable with/without keep_lights and unload; cross-room zones, night scene tagging, "
-        "full neutral brightness, manual state preservation, day-state disk reload and return to off."
+        "full neutral brightness, manual state preservation, day-state disk reload and return to off; room night/rounded recall from zone restricted to shared lamps; persisted dial direction matching with wildcard speed."
     )
     print(
         "Not verified here: full config-entry/panel lifecycle, HTTP/WebSocket protocol, "

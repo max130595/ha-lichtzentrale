@@ -484,3 +484,92 @@ describe('Gerätezeichnung und Anlernen', () => {
     expect(screen.getByRole('group', {name: 'custom_event'})).toBeInTheDocument();
   });
 });
+
+async function captureLearnedEvent(eventType: string, attributes: Record<string, unknown>) {
+  const source = {...buttons[0], event_types: [eventType], model: 'Tap Dial'};
+  const result = await setup({buttons: [source]});
+  const group = within(screen.getByRole('region', {name: 'Testgerät'}));
+  fireEvent.click(group.getByRole('button', {name: 'Tap Dial Drehrad'}));
+  fireEvent.click(group.getByRole('button', {name: 'Drehen nach rechts'}));
+  const original = result.callWS.getMockImplementation()!;
+  result.callWS.mockImplementation(async request => {
+    if (request.type === 'lichtzentrale/buttons/learn/start') return {token: 'synthetic-wildcard-token'};
+    if (request.type === 'lichtzentrale/buttons/learn/status') return {status: 'captured', observation: {event_entity: source.entity_id, event_type: eventType, event_attributes: attributes}};
+    if (request.type === 'lichtzentrale/buttons/learn/cancel') return {cancelled: true};
+    return original(request);
+  });
+  fireEvent.click(group.getByRole('button', {name: 'Taste anlernen'}));
+  await group.findByText(/^Erkannt:/);
+  return {...result, group};
+}
+
+describe('Gelernte Merkmale und Egal-Auswahl', () => {
+  it('defaults only observed dial speed to egal and retains it through save, reload and edit', async () => {
+    const {callWS, group, unmount} = await captureLearnedEvent('dial_rotate', {direction: 'right', speed: 2, runtime_marker: 'synthetic'});
+    expect(group.getByLabelText('Geschwindigkeit beachten')).toHaveValue('ignore');
+    expect(group.getByLabelText('Richtung beachten')).toHaveValue('match');
+    expect(group.getByLabelText('runtime_marker beachten')).toHaveValue('match');
+    fireEvent.click(group.getAllByRole('button', {name: 'Aktion und Ziel auswählen'})[0]);
+    expect(screen.getByLabelText('Geschwindigkeit beachten')).toHaveValue('ignore');
+    chooseRoom(); chooseAction('dim_up');
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    const saved = callWS.mock.calls.find(([request]) => request.type === 'lichtzentrale/binding/save')![0].binding;
+    expect(saved).toMatchObject({event_attributes: {direction: 'right', speed: 2, runtime_marker: 'synthetic'}, ignored_event_attributes: ['speed']});
+    unmount(); render(<Buttons hass={{callWS} as Hass}/>);
+    await screen.findByRole('region', {name: 'Testgerät'});
+    fireEvent.click(screen.getByText('Alle Ereignisse und gespeicherte Belegungen'));
+    fireEvent.click(eventGroup('Drehen').getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Geschwindigkeit beachten')).toHaveValue('ignore');
+    expect(screen.getByLabelText('Richtung beachten')).toHaveValue('match');
+    fireEvent.change(screen.getByLabelText('Geschwindigkeit beachten'), {target: {value: 'match'}});
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({type: 'lichtzentrale/binding/save', binding: expect.objectContaining({ignored_event_attributes: [], event_attributes: {direction: 'right', speed: 2, runtime_marker: 'synthetic'}})}));
+    expect(document.body.textContent).not.toContain(buttons[0].entity_id);
+  });
+
+  it('can ignore unknown observed attributes while required fields remain exact', async () => {
+    const {callWS, group} = await captureLearnedEvent('press_release', {button: 'button_1', unexpected_detail: {nested: 3}, speed: 5});
+    expect(group.getByLabelText('Taste beachten')).toHaveValue('match');
+    expect(group.getByLabelText('Geschwindigkeit beachten')).toHaveValue('match');
+    fireEvent.change(group.getByLabelText('unexpected_detail beachten'), {target: {value: 'ignore'}});
+    fireEvent.click(group.getAllByRole('button', {name: 'Aktion und Ziel auswählen'})[0]);
+    expect(screen.getByLabelText('unexpected_detail beachten')).toHaveValue('ignore');
+    chooseRoom();
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({type: 'lichtzentrale/binding/save', binding: expect.objectContaining({ignored_event_attributes: ['unexpected_detail'], event_attributes: {button: 'button_1', unexpected_detail: {nested: 3}, speed: 5}})}));
+  });
+
+  it('never adds an unobserved speed field or changes old exact dial bindings by default', async () => {
+    const {group, unmount} = await captureLearnedEvent('dial_rotate', {direction: 'right'});
+    expect(group.queryByLabelText('Geschwindigkeit beachten')).not.toBeInTheDocument();
+    expect(group.getByLabelText('Richtung beachten')).toHaveValue('match');
+    fireEvent.click(group.getByRole('button', {name: 'Anlernen abbrechen'}));
+    expect(group.queryByText(/^Erkannt:/)).not.toBeInTheDocument();
+    unmount();
+    const exact = {...binding, event_type: 'dial_rotate', event_attributes: {direction: 'right', speed: 2}};
+    const {callWS} = await setup({buttons: [{...buttons[0], event_types: ['dial_rotate']}], bindings: [exact]});
+    fireEvent.click(eventGroup('Drehen').getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Geschwindigkeit beachten')).toHaveValue('match');
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/binding/save', binding: exact});
+  });
+
+  it('keeps conflicting edits as an unsaved draft and cancellation restores saved matching', async () => {
+    const existing = {...binding, event_attributes: {button: 'button_1', unknown_observed_key: 'synthetic'}};
+    const {callWS} = await setup({bindings: [existing]});
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    fireEvent.change(screen.getByLabelText('unknown_observed_key beachten'), {target: {value: 'ignore'}});
+    callWS.mockRejectedValueOnce(new Error('Für dieses Ereignis gibt es bereits eine gleich genaue Belegung.'));
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    expect(await screen.findByRole('alert')).toHaveTextContent('gleich genaue Belegung');
+    expect(screen.getByLabelText('unknown_observed_key beachten')).toHaveValue('ignore');
+    expect(screen.queryByText('Belegung in Home Assistant gespeichert.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {name: 'Abbrechen'}));
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('unknown_observed_key beachten')).toHaveValue('match');
+  });
+});

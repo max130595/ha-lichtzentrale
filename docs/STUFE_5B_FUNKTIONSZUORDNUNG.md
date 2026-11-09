@@ -76,13 +76,15 @@ Zeitpläne behalten dafür ihren bisherigen Editor; neue Pläne nutzen den Assis
 - Die getrennte HTML-Vorschau verändert nur Demodaten im Arbeitsspeicher. Die produktive
   Integration speichert Zonen, Szenen, Taster und Automationen serverseitig.
 - Der Automatikstand pro Raum/Zone gilt nur am lokalen Kalendertag und überlebt Neustarts
-  innerhalb dieses Tages. Manuelle Bedienung überschreibt ihn nicht. Ohne Stand erfolgt
-  keine Geräteaktion; ein Protokollhinweis erklärt die fehlende Rückkehr.
+  innerhalb dieses Tages. Manuelle Bedienung überschreibt ihn nicht. Ohne eigenen Stand
+  werden heutige überlappende Raum-/Zonenstände nur auf gemeinsame Lampen angewendet.
+  Ohne passenden Stand erfolgt keine Geräteaktion; ein Protokollhinweis erklärt die fehlende Rückkehr.
 - Neue Automationen führen alle Aktionen streng nacheinander aus. Eine Szene gehört
   genau einem Raum oder einer Zone; für verschiedene Szenen mehrere Aktionen anlegen.
 - Zigbee2MQTT-Attribute werden zur Laufzeit gelernt. Ein generischer Ereignistyp alleine
   reicht nicht für mehrere Tasten. Gerätezeichnungen/Vorlagen ersetzen nicht das tatsächliche
-  Zuordnen der physischen Taste. Vorhandene Hue-Belegungen bleiben gültig.
+  Zuordnen der physischen Taste. Beobachtete Attribute dürfen einzeln „egal“ sein; beim
+  Drehen ist Geschwindigkeit zunächst egal. Vorhandene genaue Belegungen bleiben gültig.
 - Alte gespeicherte Objekte und Zusatzfelder bleiben erhalten. Die automatisierten Prüfungen
   sowie noch offene Geräte- und Handy-Abnahmen stehen im [Testplan](STUFE_5B_TESTPLAN.md).
 - Externe Home-Assistant-Automationen werden nicht abgeschaltet. Das übernimmt Claude erst

@@ -2,11 +2,12 @@
 """Shared validated actions for room, zone and explicit lamp selections."""
 
 import logging
+import math
 from copy import deepcopy
 
 from homeassistant.exceptions import ServiceValidationError
 
-from .automatic_state import async_record_action, current_action
+from .automatic_state import async_record_action, recall_actions
 from .rooms import (
     async_dispatch,
     check_execution_guard,
@@ -39,7 +40,7 @@ def night_scene(store, area_id):
     return scene
 
 
-def action_targets(hass, store, action):
+def action_targets(hass, store, action, *, _entity_ids=None):
     areas = areas_for(action)
     entities = action.get("entity_ids", [])
     if not isinstance(entities, list) or any(not isinstance(e, str) for e in entities):
@@ -52,7 +53,11 @@ def action_targets(hass, store, action):
             raise ServiceValidationError("Eine Szene gehört zu genau einem Raum oder einer Zone.")
         targets = (scene["lights"] if scene["kind"] == "snapshot" else
                    hue_scene_targets(hass, scene["hue_scene"]) if scene["kind"] == "hue" else
-                   room_targets(hass, store, scene["area_id"]))
+                   _area_targets(hass, store, scene["area_id"], _entity_ids))
+        if _entity_ids is not None:
+            targets = [e for e in targets if e in _entity_ids]
+            if not targets:
+                return []
         return _targets(hass, store, scene["area_id"], targets)
     if action.get("type") in {"adaptive", "motion"}:
         if len(areas) != 1 or entities:
@@ -66,11 +71,25 @@ def action_targets(hass, store, action):
         validate_motion(hass, store, areas[0], store.data["rooms"].get(areas[0], {}).get("motion"))
     targets = list(entities)
     for area in areas:
-        targets.extend(room_targets(hass, store, area))
+        targets.extend(_area_targets(hass, store, area, _entity_ids))
+    if _entity_ids is not None:
+        targets = [e for e in targets if e in _entity_ids]
+        if not targets:
+            return []
     return validate_selected_lights(hass, store, list(dict.fromkeys(targets)))
 
 
-def validate_action(hass, store, action):
+def _area_targets(hass, store, area, subset):
+    if subset is None:
+        return room_targets(hass, store, area)
+    from .zones import contains, validate_area
+
+    validate_area(hass, store, area)
+    return [e for e in store.data["settings"]["light_entity_ids"]
+            if e in subset and contains(hass, store, area, e)]
+
+
+def validate_action(hass, store, action, *, _entity_ids=None):
     if not isinstance(action, dict) or not isinstance(action.get("type"), str) or action["type"] not in KINDS:
         raise ServiceValidationError("Unbekannte Aktion.")
     allowed = {"type", "area_id", "area_ids", "entity_ids"}
@@ -93,7 +112,7 @@ def validate_action(hass, store, action):
         if action["type"] != "return_auto":
             for area in areas_for(action):
                 night_scene(store, area)
-    action_targets(hass, store, action)
+    action_targets(hass, store, action, _entity_ids=_entity_ids)
     return deepcopy(action)
 
 
@@ -112,26 +131,34 @@ def _night_active(hass, store, area, scene):
                     if key in value:
                         actual = state.attributes.get(attr)
                         if key == "xy":
-                            if actual is None or list(actual) != list(value[key]):
+                            if (not isinstance(actual, (list, tuple)) or len(actual) != 2
+                                    or any(not _within(a, b, 0.01) for a, b in zip(actual, value[key], strict=True))):
                                 return False
-                        elif actual != value[key]:
+                        elif not _within(actual, value[key], 3 if key == "brightness" else 50):
                             return False
         return True
-    return any(hass.states.get(e).state == "on" for e in targets)
+    return any((state := hass.states.get(e)) is not None and state.state == "on" for e in targets)
 
 
-async def async_execute_action(hass, store, action, context=None, *, transition=None, guard=None, dispatch_guard=None, automatic=False):
-    action = validate_action(hass, store, action)
+def _within(actual, expected, tolerance):
+    return (type(actual) in (int, float) and math.isfinite(actual)
+            and abs(actual - expected) <= tolerance + 1e-9)
+
+
+async def async_execute_action(hass, store, action, context=None, *, transition=None, guard=None, dispatch_guard=None, automatic=False, _entity_ids=None):
+    action = validate_action(hass, store, action, _entity_ids=_entity_ids)
     validate_transition(transition)
     check_execution_guard(guard)
     kind = action["type"]
-    targets = action_targets(hass, store, action)
+    targets = action_targets(hass, store, action, _entity_ids=_entity_ids)
     original_targets = tuple(targets)
+    if _entity_ids is not None and not targets:
+        return {"applied": [], "skipped": []}
     previous_dispatch_guard = dispatch_guard
 
     def stable_selection():
         check_execution_guard(previous_dispatch_guard)
-        if tuple(action_targets(hass, store, action)) != original_targets:
+        if tuple(action_targets(hass, store, action, _entity_ids=_entity_ids)) != original_targets:
             raise ServiceValidationError("Die Zielauswahl hat sich geändert. Bitte erneut versuchen.")
         return True
 
@@ -144,26 +171,33 @@ async def async_execute_action(hass, store, action, context=None, *, transition=
         check_execution_guard(dispatch_guard)
         return await store.async_set_motion_enabled(areas_for(action)[0], action["enabled"], guard=dispatch_guard)
     if kind == "scene":
-        from .scenes import async_apply_scene
+        from .scenes import async_apply_scene, async_apply_scene_subset
 
-        result = await async_apply_scene(hass, store, action["scene_id"], context, transition=transition, guard=guard, dispatch_guard=dispatch_guard)
+        if _entity_ids is not None:
+            result = await async_apply_scene_subset(hass, store, action["scene_id"], targets, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard)
+        else:
+            result = await async_apply_scene(hass, store, action["scene_id"], context, transition=transition, guard=guard, dispatch_guard=dispatch_guard)
     elif kind in {"night", "return_auto", "night_auto"}:
         result = {"applied": [], "skipped": []}
         for area in areas_for(action):
             check_execution_guard(guard)
             scene = night_scene(store, area) if kind != "return_auto" else None
             returning = kind == "return_auto" or (kind == "night_auto" and _night_active(hass, store, area, scene))
-            nested = current_action(hass, store, area) if returning else {"type": "scene", "scene_id": scene["id"]}
-            if nested is None:
+            recalls = recall_actions(hass, store, area) if returning else [({"type": "scene", "scene_id": scene["id"]}, _entity_ids)]
+            if not recalls:
                 _LOGGER.info("Kein Automatikstand für dieses Ziel am heutigen Tag.")
                 result.setdefault("notes", []).append("Für dieses Ziel gibt es heute noch keinen Automatikstand.")
                 continue
-            part = await async_execute_action(hass, store, nested, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard, automatic=False)
-            for key in ("applied", "skipped", "failed"):
-                result.setdefault(key, []).extend(e for e in part.get(key, []) if e not in result.get(key, []))
-            if automatic:
-                remembered = nested if returning else {"type": "night", "area_id": area}
-                await async_record_action(hass, store, remembered, part)
+            for nested, subset in recalls:
+                part = await async_execute_action(hass, store, nested, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard, automatic=False, _entity_ids=subset)
+                for key in ("applied", "skipped", "failed", "notes"):
+                    if key in part:
+                        result.setdefault(key, []).extend(e for e in part[key] if e not in result.get(key, []))
+                if returning and subset is not None and part.get("applied"):
+                    # A partial foreign scene is not the recipient's old night scene.
+                    await store.async_update_room(area, {"last_scene_id": None})
+                if automatic and not returning:
+                    await async_record_action(hass, store, {"type": "night", "area_id": area}, part)
         return result
     elif kind in {"off", "on", "toggle"}:
         result = await async_control_lights(hass, store, targets, on={"off": False, "on": True, "toggle": None}[kind], context=context, transition=transition, guard=guard, dispatch_guard=dispatch_guard)
@@ -174,7 +208,7 @@ async def async_execute_action(hass, store, action, context=None, *, transition=
             await _stop_dynamics(hass, store, locked, areas)
             check_execution_guard(guard)
             check_execution_guard(dispatch_guard)
-            targets = action_targets(hass, store, action)
+            targets = action_targets(hass, store, action, _entity_ids=_entity_ids)
             calls, skipped, prepared = [], [], {}
             for entity in targets:
                 state = hass.states.get(entity)
@@ -195,7 +229,7 @@ async def async_execute_action(hass, store, action, context=None, *, transition=
             def allowed(entity):
                 check_execution_guard(dispatch_guard)
                 try:
-                    return entity in action_targets(hass, store, action) and hass.states.get(entity) is prepared[entity]
+                    return entity in action_targets(hass, store, action, _entity_ids=_entity_ids) and hass.states.get(entity) is prepared[entity]
                 except ServiceValidationError:
                     return False
 

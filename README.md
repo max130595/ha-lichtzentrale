@@ -59,13 +59,19 @@ und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
   danach ein Raum dieser Zone auf Nachtlicht. Eine gespeicherte Szene gehört zu genau
   einem Raum oder einer Zone; für verschiedene Szenen weitere Aktionen anlegen.
 - **Zurück zur Automatik / Nachtlicht ⇄ Automatik:** Als Taster- und Automationsaktionen
-  verfügbar. Die letzte erfolgreich ausgeführte Szene, Nachtlicht oder Aus pro Ziel bleibt
+  verfügbar. Die letzte zumindest teilweise ausgeführte Szene, Nachtlicht oder Aus pro Ziel bleibt
   bis zum lokalen Tageswechsel gespeichert, auch über einen Neustart. Manuelle Bedienung
-  überschreibt diesen Stand nicht. Ohne Stand wird nichts geschaltet und ein Hinweis ausgegeben.
+  überschreibt diesen Stand nicht. Fehlt ein eigener Stand, gilt für gemeinsame Lampen der
+  jüngste heutige Stand aus überlappenden Räumen/Zonen. Andere Lampen bleiben unverändert.
+  Ohne passenden Stand wird nichts geschaltet und ein Hinweis ausgegeben. Kleine gerätebedingte
+  Rundungen verhindern die Nachtlicht-Rückkehr nicht.
 - **Taster:** Gerät und Taste wählen, Ereignis anlernen und Aktion/Ziel speichern. Bei
   Zigbee2MQTT werden Ereignisquelle, Typ und tatsächlich beobachtete Attribute gemeinsam
   verwendet. Unbekannte Ereignisse bleiben sichtbar. Die Dimmer-Vorlage schlägt passende
-  Aktionen vor; reale Tastenzuordnungen werden nicht aus Namen geraten.
+  Aktionen vor; reale Tastenzuordnungen werden nicht aus Namen geraten. Beobachtete Attribute
+  können beim Anlernen einzeln als „egal“ markiert werden. Bei Drehen (`dial_rotate`) ist
+  `speed` standardmäßig egal, damit dieselbe Drehrichtung bei jeder Geschwindigkeit passt.
+  Bestehende gespeicherte genaue Zuordnungen bleiben unverändert.
 - Bewegung, Grundhelligkeit, Positionen und weitere seltene Einstellungen bleiben unter
   **Mehr Optionen** erreichbar. Adaptive Lighting ist weiterhin optional.
 

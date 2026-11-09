@@ -695,3 +695,159 @@ async def test_zone_binding_and_full_brightness_explicit_lamps_validate(hass, st
     for action in ("night", "night_auto", "return_auto"):
         with pytest.raises(ServiceValidationError):
             validate_binding(hass, store, raw(rig, action=action, area_id=None, params={"entity_ids": rig["lights"]}))
+
+
+@pytest.fixture
+async def learned_rig(hass, rig):
+    with patch(f"{__name__}.EVENT_TYPES", [*EVENT_TYPES, "press", "press_release", "dial_rotate", "brightness_step"]):
+        await press(hass, rig)
+        yield rig
+
+
+@pytest.mark.parametrize("event_type", ["press", "press_release"])
+async def test_observed_button_attribute_distinguishes_physical_keys(hass, store, learned_rig, event_type):
+    rig = learned_rig
+    one = await bind(hass, store, rig, event_type=event_type, event_attributes={"button": "button_1"})
+    two = await bind(hass, store, rig, event_type=event_type, event_attributes={"button": "button_2"})
+    with patch.object(rig["manager"], "_action", AsyncMock()) as action:
+        for value in ["button_1", "button_2", "button_3", "button_4"]:
+            await press(hass, rig, event_type, button=value)
+        await press(hass, rig, event_type)
+    assert [call.args[0]["id"] for call in action.await_args_list] == [one["id"], two["id"]]
+
+
+async def test_ignored_speed_matches_all_rates_but_not_other_directions(hass, store, learned_rig):
+    rig = learned_rig
+    saved = await bind(hass, store, rig, event_type="dial_rotate",
+                       event_attributes={"direction": "right", "speed": 2},
+                       ignored_event_attributes=["speed"])
+    with patch.object(rig["manager"], "_action", AsyncMock()) as action:
+        for speed in [1, 2, 20, "fast", None]:
+            await press(hass, rig, "dial_rotate", direction="right", speed=speed)
+        await press(hass, rig, "dial_rotate", direction="right")
+        await press(hass, rig, "dial_rotate", direction="left", speed=2)
+        await press(hass, rig, "dial_rotate", speed=2)
+        await press(hass, rig, "dial_rotate", direction="right", speed=2, new_unlearned_key=3)
+    assert [call.args[0]["id"] for call in action.await_args_list] == [saved["id"]] * 6
+
+
+async def test_brightness_step_matches_its_observed_direction(hass, store, learned_rig):
+    rig = learned_rig
+    up = await bind(hass, store, rig, "dim_up", "brightness_step", event_attributes={"direction": "up"})
+    down = await bind(hass, store, rig, "dim_down", "brightness_step", event_attributes={"direction": "down"})
+    with patch.object(rig["manager"], "_action", AsyncMock()) as action:
+        await press(hass, rig, "brightness_step", direction="up")
+        await press(hass, rig, "brightness_step", direction="down")
+        await press(hass, rig, "brightness_step")
+    assert [call.args[0]["id"] for call in action.await_args_list] == [up["id"], down["id"]]
+
+
+async def test_arbitrary_attributes_can_be_ignored_or_required(hass, store, rig):
+    saved = await bind(hass, store, rig,
+                       event_attributes={"unexpected_selector": {"part": 1}, "invented_rate": [2, 3]},
+                       ignored_event_attributes=["invented_rate"])
+    with patch.object(rig["manager"], "_action", AsyncMock()) as action:
+        await press(hass, rig, unexpected_selector={"part": 1}, invented_rate={"other": True})
+        await press(hass, rig, unexpected_selector={"part": 1})
+        await press(hass, rig, unexpected_selector={"part": 2}, invented_rate=[2, 3])
+        await press(hass, rig, unexpected_selector={"part": True}, invented_rate=[2, 3])
+    assert [call.args[0]["id"] for call in action.await_args_list] == [saved["id"]] * 2
+    exact = await async_save_binding(hass, store, {**saved, "ignored_event_attributes": []})
+    with patch.object(rig["manager"], "_action", AsyncMock()) as action:
+        await press(hass, rig, unexpected_selector={"part": 1}, invented_rate={"other": True})
+        await press(hass, rig, unexpected_selector={"part": 1}, invented_rate=[2, 3])
+    assert [call.args[0]["id"] for call in action.await_args_list] == [exact["id"]]
+
+
+async def test_wildcard_binding_restart_and_edit_retain_full_observation(hass, store, learned_rig):
+    rig = learned_rig
+    saved = await bind(hass, store, rig, event_type="dial_rotate",
+                       event_attributes={"direction": "right", "speed": 2},
+                       ignored_event_attributes=["speed"], control_label="Drehen rechts")
+    await rig["manager"].shutdown()
+    restored = LichtzentraleStore(hass)
+    await restored.async_load()
+    assert restored.data["bindings"] == [saved]
+    manager = BindingManager(hass, restored)
+    rig["manager"] = manager
+    hass.data["lichtzentrale"]["bindings"] = manager
+    manager.start()
+    with patch.object(manager, "_action", AsyncMock()) as action:
+        await press(hass, rig, "dial_rotate", direction="right", speed=9)
+        action.assert_awaited_once()
+    exact = await async_save_binding(hass, restored, {**saved, "ignored_event_attributes": []})
+    assert exact["event_attributes"] == saved["event_attributes"]
+    with patch.object(manager, "_action", AsyncMock()) as action:
+        await press(hass, rig, "dial_rotate", direction="right", speed=9)
+        await press(hass, rig, "dial_rotate", direction="right", speed=2)
+        action.assert_awaited_once()
+    # Removing the optional matching schema when switching to a direct event
+    # must not leave hidden wildcard fields behind in the merged Store entry.
+    plain = {key: value for key, value in exact.items() if key not in {"event_attributes", "ignored_event_attributes"}}
+    await async_save_binding(hass, restored, plain)
+    assert "ignored_event_attributes" not in restored.data["bindings"][0]
+    assert "event_attributes" not in restored.data["bindings"][0]
+    await manager.shutdown()
+
+
+async def test_more_specific_binding_wins_once_over_wildcard_and_legacy(hass, store, learned_rig):
+    rig = learned_rig
+    legacy = await bind(hass, store, rig, event_type="dial_rotate")
+    broad = await bind(hass, store, rig, event_type="dial_rotate",
+                       event_attributes={"direction": "right", "speed": 2}, ignored_event_attributes=["speed"])
+    exact = await bind(hass, store, rig, event_type="dial_rotate",
+                       event_attributes={"direction": "right", "speed": 2})
+    with patch.object(rig["manager"], "_action", AsyncMock()) as action:
+        await press(hass, rig, "dial_rotate", direction="right", speed=2)
+        await press(hass, rig, "dial_rotate", direction="right", speed=9)
+        await press(hass, rig, "dial_rotate", direction="left", speed=2)
+    assert [call.args[0]["id"] for call in action.await_args_list] == [exact["id"], broad["id"], legacy["id"]]
+    assert "ignored_event_attributes" not in exact  # Never migrate old exact matches.
+
+
+async def test_wildcard_conflicts_and_edit_failures_do_not_mutate_store(hass, store, learned_rig):
+    rig = learned_rig
+    first = await bind(hass, store, rig, event_type="dial_rotate",
+                       event_attributes={"direction": "right", "speed": 2}, ignored_event_attributes=["speed"])
+    other = await bind(hass, store, rig, event_type="dial_rotate",
+                       event_attributes={"direction": "left", "speed": 7}, ignored_event_attributes=["speed"])
+    before = store.data
+    for changes in [
+        {"event_attributes": {"direction": "right", "speed": 9}},
+        {"event_attributes": {"direction": "right", "other_rate": 3}, "ignored_event_attributes": ["other_rate"]},
+        {"id": other["id"], "event_attributes": {"direction": "right", "speed": 7}},
+    ]:
+        draft = {key: value for key, value in first.items() if key != "id"}
+        with pytest.raises(ServiceValidationError, match="gleich genaue Belegung"):
+            await async_save_binding(hass, store, {**draft, **changes})
+        assert store.data == before
+
+
+@pytest.mark.parametrize("ignored", [None, "speed", {}, [1], ["missing"], ["event_type"]])
+async def test_invalid_ignored_attribute_lists_are_rejected(hass, store, rig, ignored):
+    with pytest.raises(ServiceValidationError):
+        validate_binding(hass, store, raw(rig, event_attributes={"speed": 2}, ignored_event_attributes=ignored))
+
+
+async def test_ignored_attributes_require_an_observation(hass, store, rig):
+    with pytest.raises(ServiceValidationError):
+        validate_binding(hass, store, raw(rig, ignored_event_attributes=[]))
+
+
+async def test_double_click_ignores_only_explicit_wildcards_and_keeps_keys_separate(hass, store, rig):
+    single = await bind(hass, store, rig, event_attributes={"button": "button_1", "sample": 1},
+                        ignored_event_attributes=["sample"])
+    double = await bind(hass, store, rig, event_type=DOUBLE_RELEASE,
+                        event_attributes={"button": "button_1", "sample": 1}, ignored_event_attributes=["sample"])
+    second_key = await bind(hass, store, rig, event_attributes={"button": "button_2", "sample": 1},
+                            ignored_event_attributes=["sample"])
+    with patch.object(rig["manager"], "_action", AsyncMock()) as action:
+        await press(hass, rig, button="button_1", sample=1)
+        # Unrelated binding edits do not cancel this gesture's pending single.
+        await async_save_binding(hass, store, {**second_key, "control_label": "Taste 2"})
+        assert rig["manager"]._pending
+        await press(hass, rig, button="button_1", sample=2)
+        await press(hass, rig, button="button_1", sample=3)
+        await press(hass, rig, button="button_2", sample=4)
+    assert [call.args[0]["id"] for call in action.await_args_list] == [double["id"], single["id"], second_key["id"]]
+    assert not rig["manager"]._pending

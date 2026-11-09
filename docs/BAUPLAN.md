@@ -411,15 +411,23 @@ diese Taste überhaupt ein Doppelklick belegt ist.
 - Alte Ein-Aktions-Pläne und ihre erweiterten Auslöser/Bedingungen bleiben ausführbar und
   bearbeitbar. Der bestehende Editor bleibt für diese Daten erreichbar. Store-Erweiterungen
   sind additiv; unbekannte Zusatzfelder werden beim Bearbeiten beibehalten.
-- `automatic_state` speichert nur vollständig erfolgreiche automatische Szene-, Nachtlicht-
-  oder Aus-Aktionen je Raum/Zone samt lokalem Datum. Manuelle Bedienung ersetzt diesen Stand
+- `automatic_state` speichert automatische Szene-, Nachtlicht- oder Aus-Aktionen je Raum/Zone
+  samt lokalem Datum, sobald mindestens eine zugehörige Lampe geschaltet wurde. Teilergebnisse
+  werden mit übersprungenen/fehlgeschlagenen Zielen im Protokoll vermerkt. Manuelle Bedienung ersetzt diesen Stand
   nicht. Neustart am selben Tag erhält ihn; Neustart am Folgetag und lokales Mitternacht
-  verwerfen ihn. Ohne heutigen Stand ist „Zurück zur Automatik“ wirkungslos mit Protokollhinweis.
+  verwerfen ihn. Der eigene heutige Stand hat Vorrang. Fehlt er, werden heutige Stände
+  überlappender Räume/Zonen herangezogen: je gemeinsamer Lampe gewinnt der jüngste Stand.
+  Es werden nur gemeinsame, weiterhin freigegebene Lampen geändert. Ohne passenden Stand
+  bleibt die Rückkehr wirkungslos mit Protokollhinweis. Die Nachtlicht-Erkennung toleriert
+  Geräte-Rundungen von ±3 Helligkeit, ±50 K und ±0,01 je xy-Koordinate.
 - Taster werden anhand tatsächlicher Event-Entities angeboten. Anlernen erfasst Quelle,
   Ereignistyp und beobachtete Ereignisattribute gemeinsam, statt Tastenattribute zu raten.
   Eine zeitlich begrenzte Anlernsitzung unterdrückt die alte Aktion des erfassten Ereignisses.
   Gerätezeichnungen und Vorlagen helfen bei der Zuordnung; jede physische Taste wird
-  ausdrücklich zugeordnet. Unbekannte Typen bleiben mit Rohnamen auswählbar.
+  ausdrücklich zugeordnet. Unbekannte Typen bleiben mit Rohnamen auswählbar. Beim Anlernen
+  kann jedes beobachtete Attribut als „egal“ markiert werden. Bei `dial_rotate` ist `speed`
+  anfangs „egal“, die Richtung bleibt unterscheidbar; bestehende genaue Belegungen werden
+  nicht nachträglich aufgeweicht.
 - Zonen funktionieren auch für Positionen, Farbverteilung, Dynamik und seltene Raumoptionen.
   Einzellampen-/Raumaktionen beenden überlappende lokale Farbdynamik. Gemeinsame physische
   Raumsperren verhindern konkurrierende Szenenbefehle. Switch-Lichter erhalten weiterhin

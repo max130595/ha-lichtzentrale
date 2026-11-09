@@ -23,8 +23,34 @@ const failure = (error: unknown) => error instanceof Error ? error.message : typ
 const hasAdaptive = (status: AdaptiveStatus | null, area: string) => !!status?.available && !!status.rooms?.some(room => room.area_id === area && room.available);
 const approved = (light: Light) => light.allowed && /^(light|switch)\./.test(light.entity_id);
 const targetsRequired = (action: BindingAction) => ['toggle_lights', 'turn_on_lights', 'turn_off_lights'].includes(action);
-type Editing = {entity: string; event: string; binding?: Binding; attributes?: Record<string, unknown>; label?: string; suggestedAction?: BindingAction; suggestedArea?: string};
+type Editing = {entity: string; event: string; binding?: Binding; attributes?: Record<string, unknown>; ignoredAttributes?: string[]; label?: string; suggestedAction?: BindingAction; suggestedArea?: string};
 type RoomSettings = {cycle: string[]; default_on: string};
+
+const attributeLabels = new Map([['button', 'Taste'], ['direction', 'Richtung'], ['speed', 'Geschwindigkeit']]);
+const attributeValueLabels = new Map([['left', 'Links'], ['right', 'Rechts'], ['up', 'Heller'], ['down', 'Dunkler']]);
+const attributeValue = (value: unknown) => {
+  if (typeof value === 'string') {
+    if (/^button_[1-4]$/.test(value)) return `Taste ${value.slice(-1)}`;
+    return attributeValueLabels.get(value) || value;
+  }
+  return JSON.stringify(value);
+};
+
+function LearnedAttributes({attributes, ignored, disabled, change}: {attributes: Record<string, unknown>; ignored: string[]; disabled: boolean; change: (keys: string[]) => void}) {
+  return <fieldset disabled={disabled}><legend>Gelernte Merkmale</legend>
+    <p>Wähle für jedes beobachtete Merkmal, ob es übereinstimmen muss oder egal ist. Bei mehreren passenden Belegungen wird nur die genaueste ausgeführt.</p>
+    {Object.entries(attributes).map(([key, value]) => {
+      const name = attributeLabels.get(key) || key;
+      return <label key={key} style={{display: 'block', marginBottom: 12, overflowWrap: 'anywhere'}}><span>{name}: {attributeValue(value)}</span>
+        <select className="text-input" aria-label={`${name} beachten`} value={ignored.includes(key) ? 'ignore' : 'match'} onChange={event => change(event.target.value === 'ignore' ? [...ignored, key] : ignored.filter(item => item !== key))}>
+          <option value="match">Muss übereinstimmen</option><option value="ignore">Egal</option>
+        </select>
+      </label>;
+    })}
+    {!Object.keys(attributes).length && <p>Keine zusätzlichen Merkmale.</p>}
+    {!!Object.keys(attributes).length && Object.keys(attributes).every(key => ignored.includes(key)) && <p className="notice">Kein gelerntes Merkmal muss übereinstimmen. Verschiedene Tasten können dann dieselbe Aktion auslösen.</p>}
+  </fieldset>;
+}
 
 export function Buttons({hass}: {hass: Hass}) {
   const api = useRef(hass); api.current = hass;
@@ -104,7 +130,7 @@ export function Buttons({hass}: {hass: Hass}) {
         </section>;
       })}</details></section>)}
       {editing && <section ref={editorRef} tabIndex={-1} className="card" aria-label="Belegung bearbeiten"><h3>{eventLabel(editing.event)} belegen</h3><p>{buttons.find(button => button.entity_id === editing.entity)?.name || 'Taster nicht mehr vorhanden'}<small>{editing.event}</small></p>
-        <BindingEditor key={`${editing.entity}/${editing.event}/${editing.binding?.id || editing.label || 'new'}/${JSON.stringify(editing.attributes || {})}`} editing={editing} lights={lights} rooms={rooms} scenes={scenes} adaptive={adaptive} disabled={disabled} cancel={() => {setEditing(null); setError('');}} save={binding => void mutate<Binding>('binding/save', {binding}, result => {setBindings(items => [...items.filter(item => item.id !== result.id), result]); setEditing(null);}, 'Belegung in Home Assistant gespeichert.')}/>
+        <BindingEditor key={`${editing.entity}/${editing.event}/${editing.binding?.id || editing.label || 'new'}/${JSON.stringify([editing.attributes, editing.ignoredAttributes])}`} editing={editing} lights={lights} rooms={rooms} scenes={scenes} adaptive={adaptive} disabled={disabled} cancel={() => {setEditing(null); setError('');}} save={binding => void mutate<Binding>('binding/save', {binding}, result => {setBindings(items => [...items.filter(item => item.id !== result.id), result]); setEditing(null);}, 'Belegung in Home Assistant gespeichert.')}/>
       </section>}
       {deleting && <section ref={editorRef} tabIndex={-1} className="card" aria-label="Belegung löschen bestätigen"><h3>Belegung löschen?</h3><p>{eventLabel(deleting.event_type)} · {description(deleting)}</p><p>Der Taster bleibt in Home Assistant erhalten.</p><button disabled={disabled} onClick={() => void mutate('binding/delete', {binding_id: deleting.id}, () => {setBindings(items => items.filter(item => item.id !== deleting.id)); setDeleting(null);}, 'Belegung gelöscht.')}>Endgültig löschen</button><button className="secondary" disabled={disabled} onClick={() => {setDeleting(null); setError('');}}>Abbrechen</button></section>}
       <DoubleClickSettings key={doubleClick} value={doubleClick} disabled={disabled} save={double_click_ms => void mutate<{double_click_ms: number}>('binding/settings', {double_click_ms}, result => setDoubleClick(result.double_click_ms), 'Doppelklick-Zeit gespeichert.')}/>
@@ -123,6 +149,8 @@ function BindingEditor({editing, lights, rooms, scenes, adaptive, disabled, save
   const [scene, setScene] = useState(editing.binding?.params.scene_id || '');
   const [entityIds, setEntityIds] = useState<string[]>(editing.binding?.params.entity_ids || []);
   const [individual, setIndividual] = useState(editing.binding?.params.entity_ids !== undefined);
+  const attributes = editing.attributes ?? editing.binding?.event_attributes;
+  const [ignored, setIgnored] = useState(editing.ignoredAttributes ?? editing.binding?.ignored_event_attributes ?? []);
   const dimming = action === 'dim_up' || action === 'dim_down';
   const flexible = dimming || action === 'full_brightness';
   const selectedTargets = targetsRequired(action) || (flexible && individual);
@@ -136,7 +164,8 @@ function BindingEditor({editing, lights, rooms, scenes, adaptive, disabled, save
   const roomScenes = scenes.filter(item => item.area_id === area).sort((a, b) => a.order - b.order);
   const adaptiveAvailable = hasAdaptive(adaptive, area);
   const valid = (selectedTargets ? entityIds.length > 0 && !invalidIds.length : rooms.some(room => room.area_id === area)) && (action !== 'scene' || roomScenes.some(item => item.id === scene)) && (!action.startsWith('adaptive_') || adaptiveAvailable);
-  return <form onSubmit={event => {event.preventDefault(); if (!disabled && valid) save({...editing.binding, event_entity: editing.entity, event_type: editing.event, ...(editing.attributes ? {event_attributes: editing.attributes} : {}), ...(editing.label ? {control_label: editing.label} : {}), area_id: selectedTargets ? null : area, action, params: selectedTargets ? {entity_ids: entityIds} : action === 'scene' ? {scene_id: scene} : {}});}}><fieldset disabled={disabled}><legend>Aktion zuordnen</legend>
+  return <form onSubmit={event => {event.preventDefault(); if (!disabled && valid) save({...editing.binding, event_entity: editing.entity, event_type: editing.event, ...(attributes ? {event_attributes: attributes} : {}), ...(attributes && (ignored.length || editing.binding?.ignored_event_attributes !== undefined) ? {ignored_event_attributes: ignored} : {}), ...(editing.label ? {control_label: editing.label} : {}), area_id: selectedTargets ? null : area, action, params: selectedTargets ? {entity_ids: entityIds} : action === 'scene' ? {scene_id: scene} : {}});}}><fieldset disabled={disabled}><legend>Aktion zuordnen</legend>
+    {attributes && <LearnedAttributes attributes={attributes} ignored={ignored} change={setIgnored} disabled={disabled}/>}
     {!selectedTargets && <label>Raum oder Zone<select className="text-input" value={rooms.some(room => room.area_id === area) ? area : ''} onChange={event => {const next = event.target.value; setArea(next); setScene(''); if (action.startsWith('adaptive_') && !hasAdaptive(adaptive, next)) setAction('toggle_room');}}><option value="">Raum oder Zone wählen</option>{rooms.map(room => <option key={room.area_id} value={room.area_id}>{room.name}</option>)}</select></label>}
     <label>Aktion<select className="text-input" value={action.startsWith('adaptive_') && !adaptiveAvailable ? '' : action} onChange={event => {const next = event.target.value as BindingAction; setAction(next); setScene(''); if (!targetsRequired(next) && next !== 'dim_up' && next !== 'dim_down' && next !== 'full_brightness') {setEntityIds([]); setIndividual(false);}}}><option value="" disabled>Aktion wählen</option>{(Object.entries(actionLabels) as [BindingAction, string][]).filter(([value]) => !value.startsWith('adaptive_') || adaptiveAvailable).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
     {flexible && <label>Ziel<select className="text-input" value={individual ? 'lights' : 'room'} onChange={event => {setIndividual(event.target.value === 'lights'); setEntityIds([]);}}><option value="room">Raum oder Zone</option><option value="lights">Einzelne Lichter auswählen</option></select></label>}
@@ -195,6 +224,7 @@ function DeviceSetup({buttons, rooms, hass, disabled, edit}: {buttons: ButtonEnt
   const [template, setTemplate] = useState(false), [target, setTarget] = useState('');
   const [token, setToken] = useState(''), [starting, setStarting] = useState(false), [error, setError] = useState('');
   const [observation, setObservation] = useState<Observation | null>(null);
+  const [ignored, setIgnored] = useState<string[]>([]);
   const api = useRef(hass); api.current = hass;
   const generation = useRef(0), mounted = useRef(true), startLock = useRef(false);
   useEffect(() => {const counter = generation; mounted.current = true; return () => {mounted.current = false; counter.current++;};}, []);
@@ -206,14 +236,18 @@ function DeviceSetup({buttons, rooms, hass, disabled, edit}: {buttons: ButtonEnt
       try {
         const result = await api.current.callWS<{status: string; observation: Observation | null}>({type: 'lichtzentrale/buttons/learn/status', token});
         if (!live) return;
-        if (result.observation) {setObservation(result.observation); setToken('');}
+        if (result.observation) {
+          setObservation(result.observation);
+          setIgnored(result.observation.event_type === 'dial_rotate' && Object.hasOwn(result.observation.event_attributes, 'speed') ? ['speed'] : []);
+          setToken('');
+        }
         else timer = setTimeout(() => void poll(), 700);
       } catch (failureValue) {if (live) {setError(failure(failureValue)); setToken('');}}
     }
     void poll();
     return () => {live = false; clearTimeout(timer); void api.current.callWS({type: 'lichtzentrale/buttons/learn/cancel', token}).catch(() => undefined);};
   }, [token]);
-  function cancel() {generation.current++; setToken(''); setObservation(null); setStarting(false); setError('');}
+  function cancel() {generation.current++; setToken(''); setObservation(null); setIgnored([]); setStarting(false); setError('');}
   async function learn() {
     if (startLock.current || disabled || !physical) return;
     startLock.current = true; const version = ++generation.current; setStarting(true); setError(''); setObservation(null);
@@ -230,7 +264,7 @@ function DeviceSetup({buttons, rooms, hass, disabled, edit}: {buttons: ButtonEnt
     const rawEvent = observed?.event_type || eventType;
     const event = gesture === 'Doppelklick' && rawEvent === 'short_release' ? 'double_short_release' : rawEvent;
     if (!event || !physical) return;
-    edit({entity: observed?.event_entity || source, event, attributes: observed?.event_attributes, label: `${physical} · ${gesture}`, suggestedAction: template ? templateActions[physical] : undefined, suggestedArea: template ? target : undefined});
+    edit({entity: observed?.event_entity || source, event, attributes: observed?.event_attributes, ignoredAttributes: observed ? ignored : undefined, label: `${physical} · ${gesture}`, suggestedAction: template ? templateActions[physical] : undefined, suggestedArea: template ? target : undefined});
     setObservation(null);
   };
   return <div>
@@ -249,7 +283,7 @@ function DeviceSetup({buttons, rooms, hass, disabled, edit}: {buttons: ButtonEnt
       <button type="button" disabled={frozen || !selected?.available} onClick={() => void learn()}>Taste anlernen</button>
       {(token || starting) && <p role="status">Jetzt die gewählte Taste am Gerät betätigen. Die erste neue Meldung wird erfasst. Eine gespeicherte Lichtzentrale-Aktion für diese Meldung wird dabei nicht ausgeführt.</p>}
       {(token || starting || observation) && <button type="button" onClick={cancel}>Anlernen abbrechen</button>}
-      {observation && <div><p role="status">Erkannt: {eventLabel(observation.event_type)}</p><p>Gelernte Merkmale: {Object.entries(observation.event_attributes).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(' · ') || 'Keine zusätzlichen Merkmale'}</p><button type="button" disabled={disabled} onClick={() => open(observation)}>Aktion und Ziel auswählen</button></div>}
+      {observation && <div><p role="status">Erkannt: {eventLabel(observation.event_type)}</p><LearnedAttributes attributes={observation.event_attributes} ignored={ignored} change={setIgnored} disabled={disabled}/><button type="button" disabled={disabled} onClick={() => open(observation)}>Aktion und Ziel auswählen</button></div>}
       {error && <p className="error" role="alert">{error}</p>}
       <details><summary>Bekanntes Ereignis direkt auswählen</summary><p>Nur verwenden, wenn die Ereignisquelle und der Typ bereits genau eine Taste bezeichnen. Bei gemeinsamen Typen die Taste anlernen.</p><select className="text-input" aria-label="Ereignis auswählen" disabled={frozen} value={eventType} onChange={event => setEventType(event.target.value)}><option value="">Ereignis wählen</option>{selected?.event_types.map(value => <option key={value} value={value}>{eventLabel(value)}</option>)}</select><button type="button" disabled={frozen || !eventType || !selected?.available} onClick={() => open(null)}>Aktion und Ziel auswählen</button></details>
     </section>}

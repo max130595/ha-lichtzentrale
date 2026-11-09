@@ -153,7 +153,7 @@ async def async_apply_palette(
     targets = [e for e in targets if e.startswith("light.")]
     result: dict[str, list[str]] = {"applied": [], "skipped": skipped_switches}
     calls = []
-    layout = layout_targets if welle and layout_targets is not None else targets
+    layout = layout_targets if layout_targets is not None else targets
     layout = [e for e in layout if e.startswith("light.")]
     positions = {}
     for entity_id in layout:
