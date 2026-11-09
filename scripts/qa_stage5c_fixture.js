@@ -33,6 +33,7 @@
     ...[['fixture_living', 'Wohnzimmer'], ['fixture_study', 'Arbeitszimmer'], ['fixture_corridor', 'Flur']].map(([area_id, name]) => ({kind: 'room', area_id, name, lights: lamps.filter(item => item.area_id === area_id), last_scene_id: area_id === 'fixture_living' ? 'fixture-reading' : null})),
   ].map(room => ({...room, on: true, brightness: 160, available_count: room.lights.length, cycle: [], default_on: 'last', positions: Object.fromEntries(room.lights.map((lamp, index) => [lamp.entity_id, {cell: [index % 3, Math.floor(index / 3)], height: index === 1 ? 'decke' : 'moebel'}]))}));
   let bindings = [{id: 'fixture-binding', event_entity: 'event.fixture_button', event_type: 'short_release', action: 'toggle_room', area_id: 'fixture_living', params: {on_behavior: {mode: 'brightness', brightness: 102}}}];
+  let dimMinPct = 1;
   const requests = [], sessions = new Map();
   const result = area => ({applied: (rooms.find(item => item.area_id === area)?.lights || lamps).map(item => item.entity_id), skipped: [], failed: []});
   const saveScene = draft => {
@@ -51,6 +52,11 @@
       requests.push(clone(request));
       await new Promise(resolve => setTimeout(resolve, 35));
       const type = request.type.replace('lichtzentrale/', '');
+      if (type === 'settings/get') return {dim_min_pct: dimMinPct};
+      if (type === 'settings/dimming') {
+        if (!Number.isInteger(request.dim_min_pct) || request.dim_min_pct < 1 || request.dim_min_pct > 20) throw new Error('Ungültige Dimm-Untergrenze');
+        dimMinPct = request.dim_min_pct; return {dim_min_pct: dimMinPct};
+      }
       if (type === 'palettes/list') return clone(palettes);
       if (type === 'lights/list') return clone([...lamps, replacement]);
       if (type === 'rooms/list') return clone(rooms);

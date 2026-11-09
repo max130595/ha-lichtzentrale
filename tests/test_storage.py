@@ -232,6 +232,7 @@ async def test_schedule_window_migration_preserves_nested_data_and_runs_once(has
     original = deepcopy(saved)
     hass_storage[STORAGE_KEY] = {"version": 1, "data": deepcopy(saved)}
     expected = deepcopy(saved)
+    expected["settings"].setdefault("dim_min_pct", 1)
     expected["schedules"][0]["condition"]["time_window"] = None
     store = LichtzentraleStore(hass)
     with patch.object(store._store, "async_save", wraps=store._store.async_save) as save:
@@ -259,5 +260,6 @@ async def test_schedule_window_failed_migration_is_atomic_and_retryable(hass, ha
     assert hass_storage[STORAGE_KEY]["data"] == saved
     await store.async_load()
     expected = deepcopy(saved)
+    expected["settings"].setdefault("dim_min_pct", 1)
     expected["schedules"][0]["condition"]["time_window"] = None
     assert store.data == expected == hass_storage[STORAGE_KEY]["data"]

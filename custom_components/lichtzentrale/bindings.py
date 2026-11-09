@@ -17,6 +17,7 @@ from homeassistant.util.dt import parse_datetime
 
 from .adaptive import async_set_adaptive
 from .const import DOMAIN
+from .dimming import dim_min_pct, dim_payload
 from .dynamic_scenes import async_stop_room, validate_dynamic
 from .lights import entity_area_id, is_individual_light
 from .palettes import list_palettes
@@ -24,7 +25,6 @@ from .positions import validate_distribution
 from .rooms import (
     async_dispatch,
     async_toggle_room,
-    light_service_data,
     room_targets,
     validate_control_options,
 )
@@ -728,42 +728,29 @@ class BindingManager:
         # Serialize with manual scenes and room controls as well as other button actions.
         locks = self.hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
         async with locks.setdefault(area_id, asyncio.Lock()):
-            calls, skipped = [], []
+            calls, skipped, payloads = [], [], {}
             for entity_id in room_targets(self.hass, self.store, area_id):
-                state = self.hass.states.get(entity_id)
-                brightness = state.attributes.get("brightness")
-                if (
-                    state.domain != "light"
-                    or state.state != "on"
-                    or type(brightness) is not int
-                    or not 1 <= brightness <= 255
-                    or light_service_data(state, brightness=brightness) is None
-                ):
+                params = dim_payload(self.hass.states.get(entity_id), direction, dim_min_pct(self.store))
+                if params is None:
                     skipped.append(entity_id)
                     continue
-                # Use the native relative-step service without computing one room-wide brightness.
-                calls.append(
-                    (
-                        "light",
-                        "turn_on",
-                        {
-                            "entity_id": entity_id,
-                            "brightness_step_pct": direction * 10,
-                        },
-                    )
-                )
+                payloads[entity_id] = params
+                calls.append(("light", "turn_on", params))
 
             def still_allowed(entity_id):
                 state = self.hass.states.get(entity_id)
-                return bool(
-                    entity_id in self.store.data["settings"]["light_entity_ids"]
-                    and entity_id in room_targets(self.hass, self.store, area_id)
-                    and state is not None
-                    and state.domain == "light"
-                    and state.state == "on"
-                    and is_individual_light(self.hass, state)
-                    and light_service_data(state, brightness=1) is not None
-                )
+                if (entity_id not in self.store.data["settings"]["light_entity_ids"]
+                        or entity_id not in room_targets(self.hass, self.store, area_id)
+                        or state is None or not is_individual_light(self.hass, state)):
+                    return False
+                params = dim_payload(state, direction, dim_min_pct(self.store))
+                if params is None:
+                    return False
+                # async_dispatch calls this without yielding before async_call.
+                # Refresh the same dict so a newly low lamp gets an absolute floor.
+                payloads[entity_id].clear()
+                payloads[entity_id].update(params)
+                return True
 
             return await async_dispatch(
                 self.hass, calls, skipped, context=context, guard=still_allowed

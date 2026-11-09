@@ -13,6 +13,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, STORAGE_KEY, STORAGE_VERSION
+from .dimming import DEFAULT_DIM_MIN_PCT, validate_dim_min_pct
 
 
 def empty_data() -> dict[str, Any]:
@@ -26,7 +27,7 @@ def empty_data() -> dict[str, Any]:
         "rooms": {},
         "bindings": [],
         "schedules": [],
-        "settings": {"light_entity_ids": []},
+        "settings": {"light_entity_ids": [], "dim_min_pct": DEFAULT_DIM_MIN_PCT},
     }
 
 
@@ -54,6 +55,7 @@ class LichtzentraleStore:
                 updated.update(deepcopy(saved))
                 updated["settings"] = {
                     "light_entity_ids": [],
+                    "dim_min_pct": DEFAULT_DIM_MIN_PCT,
                     **deepcopy(saved.get("settings", {})),
                 }
                 # Do not revalidate runtime references while loading: stale plans
@@ -93,6 +95,16 @@ class LichtzentraleStore:
             await self._store.async_save(updated)
             self._data = updated
             return True
+
+    async def async_set_dim_min_pct(self, value):
+        """Persist only the dimming setting, publishing after a successful save."""
+        validate_dim_min_pct(value)
+        async with self._lock:
+            updated = deepcopy(self._data)
+            updated["settings"]["dim_min_pct"] = value
+            await self._store.async_save(updated)
+            self._data = updated
+        return {"dim_min_pct": value}
 
     async def async_set_lights(self, entity_ids: list[str]) -> None:
         """Commit an explicit allowlist, keeping memory unchanged on failure."""

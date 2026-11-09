@@ -8,6 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
+from .dimming import dim_min_pct
 from .lights import list_lights, validate_lights
 from .palette_catalogue import list_palettes
 from .palettes import async_apply_palette
@@ -90,6 +91,32 @@ async def ws_settings(hass, connection, msg):
         connection.send_error(msg["id"], "invalid_request", str(error))
 
 
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/settings/get"})
+@websocket_api.require_admin
+@callback
+def ws_dimming_get(hass, connection, msg):
+    """Read global dimming settings without exposing unrelated stored data."""
+    try:
+        connection.send_result(msg["id"], {"dim_min_pct": dim_min_pct(get_store(hass))})
+    except HomeAssistantError as error:
+        connection.send_error(msg["id"], "not_ready", str(error))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/settings/dimming",
+    vol.Required("dim_min_pct"): object,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_dimming_save(hass, connection, msg):
+    """Validate and atomically save the global lower dimming bound."""
+    try:
+        result = await get_store(hass).async_set_dim_min_pct(msg["dim_min_pct"])
+        connection.send_result(msg["id"], result)
+    except HomeAssistantError as error:
+        connection.send_error(msg["id"], "invalid_request", str(error))
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/palette/apply",
@@ -125,6 +152,8 @@ def async_setup_websocket_api(hass: HomeAssistant) -> None:
         ws_palettes,
         ws_lights,
         ws_settings,
+        ws_dimming_get,
+        ws_dimming_save,
         ws_apply,
         *STAGE_ONE_HANDLERS,
         *STAGE_TWO_HANDLERS,
