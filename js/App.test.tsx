@@ -10,6 +10,7 @@ const palette: Palette = {id: 'test-palette', name: 'Testpalette', category: 'Te
 const lamp: Light = {entity_id: 'light.test_fixture', name: 'Testlampe', area_id: null, area_name: null, available: true, allowed: false};
 function setup(lights: Light[] = [lamp]) {
   const callWS = vi.fn(async (request: {type: string; [key: string]: unknown}): Promise<unknown> => {
+    if (request.type === 'lichtzentrale/settings/get') return {dim_min_pct: 1};
     if (request.type === 'lichtzentrale/light/replace_options') return {sources: [], targets: []};
     if (request.type === 'lichtzentrale/palettes/list') return [palette];
     if (request.type === 'lichtzentrale/lights/list') return lights;
@@ -143,7 +144,7 @@ describe('Freigaben und Teilergebnisse', () => {
   it('explicitly requests hidden printer lights without discarding unsaved grants', async () => {
     const printer = {...lamp, entity_id: 'light.test_printer', name: 'Testdrucker', hidden_by_default: true};
     const approvedPrinter = {...printer, entity_id: 'light.test_approved_printer', name: 'Freigegebener Testdrucker', allowed: true};
-    const callWS = vi.fn(async (req: {type: string; [key: string]: unknown}): Promise<unknown> => req.type.endsWith('lights/list') ? [lamp, approvedPrinter, ...(req.include_hidden ? [printer] : [])] : req.type.endsWith('replace_options') ? {sources: [], targets: []} : []);
+    const callWS = vi.fn(async (req: {type: string; [key: string]: unknown}): Promise<unknown> => req.type.endsWith('settings/get') ? {dim_min_pct: 1} : req.type.endsWith('lights/list') ? [lamp, approvedPrinter, ...(req.include_hidden ? [printer] : [])] : req.type.endsWith('replace_options') ? {sources: [], targets: []} : []);
     render(<App hass={{callWS} as Hass}/>); fireEvent.click(screen.getByRole('button', {name: 'Farben'}));
     fireEvent.click(screen.getByRole('button', {name: 'Mehr'}));
     await waitFor(() => expect(screen.getByRole('button', {name: 'Lampen freigeben'})).toBeEnabled());
@@ -157,5 +158,41 @@ describe('Freigaben und Teilergebnisse', () => {
     expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/lights/list', include_hidden: true});
     expect(screen.getByRole('checkbox', {name: /Testlampe/})).toBeChecked();
     expect(screen.getByRole('checkbox', {name: /Freigegebener Testdrucker/})).toBeChecked();
+  });
+});
+
+describe('Einstellungen unter Mehr', () => {
+  it('refreshes the global floor from the server and keeps the Mehr heading', async () => {
+    const callWS = setup(); await screen.findByText('Testpalette');
+    fireEvent.click(screen.getByRole('button', {name: 'Mehr'}));
+    expect(await screen.findByRole('spinbutton', {name: 'Dimm-Untergrenze (%)'})).toHaveValue(1);
+    expect(screen.getByRole('heading', {level: 1})).toHaveTextContent('Mehr');
+    callWS.mockImplementation(async request => request.type === 'lichtzentrale/settings/get' ? {dim_min_pct: 11} : request.type.endsWith('replace_options') ? {sources: [], targets: []} : []);
+    fireEvent.click(screen.getByRole('button', {name: 'Neu laden'}));
+    await waitFor(() => expect(screen.getByRole('spinbutton', {name: 'Dimm-Untergrenze (%)'})).toHaveValue(11));
+    expect(callWS.mock.calls.filter(([request]) => request.type === 'lichtzentrale/settings/get')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', {name: 'Farben'}));
+    fireEvent.click(screen.getByRole('button', {name: 'Mehr'}));
+    await screen.findByRole('spinbutton');
+    expect(callWS.mock.calls.filter(([request]) => request.type === 'lichtzentrale/settings/get')).toHaveLength(3);
+  });
+  it('keeps a pending save on screen when navigation or refresh is requested', async () => {
+    const callWS = setup(); await screen.findByText('Testpalette');
+    fireEvent.click(screen.getByRole('button', {name: 'Mehr'}));
+    const field = await screen.findByRole('spinbutton');
+    fireEvent.change(field, {target: {value: '6'}});
+    let resolve!: (value: unknown) => void;
+    callWS.mockImplementationOnce(() => new Promise(done => {resolve = done;}));
+    fireEvent.click(screen.getByRole('button', {name: 'Untergrenze speichern'}));
+    fireEvent.click(screen.getByRole('button', {name: 'Farben'}));
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Farben'})).toBeEnabled());
+    expect(screen.getByRole('heading', {level: 1})).toHaveTextContent('Mehr');
+    fireEvent.click(screen.getByRole('button', {name: 'Neu laden'}));
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Neu laden'})).toBeEnabled());
+    expect(callWS.mock.calls.filter(([request]) => request.type === 'lichtzentrale/settings/get')).toHaveLength(1);
+    resolve({dim_min_pct: 6});
+    await screen.findByText('Dimm-Untergrenze von 6 % in Home Assistant gespeichert.');
+    fireEvent.click(screen.getByRole('button', {name: 'Farben'}));
+    expect(screen.getByRole('heading', {level: 1})).toHaveTextContent('Farben');
   });
 });

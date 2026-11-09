@@ -4,7 +4,7 @@ Eine lokale Licht-App als Custom Integration für Home Assistant. Oberfläche au
 für schmale Bildschirme ausgelegt. Kein Cloud-Konto und keine zusätzlichen
 Python-Abhängigkeiten zur Laufzeit.
 
-**Stand: Stufe 5c (Entwurf zur Abnahme), Version 0.5.0.** Fünf Reiter:
+**Stand: Stufe 5d (Entwurf zur Abnahme), Version 0.5.1.** Fünf Reiter:
 Zuhause, Farben, Automationen, Taster und Mehr. 37 originale Stimmungen, eigene Paletten
 und ein Live-Szenen-Editor mit Helligkeit und Verhalten pro Lampe ergänzen Räume, Zonen,
 Taster und Automationen. Dynamik kann nach einem Neustart fortgesetzt werden. Alle
@@ -45,6 +45,20 @@ nur den Einschaltbefehl. `switch.*`-Lichtschalter bleiben bei statischen und dyn
 Paletten unverändert; Snapshot-Szenen stellen ihren gespeicherten An/Aus-Wert her.
 Nicht erreichbare oder unbekannte Lampen werden übersprungen
 und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
+
+## Dimm-Untergrenze
+
+Unter **Mehr → Einstellungen** lässt sich die globale **Dimm-Untergrenze** von 1 bis
+20 % speichern. Standard ist 1 % (Helligkeit 3 von 255). Beim Dunklerdimmen bleiben
+bereits eingeschaltete Lampen mindestens auf dieser Grenze; eine Lampe an der Grenze
+bekommt keinen weiteren Dimmbefehl. Der Wert gilt für Räume, Zonen und ausgewählte
+Lampen, auch am Taster, Drehring und bei wiederholtem Halten.
+
+Hochdimmen schaltet weiterhin keine ausgeschalteten Lampen ein. Aus-Tasten, Toggle,
+Zeitpläne und Szenen mit „aus“ funktionieren unverändert. Reine An/Aus-Lichter bekommen
+keine Dimmbefehle. Die Grenze liegt im Home-Assistant-Store; bestehende Installationen
+verwenden den Standard ohne Datenmigration. Prüfung und Bundle-Übernahme stehen im
+[Stufe-5d-Testplan](docs/STUFE_5D_TESTPLAN.md).
 
 ## Zonen, Automationen und Nachtlicht
 

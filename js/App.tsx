@@ -3,6 +3,7 @@ import {displayName, displayError} from './display';
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {PaletteEditor} from './PaletteEditor';
 import {ReplaceLight} from './ReplaceLight';
+import {DimmingSettings} from './DimmingSettings';
 import type {NavigationGuard} from './sceneControls';
 import {RoomPalette} from './RoomPalette';
 import {Rooms} from './Rooms';
@@ -33,6 +34,7 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [settings, setSettings] = useState(false);
+  const [settingsRevision, setSettingsRevision] = useState(0);
   const [grants, setGrants] = useState<string[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [palette, setPalette] = useState<Palette | null>(null);
@@ -109,10 +111,10 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
       {tab === 'Zuhause' && <>{detail && <button disabled={navigating} onClick={() => void navigate(() => setDetail(false))}>← Zuhause</button>}<Rooms hass={hass} registerGuard={registerGuard} detail={detail} openRoom={() => setDetail(true)} initialArea={roomArea} onRoomChange={(name, area) => {setRoomArea(area); setRoomName(name);}}/></>}
       {tab === 'Taster' && <Buttons hass={hass}/>}
       {tab === 'Automationen' ? <Schedules hass={hass}/> : (tab === 'Farben' || tab === 'Mehr') ? <>
-        {tab === 'Mehr' && <ReplaceLight hass={hass}/>}
+        {tab === 'Mehr' && <><DimmingSettings key={settingsRevision} hass={hass} registerGuard={registerGuard}/><ReplaceLight hass={hass}/></>}
         {tab === 'Mehr' && <button disabled={disabled} onClick={() => {setGrants(lights.filter(light => light.allowed).map(light => light.entity_id)); setSettings(!settings);}}>Lampen freigeben</button>}
         {loading && <p role="status">Lampen und Paletten werden geladen …</p>}
-        <button className="refresh" disabled={disabled} onClick={() => void navigate(() => {setSettings(false); setPaletteEditor(null); if (hasPreview) setPalette(null); void load();})}>Neu laden</button>
+        <button className="refresh" disabled={disabled} onClick={() => void navigate(() => {setSettings(false); setSettingsRevision(value => value + 1); setPaletteEditor(null); if (hasPreview) setPalette(null); void load();})}>Neu laden</button>
         {tab === 'Mehr' && settings && <section className="card"><h3>Lampen freigeben</h3><p>Nur bewusst freigegebene Einzellampen sind steuerbar. Drucker-, Geräte- und andere Funktionsbeleuchtung nicht auswählen. Gruppen werden nicht angeboten.</p>
           {!lights.length && <p>Keine Einzellampen gefunden.</p>}
           <label className="check"><input type="checkbox" checked={showHidden} disabled={disabled} onChange={event => {preserveGrants.current = true; setShowHidden(event.target.checked);}}/>Ausgeblendete Druckerbeleuchtung anzeigen</label><fieldset disabled={disabled}><legend>Erlaubte Einzellampen und Lichtschalter</legend>{lights.map(light => <label className="check" key={light.entity_id}><input type="checkbox" checked={grants.includes(light.entity_id)} onChange={() => setGrants(toggle(grants, light.entity_id))}/><span>{displayName(light.name)}<small>{light.area_name || 'Ohne Bereich'}{!light.available ? ' · Nicht verfügbar' : ''}</small></span></label>)}</fieldset>

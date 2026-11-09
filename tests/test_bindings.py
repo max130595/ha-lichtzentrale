@@ -963,3 +963,59 @@ async def test_fixed_on_rechecks_revoke_while_waiting(hass, store, rig):
         with pytest.raises(ServiceValidationError):
             await task
     call.assert_not_awaited()
+
+
+@pytest.mark.parametrize("event_type", ["repeat", "counter_clock_wise", "dial_rotate"])
+@pytest.mark.parametrize("target", ["room", "zone", "selected"])
+async def test_native_repeat_and_dial_stop_at_floor_then_dim_up(
+    hass, store, rig, event_type, target
+):
+    """Actual state events run through the started listener, not direct _dim calls."""
+    on_entity, off_entity = rig["lights"][:2]
+    for entity_id, on in [(on_entity, True), (off_entity, False)]:
+        old = hass.states.get(entity_id)
+        hass.states.async_set(entity_id, "on" if on else "off", {
+            **old.attributes, "brightness": 13,
+        })
+    event_types = list(dict.fromkeys([*EVENT_TYPES, "dial_rotate"]))
+    hass.states.async_set(rig["button"], "unknown", {"event_types": event_types})
+    await hass.async_block_till_done()
+    extra = {}
+    if target == "selected":
+        extra = {"area_id": None, "params": {"entity_ids": rig["lights"]}}
+    elif target == "zone":
+        zone = await store.async_save_zone({"name": "Synthetic dim event zone", "entity_ids": rig["lights"]})
+        extra = {"area_id": "zone:" + zone["id"]}
+    await bind(hass, store, rig, "dim_down", event_type, **extra)
+    await bind(hass, store, rig, "dim_up", "clock_wise", **extra)
+    calls = []
+
+    async def capture(call):
+        calls.append(call)
+        assert call.service == "turn_on", "Dimming must never dispatch turn_off."
+        entity_id = call.data["entity_id"]
+        old = hass.states.get(entity_id)
+        assert old.state == "on"
+        brightness = call.data.get("brightness")
+        if brightness is None:
+            brightness = round((round(old.attributes["brightness"] / 255 * 100)
+                                + call.data["brightness_step_pct"]) / 100 * 255)
+        assert brightness > 0
+        hass.states.async_set(entity_id, "on", {**old.attributes, "brightness": brightness}, context=call.context)
+
+    hass.services.async_register("light", "turn_on", capture)
+    hass.services.async_register("light", "turn_off", capture)
+    context = Context()
+    for _ in range(6):
+        await press(hass, rig, event_type, context=context, event_types=event_types)
+    assert len(calls) == 1
+    assert dict(calls[0].data) == {"entity_id": on_entity, "brightness": 3}
+    assert calls[0].context == context
+    assert hass.states.get(on_entity).attributes["brightness"] == 3
+    assert hass.states.get(off_entity).state == "off"
+
+    await press(hass, rig, "clock_wise", context=context, event_types=event_types)
+    assert len(calls) == 2
+    assert dict(calls[1].data) == {"entity_id": on_entity, "brightness_step_pct": 10}
+    assert hass.states.get(on_entity).attributes["brightness"] > 3
+    assert hass.states.get(off_entity).state == "off"

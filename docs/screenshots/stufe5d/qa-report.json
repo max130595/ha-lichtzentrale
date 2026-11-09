@@ -1,0 +1,36 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844,
+    "deviceScaleFactor": 1
+  },
+  "fixture": "Synthetic room/zone/device data; no live HA",
+  "screenshots": [
+    {
+      "filename": "01-einstellungen-390.png",
+      "viewport": 390,
+      "document": 390,
+      "main": 390,
+      "mainScroll": 390,
+      "overflow": []
+    },
+    {
+      "filename": "02-einstellungen-gespeichert-390.png",
+      "viewport": 390,
+      "document": 390,
+      "main": 390,
+      "mainScroll": 390,
+      "overflow": []
+    }
+  ],
+  "passed": [
+    "Production settings display default dim floor of 1%, with bounds 1–20%.",
+    "20% saves through settings/dimming and survives navigation.",
+    "1% saves and survives server refresh. Both settings screenshots have no horizontal overflow at 390px."
+  ],
+  "errors": [],
+  "browser": "Chrome 157.0.8103.38",
+  "playwright": "1.64.0-beta-1791568591000",
+  "production_bundle_sha256": "147e931276ff9feb4227ed515906eda063dd0732c5b4f4e694f0adc92c4d2964",
+  "visual_review": "Both original 390x844 screenshots inspected: settings label, numeric value, explanatory copy, and save button readable; no horizontal overflow."
+}

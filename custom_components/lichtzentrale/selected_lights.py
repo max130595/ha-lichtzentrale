@@ -7,6 +7,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from homeassistant.exceptions import ServiceValidationError
 
 from .const import DOMAIN
+from .dimming import dim_min_pct, dim_payload
 from .lights import entity_area_id, is_individual_light, validate_lights
 from .rooms import (
     async_dispatch,
@@ -143,23 +144,26 @@ async def async_dim_lights(hass, store, entity_ids, direction, context=None):
     async with _locked_targets(hass, store, entity_ids) as (targets, areas):
         await _stop_dynamics(hass, store, targets, areas)
 
+        payloads = {}
+
         def guard(entity_id):
-            state = hass.states.get(entity_id)
-            return bool(
-                _still_allowed(hass, store, entity_id, areas)
-                and state.domain == "light"
-                and state.state == "on"
-                and type(state.attributes.get("brightness")) is int
-                and 1 <= state.attributes["brightness"] <= 255
-                and light_service_data(state, brightness=1) is not None
-            )
+            if not _still_allowed(hass, store, entity_id, areas):
+                return False
+            params = dim_payload(hass.states.get(entity_id), direction, dim_min_pct(store))
+            if params is None:
+                return False
+            # async_dispatch calls this without yielding before async_call.
+            # Refresh the same dict so a newly low lamp gets an absolute floor.
+            payloads[entity_id].clear()
+            payloads[entity_id].update(params)
+            return True
 
         calls, skipped = [], []
         for entity_id in targets:
-            if not guard(entity_id):
+            params = dim_payload(hass.states.get(entity_id), direction, dim_min_pct(store))
+            if params is None or not _still_allowed(hass, store, entity_id, areas):
                 skipped.append(entity_id)
                 continue
-            calls.append(("light", "turn_on", {
-                "entity_id": entity_id, "brightness_step_pct": direction * 10,
-            }))
+            payloads[entity_id] = params
+            calls.append(("light", "turn_on", params))
         return await async_dispatch(hass, calls, skipped, context=context, guard=guard)

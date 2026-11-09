@@ -468,6 +468,21 @@ diese Taste überhaupt ein Doppelklick belegt ist.
 - Keine Live-Änderung. Tatsächliche Zigbee-Farben, Übergänge, Geräte-Rückmeldungen und externe
   Automationskonflikte prüft Claude anhand [STUFE_5C_TESTPLAN.md](STUFE_5C_TESTPLAN.md).
 
+### Stufe 5d – Dimmen schaltet nie aus
+
+- Version 0.5.1 ergänzt eine globale Dimm-Untergrenze von 1 bis 20 % unter
+  **Mehr → Einstellungen**, Standard 1 % entsprechend Helligkeit 3/255.
+- Raum-, Zonen- und Einzellampen-Dimmbefehle prüfen jede eingeschaltete dimmbare Lampe
+  einzeln. Über der Grenze bleiben normale relative Schritte erhalten; würde ein
+  Schritt die Grenze erreichen oder unterschreiten, wird die absolute Grenze gesendet.
+  Bereits an oder unter der Grenze stehende Lampen werden übersprungen.
+- Taster, Drehring und wiederholte Halteereignisse nutzen dieselbe Regel. An/Aus-Lichter
+  werden nie gedimmt; Hochdimmen und ausdrücklich angefordertes Ausschalten bleiben gleich.
+- Speicherung unter `settings.dim_min_pct` ohne Store-Versionswechsel. Fehlende Werte
+  erhalten beim Laden den Standard; Lampenfreigaben und andere Einstellungen bleiben erhalten.
+- Tests und reale 390-Pixel-Ansichten: [STUFE_5D_TESTPLAN.md](STUFE_5D_TESTPLAN.md).
+  Keine Live-Installation und keine Umsetzung von Stufe 6.
+
 ## Tests
 
 - Python: `pytest-homeassistant-custom-component` für Store, Szenen-Snapshot/Anwenden,

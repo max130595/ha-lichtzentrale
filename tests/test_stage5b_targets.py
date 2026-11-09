@@ -180,6 +180,7 @@ async def test_legacy_store_additions_are_idempotent_and_preserve_every_collecti
     }
     hass_storage[STORAGE_KEY] = {"version": 1, "data": deepcopy(original)}
     expected = {**deepcopy(original), "zones": [], "automatic_state": {}, "active_dynamic": {}}
+    expected["settings"]["dim_min_pct"] = 1
     first = LichtzentraleStore(hass)
     await first.async_load()
     assert first.data == expected
