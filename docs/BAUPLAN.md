@@ -374,6 +374,21 @@ diese Taste überhaupt ein Doppelklick belegt ist.
 - Automatisierte Abnahme: [Stufe-5-Testplan](STUFE_5_TESTPLAN.md). Keine echten Geräte,
   Bereitstellung oder Zusammenführung. Nach dem Draft-PR vollständig stoppen.
 
+### Stufe 5b – Einfache Bedienung, Teil 1: Vorschau
+
+- Separater Bedienentwurf unter [vorschau-5b/index.html](vorschau-5b/index.html), vollständig
+  mit synthetischen Daten und ohne Verbindung zu Home Assistant. Keine Produktivänderung,
+  kein Speichern von Nutzerdaten, keine Gerätebefehle.
+- Vorgeschlagene Reiter: Zuhause, Szenen, Automationen, Taster, Mehr. Räume/Zonen direkt
+  schalten und dimmen; Automationen mit Wann → Wo → Was; Taster über ihre Zeichnung belegen.
+- Klickbare Kernabläufe für Zonen, Sonnenversatz, mehrere Aktionen und Nachtlicht ⇄ Automatik.
+  Erweiterte Funktionen bleiben unter „Mehr Optionen“ auffindbar.
+- [Funktionszuordnung](STUFE_5B_FUNKTIONSZUORDNUNG.md) dokumentiert die neuen Plätze der
+  bisherigen Funktionen und grenzt Demo, künftige Migration und produktive Umsetzung ab.
+- Teil 1 endet mit dem Entwurfs-PR. Teil 2 einschließlich Servermodell, dauerhafter Speicherung
+  und tatsächlicher Zigbee2MQTT-Ereignisverarbeitung benötigt eine separate Nutzerfreigabe.
+  [Prüfliste](STUFE_5B_TESTPLAN.md) trennt Vorschau-Abnahme von späteren Integrationstests.
+
 ## Tests
 
 - Python: `pytest-homeassistant-custom-component` für Store, Szenen-Snapshot/Anwenden,
