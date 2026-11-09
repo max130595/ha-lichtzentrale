@@ -12,7 +12,8 @@ Bad oben in Tests oder Beispielen, Schalter (`switch`) werden nie gedimmt.
 | 5 Grundhelligkeit | `stufe-5-grundhelligkeit` | erledigt (PR #10, #11) |
 | 5b Einfache Bedienung wie die Hue-App | `stufe-5b-einfach` | erledigt (PR #12, am echten System getestet 09.11.) |
 | 5c Stimmungen, eigene Paletten, Helligkeit pro Lampe | `stufe-5c-paletten` | zusammengeführt (PR #13, Review-Korrekturen K1/K2), Abnahme am echten System läuft |
-| 5d Dimmen schaltet nie aus + Hue-Effekte in Szenen | `stufe-5d-dimmgrenze` | offen – **als Nächstes** |
+| 5d Dimmen schaltet nie aus | `stufe-5d-dimmgrenze` | erledigt (PR #14, 0.5.1) |
+| 5e Hue-Effekte, Ambiente-zuerst-Taster, Szene startet Skript | `stufe-5e-effekte` | offen – **als Nächstes** |
 | 6 Anwesenheitssimulation | `stufe-6-urlaub` | offen |
 | 7 Sicherung, „Alles aus“, Öffnung für andere | `stufe-7-sicherung` | offen |
 
@@ -237,7 +238,7 @@ Synthetisch in Tests (keine echten Entity-IDs). Fertig, wenn:
 6. Bestehende Szenen, Zeitpläne, Taster und Zonen unverändert weiterlaufen.
 Nach dem Draft-PR stoppen.
 
-## Stufe 5d – Dimmen schaltet nie aus, Hue-Effekte in Szenen
+## Stufe 5d – Dimmen schaltet nie aus
 
 Kleiner Nachtrag aus der Abnahme von 5c am 09.11. Problem: Wer mit einem Taster oder Drehring
 herunterdimmt, schaltet die Lampe am Ende ganz aus. Grund ist `brightness_step_pct: -10`, denn bei
@@ -259,7 +260,17 @@ absichtlich nur eingeschaltete Lampen anfasst.
    Helligkeit 3 plus `dim_down` ergibt keinen Befehl. Eine Lampe bei 50 % plus `dim_down` ergibt den
    normalen Schritt. Gemischte Auswahl mit einer Lampe an der Grenze und einer darüber. Halten mit
    Wiederholung. Ungültige Einstellwerte. Bestehende Dimm-Tests bleiben grün.
-6. **Hue-Effekte in Szenen (Nachtrag 09.11.):** Lampen, die `effect_list` melden, zum Beispiel ein Hue-Lichtband
+6. Hue-Effekte → verschoben nach Stufe 5e.
+7. Lieferung als Git-Bundle auf `stufe-5d-dimmgrenze` mit Basis aktuelles `main`, Version 0.5.1,
+   Screenshot der Einstellung bei 390 px. Keine Vorschauphase.
+
+## Stufe 5e – Hue-Effekte, „Ambiente zuerst“ am Taster, Szene startet Skript
+
+Basis: aktuelles `main` (0.5.1). Branch `stufe-5e-effekte`, Version 0.5.2. Drei Teile, eine Lieferung.
+
+### A · Hue-Effekte in Szenen
+
+Lampen, die `effect_list` melden, zum Beispiel ein Hue-Lichtband
    über Zigbee2MQTT mit sparkle, candle, fireplace, glisten, enchant oder cosmos, können im Szenen-Editor
    pro Lampe zusätzlich einen Effekt bekommen. Es zählen nur Werte aus der aktuellen `effect_list` der Lampe.
    Anzeige auf Deutsch: Funkeln, Kerze, Kamin, Glitzern, Verzaubern, Kosmos usw.
@@ -271,8 +282,55 @@ absichtlich nur eingeschaltete Lampen anfasst.
    Die Live-Probe zeigt den Effekt. Tests: Effekt nicht in der Liste → abgelehnt; Ablauf Farbe → Effekt;
    Stopp beim Szenenwechsel; reine An/Aus-Lampen ohne Effekt.
    Vorlage am echten System: Schlafzimmer-Band, Ruby xy 0.55/0.25, Helligkeit 140, Funkeln.
-7. Lieferung als Git-Bundle auf `stufe-5d-dimmgrenze` mit Basis aktuelles `main`, Version 0.5.1,
-   Screenshot der Einstellung bei 390 px. Keine Vorschauphase.
+
+Weitere Vorlage am echten System: Bad-Spiegellampen (Hue Filament, nur Helligkeit) mit Kerze, warm glühend.
+
+### B · Taster-Option „Ambiente zuerst“
+
+Allgemein für alle Taster mit `toggle_lights` und `toggle_room`. Eingesetzt wird die Option vorerst nur im Bad.
+
+1. Neue optionale Einstellung an der Belegung: `ambient_first = {scene_id, window}`.
+   - `scene_id` ist eine Szene des Raums oder der Zone, zu der die Belegung gehört. Jahreszeiten-Szenen sind erlaubt.
+   - `window` ist ein Zeitfenster im bekannten Format mit Uhrzeit oder Sonne plus Versatz.
+     Beispiel Bad: Sonnenuntergang −15 bis 22:30.
+2. Ablauf innerhalb des Fensters:
+   - Alle Ziellampen der Taste sind aus → die Ambiente-Szene startet für den ganzen Raum, mit Dynamik.
+   - Die Ambiente-Szene läuft gerade → der Druck stoppt die Dynamik und schaltet die Ziellampen der Taste
+     nach ihrem normalen Einschaltverhalten (`on_behavior`, z. B. 100 % oder nach Tageszeit).
+     Die übrigen Lampen des Raums gehen dabei aus.
+     „Läuft gerade“ heißt: Das ist `last_scene_id` des Raums, die Dynamik ist aktiv bzw. die Szenenlampen sind an,
+     und es gab keine Handbedienung danach.
+   - Sonst, also die Ziellampen sind an und keine Ambiente-Szene läuft → aus.
+3. Außerhalb des Fensters ist alles wie bisher: Einschalten nach `on_behavior`, nochmal drücken heißt aus.
+4. Die Bedienung zeigt die Option im Tasterdialog als „Zur Ambiente-Zeit zuerst Szene“ mit Szenenwahl und Zeitfenster.
+5. Tests:
+   - die drei Zustände innerhalb des Fensters
+   - außerhalb des Fensters
+   - Fenster über Mitternacht
+   - gelöschte Szene: Fallback auf das normale Verhalten mit Protokollhinweis
+   - entzogene Freigabe
+   - Handbedienung beendet „läuft gerade“
+6. Einrichtung bei Max im Bad (macht Claude nach der Installation):
+   - Schalter Decke: Ambiente „Bad Herbstglut“, danach Decke nach Tageszeit (100 % / 20 % / Nachtlicht)
+   - Schalter Spiegel: Ambiente „Bad Herbstglut“, danach Spiegel 100 %
+
+### C · Szene startet zusätzlich ein Home-Assistant-Skript
+
+1. Optionales Feld an jeder Szene: `start_script`, eine `script.*`-Entity. Wird beim Start der Szene
+   nach den Lichtbefehlen mit `script.turn_on` ausgeführt.
+   Gilt für Kachel, Taster, Zeitplan und Jahreszeiten-Auflösung.
+   Nicht bei Live-Probe und nicht beim Fortsetzen nach einem Neustart.
+2. Nur Skripte, die in Home Assistant existieren. Ein Fehler im Skript lässt die Szene trotzdem laufen,
+   mit Protokollhinweis.
+3. Zweck: Musik zur Stimmung, z. B. eine Spotify-Playlist über Music Assistant. Den Ablauf baut Claude
+   als HA-Skript. Die Lichtzentrale selbst bekommt keine Spotify-Logik.
+4. Tests:
+   - Skript läuft genau einmal pro Szenenstart
+   - nicht bei Fortsetzen und nicht bei Live-Probe
+   - fehlendes oder ungültiges Skript wird beim Speichern abgelehnt
+   - Fehler im Skript blockiert das Licht nicht
+
+Lieferung als Git-Bundle mit Tests und Screenshots bei 390 px: Effekt-Feld, Tasterdialog „Ambiente zuerst“, Skript-Feld der Szene. Keine Vorschauphase.
 
 ## Stufe 6 – Anwesenheitssimulation
 
