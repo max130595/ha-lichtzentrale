@@ -1,7 +1,7 @@
 # Geändert für Lichtzentrale
 """Launch guards survive awaited preparation; synthetic devices only."""
 
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 
 import pytest
 from homeassistant.exceptions import ServiceValidationError
@@ -48,6 +48,7 @@ async def test_window_closes_during_stop(hass, store, dispatch_room, action):
         await store.async_update_room(area, {"adaptive_switch": "switch.synthetic_adaptive"})
     with (
         patch("custom_components.lichtzentrale.dynamic_scenes.stop_dynamic", side_effect=close_window),
+        patch("custom_components.lichtzentrale.dynamic_scenes.async_exclude_targets", side_effect=close_window),
         patch("custom_components.lichtzentrale.scenes.stop_dynamic", side_effect=close_window),
         patch("custom_components.lichtzentrale.scenes.hue_scene_targets", return_value=[entity]),
         patch("custom_components.lichtzentrale.adaptive._validated", return_value=[entity]),
@@ -138,8 +139,20 @@ async def test_dynamic_launch_does_not_retain_window_guard(hass, store, dispatch
     guard.assert_called_once_with()
     manager.start.assert_awaited_once_with(
         {key: value for key, value in scene.items() if key != "preview"},
-        None, [entity], initial_transition=None,
+        ANY, [entity], initial_transition=None, persist=True,
+        palette_override=None, dispatch_guard=guard,
     )
+    # The real runtime intentionally discards launch-only conditions. Closing a
+    # schedule window later must not stop an already-launched persistent scene.
+    from custom_components.lichtzentrale.dynamic_scenes import DynamicSceneManager
+
+    runtime = DynamicSceneManager(hass, store)
+    try:
+        await runtime.start(store.data["scenes"][0], None, [entity], dispatch_guard=guard)
+        guard.return_value = False
+        assert runtime.active[area]["dispatch_guard"] is None
+    finally:
+        await runtime.shutdown()
 
 
 @pytest.mark.parametrize("kind", ["palette", "hue"])

@@ -1,0 +1,110 @@
+[
+  {
+    "filename": "01-zuhause-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "6945e4b3d3a026aec0242fc7b3c9262234cec7d86c1045e9e7f7fdaee3c46642"
+  },
+  {
+    "filename": "02-galerie-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "1feb8c5b59ad9c00fef37c7f01283f2e1723964ceabae868165dc9ad0ce549b1"
+  },
+  {
+    "filename": "03-eigene-palette-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "1cd3e0f293543aa7201e0a58190a51161cebe62667e4dd03e1609d6bac5877e5"
+  },
+  {
+    "filename": "04-palette-live-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "31664d812708dc35fdf33d75f9e171e0b801dad0331ed9807a37f622ff2f47e3"
+  },
+  {
+    "filename": "05-szeneneditor-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "03b2c0f2669f8e173f5e2c57f8259d071d157acc2b33b8143f0e280a70724827"
+  },
+  {
+    "filename": "06-welle-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "5d021bb79b8a1690875fd0f53c83580c209da0d65b913b2b9db50df30b3d1acb"
+  },
+  {
+    "filename": "07-lampenhelligkeit-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "2457e49ba1348088dfd82a6d0446c53ce95d0d0f7ee3007956d8f85c0755b39b"
+  },
+  {
+    "filename": "07b-feste-farbe-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "c427bf3c79a0df64459579a446895fc3fb42a631e1879ba23ed438a7963f4e96"
+  },
+  {
+    "filename": "08-mondlicht-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "5e4c3c445e36a781cde70a2847f4a23cbc25eff32549d9295ed9c0243a235d31"
+  },
+  {
+    "filename": "08b-ein-aus-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "c49521fb202e1e12859acfffd98f61f59230699c18ab90b3d49096f59b858435"
+  },
+  {
+    "filename": "09-lampe-ersetzen-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "79dda975ae29f02bd086477fa14b8154075c0394d5ba89e2004f73ab61eab886"
+  },
+  {
+    "filename": "10-taster-einschalten-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "efc23a95222bb64254e07a51fff3cb2b2d03bc464012ec2cbb487942e4ff8757"
+  },
+  {
+    "filename": "11-jahreszeiten-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "5937d5a48de7b69518875d0f57e9638f4785e13fbd27fed9bf427390e744c8fc"
+  },
+  {
+    "filename": "12-weihnachten-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "bab1886744d31f6856f75da50d780facb8a50765d71dca62c7e9f1bbfe5a62b7"
+  },
+  {
+    "filename": "13-jahreszeiten-beginn-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "c1115fb1992dd359f422db070d77b24c1936c55c9232f95b7a7b4ed2ef7400a6"
+  },
+  {
+    "filename": "14-taster-zeitfenster-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "2c5a997273af0dbe4fae767acf9c7652309bd12ef8909fbe5bc12a646704c470"
+  },
+  {
+    "filename": "15-taster-weisslicht-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "e145d531c21e3c672c1cb8c76f74f35e2b79a3dd0f395f8126705b327e59ad12"
+  },
+  {
+    "filename": "16-taster-sonnenzeit-390.png",
+    "width": 390,
+    "height": 844,
+    "sha256": "e49a113d50ec57029e01c948b93ebc620cb6fc7d7b56fff9a9a90344d6de759a"
+  }
+]

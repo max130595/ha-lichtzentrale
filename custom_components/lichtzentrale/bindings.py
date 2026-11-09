@@ -28,7 +28,7 @@ from .rooms import (
     room_targets,
     validate_control_options,
 )
-from .scenes import _targets, async_apply_scene, hue_scene_targets
+from .scenes import _targets, async_apply_scene, async_apply_scene_subset, hue_scene_targets
 from .selected_lights import (
     async_control_lights,
     async_dim_lights,
@@ -57,6 +57,7 @@ ACTIONS = frozenset(
     }
 )
 CYCLE_RESET_SECONDS = 600
+ON_ACTIONS = frozenset({"toggle_lights", "turn_on_lights", "toggle_room", "turn_on_room"})
 
 
 @callback
@@ -211,7 +212,7 @@ def _scene_for_room(store, scene_id, area_id):
     return scene
 
 
-def validate_binding(hass, store, raw) -> dict:
+def validate_binding(hass, store, raw, *, _runtime=False) -> dict:
     """Normalize a closed schema without writing or calling any HA service."""
     if not isinstance(raw, dict) or set(raw) - {
         "id",
@@ -259,7 +260,8 @@ def validate_binding(hass, store, raw) -> dict:
     expected = {"scene_id"} if action == "scene" else (
         {"entity_ids"} if selected_action or (dim_action and "entity_ids" in params) else set()
     )
-    if set(params) != expected:
+    optional = {"on_behavior"} if action in ON_ACTIONS else set()
+    if not expected <= set(params) or set(params) - expected - optional:
         raise ServiceValidationError("Ungültige Parameter der Tasteraktion.")
     params = deepcopy(params)
     if "entity_ids" in params:
@@ -275,6 +277,8 @@ def validate_binding(hass, store, raw) -> dict:
         validate_action(hass, store, {"type": action, **({"entity_ids": params["entity_ids"]} if "entity_ids" in params else {"area_id": area_id})})
     if action == "scene":
         _scene_for_room(store, params["scene_id"], area_id)
+    if "on_behavior" in params:
+        params["on_behavior"] = validate_on_behavior(hass, store, params["on_behavior"], area_id, params.get("entity_ids"), _validate_refs=not _runtime)
     return {
         "id": binding_id or str(uuid4()),
         "event_entity": button["entity_id"],
@@ -288,6 +292,64 @@ def validate_binding(hass, store, raw) -> dict:
     }
 
 
+def validate_on_behavior(hass, store, value, area_id, entity_ids=None, *, _window=False, _validate_refs=True):
+    """An optional on-only override never expands the binding's selected targets."""
+    if not isinstance(value, dict) or not isinstance(value.get("mode"), str) or value["mode"] not in ({"brightness", "scene"} if _window else {"last", "brightness", "scene", "time"}):
+        raise ServiceValidationError("Ungültiges Verhalten beim Einschalten.")
+    if value["mode"] == "time":
+        from .schedule_config import validate_time_window
+
+        windows = value.get("windows")
+        if set(value) != {"mode", "windows"} or not isinstance(windows, list) or not 1 <= len(windows) <= 24:
+            raise ServiceValidationError("Bitte 1 bis 24 Zeitfenster anlegen.")
+        cleaned = []
+        for item in windows:
+            if not isinstance(item, dict) or "window" not in item:
+                raise ServiceValidationError("Das Einschaltverhalten benötigt ein Zeitfenster.")
+            window = validate_time_window(item["window"])
+            if window is None:
+                raise ServiceValidationError("Bitte mindestens eine Grenze des Zeitfensters wählen.")
+            action = validate_on_behavior(hass, store, {key: val for key, val in item.items() if key != "window"},
+                                          area_id, entity_ids, _window=True, _validate_refs=_validate_refs)
+            cleaned.append({"window": window, **action})
+        return {"mode": "time", "windows": cleaned}
+    expected = {"mode"} | ({"brightness"} if value["mode"] == "brightness" else {"scene_id"} if value["mode"] == "scene" else set())
+    if _window and value["mode"] == "brightness" and "color_temp_kelvin" in value:
+        expected.add("color_temp_kelvin")
+        kelvin = value["color_temp_kelvin"]
+        if type(kelvin) is not int or not 1000 <= kelvin <= 40000:
+            raise ServiceValidationError("Der Weißton muss zwischen 1000 und 40000 Kelvin liegen.")
+    if set(value) != expected:
+        raise ServiceValidationError("Ungültiges Verhalten beim Einschalten.")
+    if value["mode"] == "brightness":
+        validate_control_options(brightness=value["brightness"])
+        if value["brightness"] is None:
+            raise ServiceValidationError("Bitte eine feste Helligkeit wählen.")
+    elif value["mode"] == "scene":
+        if not isinstance(value["scene_id"], str) or not value["scene_id"]:
+            raise ServiceValidationError("Bitte eine Einschalt-Szene auswählen.")
+        if not _validate_refs:
+            return deepcopy(value)
+        scene = next((s for s in store.data["scenes"] if s.get("id") == value["scene_id"]), None)
+        if scene is None:
+            raise ServiceValidationError("Die Einschalt-Szene wurde nicht gefunden.")
+        from .seasonal_scenes import resolve_scene
+
+        scene, _ = resolve_scene(hass, store, scene)
+        if entity_ids is None:
+            _scene_for_room(store, value["scene_id"], area_id)
+        else:
+            if scene.get("kind") == "palette" and any(entity.startswith("switch.") for entity in entity_ids):
+                raise ServiceValidationError("Für ausgewählte Lichtschalter bitte eine Momentaufnahme wählen.")
+            members = (scene.get("lights", {}) if scene.get("kind") == "snapshot" else
+                       hue_scene_targets(hass, scene["hue_scene"]) if scene.get("kind") == "hue" else
+                       room_targets(hass, store, scene["area_id"]))
+            if not set(entity_ids) <= set(members):
+                raise ServiceValidationError("Die Einschalt-Szene muss alle ausgewählten Lampen enthalten.")
+            _targets(hass, store, scene["area_id"], entity_ids)
+    return deepcopy(value)
+
+
 async def async_save_binding(hass, store, raw):
     """The Store validates inside its write lock to reject stale editor updates."""
     if not isinstance(raw, dict):
@@ -298,12 +360,15 @@ async def async_save_binding(hass, store, raw):
 def _check_scene(hass, store, scene_id, area_id):
     """Skip obsolete cycle entries before a recall can pause or stop anything."""
     scene = _scene_for_room(store, scene_id, area_id)
+    from .seasonal_scenes import resolve_scene
+
+    scene, _ = resolve_scene(hass, store, scene)
     kind = scene.get("kind")
     if kind not in {"snapshot", "palette", "hue"}:
         raise ServiceValidationError("Ungültiger Szenentyp.")
     dynamic = validate_dynamic(scene.get("dynamic", {}), kind)
     distribution = validate_distribution(scene.get("verteilung", "zufall"))
-    if dynamic["welle"] and distribution == "zufall":
+    if dynamic["welle"] and distribution == "zufall" and not scene.get("wave_order"):
         raise ServiceValidationError("Für eine Welle bitte eine räumliche Verteilung auswählen.")
     if kind == "snapshot":
         values = scene.get("lights")
@@ -325,10 +390,19 @@ def _check_scene(hass, store, scene_id, area_id):
             raise ServiceValidationError("Bitte eine Hue-Szene auswählen.")
         _targets(hass, store, area_id, hue_scene_targets(hass, hue_id))
     else:
-        if scene.get("palette_id") not in {p["id"] for p in list_palettes()}:
+        if scene.get("palette_id") not in {p["id"] for p in list_palettes(store)}:
             raise ServiceValidationError("Die Farbpalette wurde nicht gefunden.")
         validate_control_options(brightness=scene.get("brightness"))
         _targets(hass, store, area_id, room_targets(hass, store, area_id))
+    from .palette_catalogue import get_palette
+    from .scene_settings import validate_lamp_settings, validate_wave_order
+
+    targets = (scene["lights"] if kind == "snapshot" else hue_scene_targets(hass, scene["hue_scene"])
+               if kind == "hue" else room_targets(hass, store, area_id))
+    palette = get_palette(store, scene["palette_id"]) if kind == "palette" else None
+    validate_lamp_settings(hass, scene.get("lamp_settings", {}), targets, palette, capabilities=False)
+    validate_wave_order(scene.get("wave_order", []), targets)
+    validate_control_options(brightness=scene.get("brightness"))
     return scene
 
 
@@ -538,7 +612,7 @@ class BindingManager:
                 state = self.hass.states.get(binding["event_entity"])
                 if state is None or state.state in {STATE_UNAVAILABLE, STATE_UNKNOWN}:
                     return
-                checked = validate_binding(self.hass, self.store, binding)
+                checked = validate_binding(self.hass, self.store, binding, _runtime=True)
                 result = await self._action(checked, context)
                 if isinstance(result, dict):
                     failed, skipped = len(result.get("failed", [])), len(result.get("skipped", []))
@@ -562,6 +636,8 @@ class BindingManager:
         if action in {"full_brightness", "night", "return_auto", "night_auto"}:
             from .target_actions import async_execute_action
             return await async_execute_action(self.hass, self.store, {"type": action, **({"entity_ids": binding["params"]["entity_ids"]} if "entity_ids" in binding["params"] else {"area_id": area_id})}, context=context)
+        if action in ON_ACTIONS and binding["params"].get("on_behavior", {}).get("mode", "last") != "last":
+            return await self._with_on_behavior(binding, context)
         if action in {"toggle_room", "turn_on_room", "turn_off_room"}:
             return await async_toggle_room(
                 self.hass,
@@ -579,8 +655,9 @@ class BindingManager:
         if action == "next_scene":
             return await self._next_scene(area_id, context)
         if action == "scene":
-            scene = _check_scene(self.hass, self.store, binding["params"]["scene_id"], area_id)
-            return await async_apply_scene(self.hass, self.store, scene["id"], context=context)
+            scene_id = binding["params"]["scene_id"]
+            _check_scene(self.hass, self.store, scene_id, area_id)
+            return await async_apply_scene(self.hass, self.store, scene_id, context=context)
         if action in {"dim_up", "dim_down"}:
             if "entity_ids" in binding["params"]:
                 return await async_dim_lights(
@@ -595,6 +672,57 @@ class BindingManager:
         if action == "stop_dynamic":
             return await async_stop_room(self.hass, self.store, area_id, context=context)
         raise ServiceValidationError("Diese Tasteraktion ist nicht erlaubt.")
+
+    async def _with_on_behavior(self, binding, context):
+        """Resolve toggle once, then fail closed if a queued on/off decision became stale."""
+        params, area_id, action = binding["params"], binding["area_id"], binding["action"]
+        selected = "entity_ids" in params
+        targets = (validate_selected_lights(self.hass, self.store, params["entity_ids"]) if selected
+                   else room_targets(self.hass, self.store, area_id))
+        behavior = validate_on_behavior(self.hass, self.store, params["on_behavior"], area_id, targets if selected else None, _validate_refs=False)
+        initial = {entity: self.hass.states.get(entity) for entity in targets}
+        states = list(initial.values())
+        toggle_states = states if selected else [state for state in states if state.domain == "light"] or states
+        on = action.startswith("turn_on") or not any(state.state == "on" for state in toggle_states)
+        pending = True
+
+        def guard():
+            nonlocal pending
+            current = (validate_selected_lights(self.hass, self.store, targets) if selected
+                       else room_targets(self.hass, self.store, area_id))
+            if current != targets:
+                raise ServiceValidationError("Die Zielauswahl hat sich geändert. Bitte erneut drücken.")
+            if pending:
+                pending = False
+                if any(self.hass.states.get(entity) is not state for entity, state in initial.items()):
+                    raise ServiceValidationError("Der Lampenzustand hat sich geändert. Bitte erneut drücken.")
+            return True
+
+        if not on:
+            if selected:
+                return await async_control_lights(self.hass, self.store, targets, on=False, context=context, guard=guard)
+            return await async_toggle_room(self.hass, self.store, area_id, on=False, context=context, guard=guard)
+        if behavior["mode"] == "time":
+            from .schedule_windows import window_is_open
+
+            behavior = next(({key: value for key, value in item.items() if key != "window"}
+                             for item in behavior["windows"] if window_is_open(self.hass, item["window"])), {"mode": "last"})
+            if behavior["mode"] == "last":
+                return await self._action({**binding, "params": {key: value for key, value in params.items()
+                                                                if key != "on_behavior"}}, context)
+        behavior = validate_on_behavior(self.hass, self.store, behavior, area_id, targets if selected else None,
+                                        _window=params["on_behavior"]["mode"] == "time")
+        if behavior["mode"] == "brightness":
+            # Explicit on overrides remembered brightness without dimming binary lights.
+            # Selection and capability checks remain at dispatch time.
+            return await async_control_lights(self.hass, self.store, targets, on=True,
+                                             brightness=behavior["brightness"], color_temp_kelvin=behavior.get("color_temp_kelvin"),
+                                             context=context, guard=guard)
+        scene_id = behavior["scene_id"]
+        if selected:
+            return await async_apply_scene_subset(self.hass, self.store, scene_id, targets, context=context, guard=guard)
+        _check_scene(self.hass, self.store, scene_id, area_id)
+        return await async_apply_scene(self.hass, self.store, scene_id, context=context, guard=guard)
 
     async def _dim(self, area_id, direction, context):
         # Serialize with manual scenes and room controls as well as other button actions.

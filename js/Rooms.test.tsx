@@ -56,7 +56,7 @@ describe('Räume und Szenen', () => {
   });
   it('snapshots server state and reports unavailable omitted targets', async () => {
     const callWS = setup(); await open();
-    fireEvent.click(screen.getByRole('button', {name: '+ Neue Szene'}));
+    fireEvent.click(screen.getByText('Mehr Optionen')); fireEvent.click(screen.getByRole('button', {name: 'Momentaufnahme direkt speichern'}));
     fireEvent.click(screen.getByRole('button', {name: 'Weiter · Name'}));
     fireEvent.change(screen.getByLabelText('Szenenname'), {target: {value: 'Neue Szene'}});
     fireEvent.click(screen.getByRole('button', {name: 'Szene speichern'}));
@@ -94,7 +94,7 @@ describe('Räume und Szenen', () => {
     expect(rgbToXy('#ff0000')[0]).toBeCloseTo(.7006, 3); expect(rgbToXy('#000000')).toEqual([.3127, .329]);
   });
   it('deletes only after explicit confirmation', async () => {
-    const callWS = setup(); await open(); fireEvent.click(screen.getByText('Szene bearbeiten')); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const callWS = setup(); await open(); fireEvent.click(screen.getByText('Mehr Optionen · Szene')); const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     fireEvent.click(screen.getByRole('button', {name: 'Löschen'})); expect(callWS.mock.calls.some(([req]) => req.type.endsWith('scene/delete'))).toBe(false);
     confirm.mockReturnValue(true); fireEvent.click(screen.getByRole('button', {name: 'Löschen'}));
     await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/delete', scene_id: scene.id})); confirm.mockRestore();
@@ -120,7 +120,7 @@ describe('Antwortreihenfolge und Sortierung', () => {
     const callWS = vi.fn(async (request: {type: string}): Promise<unknown> => request.type.endsWith('rooms/list') ? [room] : request.type === 'lichtzentrale/scenes/list' ? [scene, {...scene, id: 'test_second', name: 'Zweite Testszene', order: 1}] : []);
     function Host() {const [detail, setDetail] = useState(false); return <Rooms hass={{callWS} as Hass} detail={detail} openRoom={() => setDetail(true)}/>;}
     render(<Host/>); await open();
-    fireEvent.click(screen.getAllByText('Szene bearbeiten')[0]);
+    fireEvent.click(screen.getAllByText('Mehr Optionen · Szene')[0]);
     expect(screen.getByRole('button', {name: 'Testszene nach oben'})).toBeDisabled();
     fireEvent.click(screen.getByRole('button', {name: 'Testszene nach unten'}));
     await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scenes/reorder', area_id: room.area_id, scene_ids: ['test_second', scene.id]}));
@@ -164,7 +164,7 @@ it('cancels new scenes without saving and keeps advanced controls closed', async
   const callWS = setup(); await open();
   expect(screen.getByText('Mehr Optionen').parentElement).not.toHaveAttribute('open');
   expect(screen.queryByText('Zurück zur Automatik')).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', {name: '+ Neue Szene'}));
+  fireEvent.click(screen.getByText('Mehr Optionen')); fireEvent.click(screen.getByRole('button', {name: 'Momentaufnahme direkt speichern'}));
   fireEvent.click(screen.getByRole('button', {name: 'Weiter · Name'}));
   expect(screen.getByRole('button', {name: 'Szene speichern'})).toBeDisabled();
   fireEvent.change(screen.getByLabelText('Szenenname'), {target: {value: 'Nicht speichern'}});
@@ -174,7 +174,7 @@ it('cancels new scenes without saving and keeps advanced controls closed', async
 
 it('renames a scene without changing its stored properties and cancels without writing', async () => {
   const callWS = setup(); await open();
-  fireEvent.click(screen.getByText('Szene bearbeiten'));
+  fireEvent.click(screen.getByText('Mehr Optionen · Szene'));
   fireEvent.click(screen.getByRole('button', {name: 'Szene umbenennen'}));
   fireEvent.change(screen.getByLabelText('Neuer Szenenname'), {target: {value: 'Entwurf'}});
   fireEvent.click(screen.getByRole('button', {name: 'Umbenennen abbrechen'}));

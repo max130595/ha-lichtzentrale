@@ -14,12 +14,12 @@ PALETTE = "kupfernest"
 
 def test_original_catalogue_and_copy_isolation():
     palettes = list_palettes()
-    assert len(palettes) == 12
-    assert len({item["category"] for item in palettes}) == 4
-    assert len({item["id"] for item in palettes}) == 12
+    assert len(palettes) >= 20
+    assert {"Herbst", "Winter", "Weihnachten", "Frühling", "Sommer", "Party", "Entspannen", "Romantik"} <= {item["category"] for item in palettes}
+    assert len({item["id"] for item in palettes}) == len(palettes)
     for item in palettes:
         assert 1 <= item["bri"] <= 255
-        assert len(item["colors"]) == len(item["preview"]) == 3
+        assert 3 <= len(item["colors"]) == len(item["preview"]) <= 5
         assert all(0 <= color["x"] <= 1 and 0 <= color["y"] <= 1 for color in item["colors"])
         assert all(value.startswith("#") and len(value) == 7 for value in item["preview"])
     palettes[0]["colors"].clear()

@@ -851,3 +851,115 @@ async def test_double_click_ignores_only_explicit_wildcards_and_keeps_keys_separ
         await press(hass, rig, button="button_2", sample=4)
     assert [call.args[0]["id"] for call in action.await_args_list] == [double["id"], single["id"], second_key["id"]]
     assert not rig["manager"]._pending
+
+
+@pytest.mark.parametrize("behavior", [
+    None, {}, {"mode": "bad"}, {"mode": "last", "brightness": 255},
+    {"mode": "brightness", "brightness": 0}, {"mode": "brightness", "brightness": 256},
+    {"mode": "brightness", "brightness": True}, {"mode": "brightness", "brightness": None},
+    {"mode": "scene", "scene_id": "missing"},
+])
+async def test_on_behavior_closed_schema(hass, store, rig, behavior):
+    with pytest.raises(ServiceValidationError):
+        validate_binding(hass, store, raw(rig, params={"on_behavior": behavior}))
+
+
+@pytest.mark.parametrize("action", ["turn_off_lights", "turn_off_room", "dim_up", "next_scene"])
+async def test_on_behavior_forbidden_on_other_actions(hass, store, rig, action):
+    params = {"on_behavior": {"mode": "brightness", "brightness": 255}}
+    if action == "turn_off_lights":
+        params["entity_ids"] = rig["lights"]
+    with pytest.raises(ServiceValidationError):
+        validate_binding(hass, store, raw(rig, action, params=params))
+
+
+async def test_on_behavior_additive_storage_and_last_defaults(hass, store, rig):
+    saved = await bind(hass, store, rig, params={"on_behavior": {"mode": "brightness", "brightness": 255}})
+    reload = LichtzentraleStore(hass)
+    await reload.async_load()
+    assert reload.data["bindings"][0]["params"] == saved["params"]
+    plain = validate_binding(hass, store, raw(rig))
+    assert plain["params"] == {}
+    with patch(f"{MODULE}.async_toggle_room", AsyncMock()) as toggle:
+        await rig["manager"]._action(raw(rig, params={"on_behavior": {"mode": "last"}}), Context())
+    assert toggle.await_count == 1
+
+
+@pytest.mark.parametrize("action", ["toggle_lights", "turn_on_lights", "toggle_room", "turn_on_room"])
+async def test_fixed_on_brightness_and_toggle_off_binary_safety(hass, store, rig, action):
+    for entity in rig["lights"]:
+        state = hass.states.get(entity)
+        hass.states.async_set(entity, "off", state.attributes)
+    params = {"on_behavior": {"mode": "brightness", "brightness": 255}}
+    if action.endswith("lights"):
+        params["entity_ids"] = rig["lights"]
+    value = validate_binding(hass, store, raw(rig, action, params=params))
+    context = Context()
+    with patch.object(type(hass.services), "async_call", AsyncMock()) as call:
+        result = await rig["manager"]._action(value, context)
+    assert set(result["applied"]) == set(rig["lights"])
+    for sent in call.await_args_list:
+        assert sent.args[1] == "turn_on"
+        data = sent.args[2]
+        if data["entity_id"] in rig["lights"][:2]:
+            assert data["brightness"] == 255
+        else:
+            assert data == {"entity_id": data["entity_id"]}
+        assert sent.kwargs["context"] == context
+    if action.startswith("toggle"):
+        for entity in rig["lights"]:
+            state = hass.states.get(entity)
+            hass.states.async_set(entity, "on", state.attributes)
+        with patch.object(type(hass.services), "async_call", AsyncMock()) as call:
+            await rig["manager"]._action(value, context)
+        assert all(sent.args[1] == "turn_off" and set(sent.args[2]) == {"entity_id"} for sent in call.await_args_list)
+
+
+async def test_on_scene_selected_subset_never_broadens_targets(hass, store, rig, light_calls):
+    saved = await async_save_scene(hass, store, {
+        "name": "Synthetic on scene", "kind": "snapshot", "area_id": rig["area"],
+        "lights": {entity: {"on": True, "brightness": 80 + index} for index, entity in enumerate(rig["lights"][:2])},
+    })
+    selected = rig["lights"][0]
+    value = validate_binding(hass, store, raw(rig, "turn_on_lights", params={
+        "entity_ids": [selected], "on_behavior": {"mode": "scene", "scene_id": saved["id"]},
+    }))
+    await rig["manager"]._action(value, Context())
+    assert [call.data["entity_id"] for call in light_calls] == [selected]
+    assert light_calls[0].data["brightness"] == 80
+    with pytest.raises(ServiceValidationError, match="alle ausgewählten"):
+        validate_binding(hass, store, raw(rig, "turn_on_lights", params={
+            "entity_ids": rig["lights"], "on_behavior": {"mode": "scene", "scene_id": saved["id"]},
+        }))
+
+
+async def test_on_scene_room_and_toggle_off(hass, store, rig, light_calls):
+    saved = await scene(hass, store, rig)
+    for entity in rig["lights"]:
+        state = hass.states.get(entity)
+        hass.states.async_set(entity, "off", state.attributes)
+    value = validate_binding(hass, store, raw(rig, params={"on_behavior": {"mode": "scene", "scene_id": saved["id"]}}))
+    await rig["manager"]._action(value, Context())
+    assert light_calls[0].data["brightness"] == 100
+    current = hass.states.get(rig["lights"][0])
+    hass.states.async_set(current.entity_id, "on", current.attributes)
+    with patch.object(type(hass.services), "async_call", AsyncMock()) as call:
+        await rig["manager"]._action(value, Context())
+    assert all(sent.args[1] == "turn_off" for sent in call.await_args_list)
+
+
+async def test_fixed_on_rechecks_revoke_while_waiting(hass, store, rig):
+    target = rig["lights"][0]
+    value = validate_binding(hass, store, raw(rig, "turn_on_lights", params={
+        "entity_ids": [target], "on_behavior": {"mode": "brightness", "brightness": 255},
+    }))
+    lock = hass.data["lichtzentrale"].setdefault("selected_light_locks", {}).setdefault(target, asyncio.Lock())
+    await lock.acquire()
+    task = asyncio.create_task(rig["manager"]._action(value, Context()))
+    await asyncio.sleep(0)
+    await store.async_set_lights(rig["lights"][1:])
+    with patch.object(type(hass.services), "async_call", AsyncMock()) as call:
+        lock.release()
+        with pytest.raises(ServiceValidationError):
+            await task
+    call.assert_not_awaited()

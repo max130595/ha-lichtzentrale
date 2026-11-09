@@ -24,35 +24,16 @@ describe('Stufe 2 Galerie', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Im gewählten Raum anwenden'}));
     await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/palette/apply', palette_id: palette.id, layout_area_id: room.area_id, entity_ids: ['light.test_fixture'], brightness: 120, transition: 10, verteilung: 'zufall'}));
   });
-  it('saves dynamic palette then starts by saved ID and validates timing', async () => {
-    const callWS = mock(); render(<RoomPalette hass={{callWS} as Hass} palette={palette}/>); await selectRoom();
-    fireEvent.click(screen.getByLabelText('Dynamischer Farbwechsel'));
-    expect(screen.getByLabelText('Als Szene im Raum speichern')).toBeChecked();
-    fireEvent.change(screen.getByLabelText('Farbwechsel alle (Sekunden)'), {target: {value: '5'}});
-    expect(screen.getByRole('button', {name: 'Szene speichern und anwenden'})).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Übergangszeit (Sekunden)'), {target: {value: '3'}});
-    fireEvent.click(screen.getByRole('button', {name: 'Szene speichern und anwenden'}));
-    await waitFor(() => expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/apply', scene_id: 'test_saved'}));
-    expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/scene/save', scene: {name: palette.name, area_id: room.area_id, kind: 'palette', palette_id: palette.id, brightness: 120, verteilung: 'zufall', dynamic: {enabled: true, interval: 5, transition: 3, welle: false}}});
-  });
-  it('reuses saved scene after an apply failure instead of duplicating it', async () => {
+  it('opens the full editor instead of silently creating a scene', async () => {
     const callWS = mock(); const normal = callWS.getMockImplementation()!;
-    callWS.mockImplementation(async req => {if (req.type.endsWith('scene/apply')) throw new Error('Testfehler'); return normal(req);});
-    render(<RoomPalette hass={{callWS} as Hass} palette={palette}/>); await selectRoom(); fireEvent.click(screen.getByLabelText('Dynamischer Farbwechsel'));
-    fireEvent.click(screen.getByRole('button', {name: 'Szene speichern und anwenden'}));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Die Szene ist gespeichert.');
-    fireEvent.click(screen.getByRole('button', {name: 'Szene speichern und anwenden'}));
-    await waitFor(() => expect(callWS.mock.calls.filter(([req]) => req.type.endsWith('scene/apply'))).toHaveLength(2));
-    expect(callWS.mock.calls.filter(([req]) => req.type.endsWith('scene/save'))).toHaveLength(1);
-  });
-  it('does not apply a newly saved scene after unmount', async () => {
-    const callWS = mock(); const normal = callWS.getMockImplementation()!; let resolve: (value: unknown) => void = () => {};
-    callWS.mockImplementation(req => req.type.endsWith('scene/save') ? new Promise(done => {resolve = done;}) : normal(req));
-    render(<RoomPalette hass={{callWS} as Hass} palette={palette}/>); await selectRoom(); fireEvent.click(screen.getByLabelText('Dynamischer Farbwechsel'));
-    const button = screen.getByRole('button', {name: 'Szene speichern und anwenden'}); fireEvent.click(button); fireEvent.click(button);
-    expect(callWS.mock.calls.filter(([req]) => req.type.endsWith('scene/save'))).toHaveLength(1);
-    cleanup(); await act(async () => resolve({id: 'test_saved'}));
-    expect(callWS.mock.calls.filter(([req]) => req.type.endsWith('scene/apply'))).toHaveLength(0);
+    callWS.mockImplementation(async request => request.type.endsWith('preview/begin') ? {preview_id: 'test_preview'} : normal(request));
+    render(<RoomPalette hass={{callWS} as Hass} palette={palette}/>); await selectRoom();
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Als Szene speichern'})).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', {name: 'Als Szene speichern'}));
+    expect(await screen.findByLabelText('Szenenname')).toHaveValue(palette.name);
+    await waitFor(() => expect(screen.getByLabelText('Dynamischer Farbwechsel')).toBeEnabled());
+    expect(callWS.mock.calls.filter(([request]) => request.type.endsWith('scene/save'))).toHaveLength(0);
+    expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/preview/begin', area_id: room.area_id});
   });
 });
 describe('Laufende Dynamik und Adaptive Lighting', () => {

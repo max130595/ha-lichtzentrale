@@ -21,6 +21,7 @@ def empty_data() -> dict[str, Any]:
         "scenes": [],
         "zones": [],
         "automatic_state": {},
+        "active_dynamic": {},
         "palettes": [],
         "rooms": {},
         "bindings": [],
@@ -69,6 +70,30 @@ class LichtzentraleStore:
             # Publish only after a necessary migration has reached disk.
             self._data = updated
 
+    async def async_transform_entity_references(self, transform):
+        """Revalidate and publish an entire reference migration atomically."""
+        async with self._lock:
+            updated, result = transform(deepcopy(self._data))
+            await self._store.async_save(updated)
+            self._data = deepcopy(updated)
+            return result
+
+    async def async_set_dynamic_run(self, area_id, record=None, *, expected_token=None):
+        """Persist execution intent with compare-and-swap cleanup of stale runs."""
+        async with self._lock:
+            current = self._data.get("active_dynamic", {}).get(area_id)
+            if expected_token is not None and (current or {}).get("token") != expected_token:
+                return False
+            updated = deepcopy(self._data)
+            runs = updated.setdefault("active_dynamic", {})
+            if record is None:
+                runs.pop(area_id, None)
+            else:
+                runs[area_id] = deepcopy(record)
+            await self._store.async_save(updated)
+            self._data = updated
+            return True
+
     async def async_set_lights(self, entity_ids: list[str]) -> None:
         """Commit an explicit allowlist, keeping memory unchanged on failure."""
         async with self._lock:
@@ -80,6 +105,15 @@ class LichtzentraleStore:
     async def async_save_scene(self, scene: dict, *, is_update: bool = False) -> None:
         """Upsert a validated scene without overwriting concurrent Store changes."""
         async with self._lock:
+            if scene.get("kind") == "palette":
+                from .palette_catalogue import get_palette
+
+                get_palette(self, scene.get("palette_id"))
+            if scene.get("kind") == "seasonal":
+                from .seasonal_scenes import validate_seasonal
+
+                existing = next((s for s in self._data["scenes"] if s["id"] == scene["id"]), None)
+                scene = {**scene, "seasonal": validate_seasonal(self, scene, existing=existing)}
             updated = deepcopy(self._data)
             index = next(
                 (i for i, s in enumerate(updated["scenes"]) if s["id"] == scene["id"]), None
@@ -96,6 +130,50 @@ class LichtzentraleStore:
                 updated["scenes"].append(deepcopy(scene))
             else:
                 updated["scenes"][index] = deepcopy(scene)
+            await self._store.async_save(updated)
+            self._data = updated
+
+    async def async_save_palette(self, palette: dict, *, duplicate=False) -> dict:
+        """Validate and save without dropping unknown fields or racing scene writes."""
+        from .palette_catalogue import BUILTIN_PALETTES, get_palette, validate_palette
+
+        async with self._lock:
+            identifier = palette.get("id")
+            existing = None
+            if identifier:
+                existing = get_palette(self, identifier, allow_invalid=True)
+                if not duplicate and identifier in {p["id"] for p in BUILTIN_PALETTES}:
+                    raise ServiceValidationError("Eingebaute Paletten bitte als eigene Variante duplizieren.")
+            result = validate_palette(palette, None if duplicate else existing)
+            updated = deepcopy(self._data)
+            index = next((i for i, item in enumerate(updated["palettes"]) if item["id"] == result["id"]), None)
+            if index is None:
+                updated["palettes"].append(result)
+            else:
+                updated["palettes"][index] = result
+            await self._store.async_save(updated)
+            self._data = updated
+            return deepcopy(result)
+
+    async def async_duplicate_palette(self, palette_id, name=None):
+        from .palette_catalogue import get_palette
+
+        source = get_palette(self, palette_id)
+        source["name"] = name or f"{source['name']} – eigene Variante"
+        return await self.async_save_palette(source, duplicate=True)
+
+    async def async_delete_palette(self, palette_id):
+        from .palette_catalogue import get_palette
+
+        async with self._lock:
+            palette = get_palette(self, palette_id, allow_invalid=True)
+            if palette.get("builtin"):
+                raise ServiceValidationError("Eingebaute Paletten können nicht gelöscht werden.")
+            references = [s["name"] for s in self._data["scenes"] if s.get("palette_id") == palette_id]
+            if references:
+                raise ServiceValidationError("Diese Palette wird noch von Szenen verwendet: " + ", ".join(references))
+            updated = deepcopy(self._data)
+            updated["palettes"] = [p for p in updated["palettes"] if p["id"] != palette_id]
             await self._store.async_save(updated)
             self._data = updated
 

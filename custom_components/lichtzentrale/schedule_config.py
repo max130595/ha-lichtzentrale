@@ -52,7 +52,7 @@ def action_targets(hass, store, action):
         from .scenes import _scene, hue_scene_targets
 
         scene = _scene(store, action["scene_id"])
-        _check_scene(hass, store, scene["id"], scene["area_id"])
+        scene = _check_scene(hass, store, scene["id"], scene["area_id"])
         if scene["kind"] == "snapshot":
             targets = list(scene["lights"])
         elif scene["kind"] == "hue":

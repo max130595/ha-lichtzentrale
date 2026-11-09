@@ -63,26 +63,21 @@ def _still_allowed(hass, store, entity_id, areas):
 
 
 async def _stop_dynamics(hass, store, targets, areas):
-    from .dynamic_scenes import async_stop_overlapping, stop_dynamic
+    from .dynamic_scenes import async_exclude_targets
 
-    await async_stop_overlapping(hass, [e for e in targets if e.startswith("light.")])
-    # A room loop can already have a tick in flight. Cancel/join it before
-    # capturing values; never freeze or issue commands to unselected peers.
-    for area in sorted({areas[e] for e in targets if e.startswith("light.") and areas[e]}):
-        validate_selected_lights(hass, store, targets)
-        if any(entity_area_id(hass, entity_id) != areas[entity_id] for entity_id in targets):
-            raise ServiceValidationError("Die Raumzuordnung hat sich geändert. Bitte erneut versuchen.")
-        await stop_dynamic(hass, area)
+    # A manual selection owns only its lamps. Fence in-flight commands before
+    # reading a snapshot, without cancelling the other lamps' running scene.
+    await async_exclude_targets(hass, targets)
     validate_selected_lights(hass, store, targets)
     if any(entity_area_id(hass, entity_id) != areas[entity_id] for entity_id in targets):
         raise ServiceValidationError("Die Raumzuordnung hat sich geändert. Bitte erneut versuchen.")
 
 
 async def async_control_lights(
-    hass, store, entity_ids, on=None, context=None, *, brightness=None, transition=None, guard=None, dispatch_guard=None
+    hass, store, entity_ids, on=None, context=None, *, brightness=None, color_temp_kelvin=None, transition=None, guard=None, dispatch_guard=None
 ):
     """Any selected on means all off; otherwise restore all selected lights."""
-    validate_control_options(on=on, brightness=brightness)
+    validate_control_options(on=on, brightness=brightness, color_temp_kelvin=color_temp_kelvin)
     validate_transition(transition)
     async with _locked_targets(hass, store, entity_ids) as (targets, areas):
         check_execution_guard(guard)
@@ -121,6 +116,9 @@ async def async_control_lights(
                 ) if key in value}
             if on and state.domain == "light" and brightness is not None:
                 options["brightness"] = brightness
+            if on and state.domain == "light" and color_temp_kelvin is not None:
+                options.pop("xy", None)
+                options["color_temp_kelvin"] = color_temp_kelvin
             try:
                 validate_control_options(on=on, **options)
             except ServiceValidationError:

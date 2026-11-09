@@ -64,7 +64,7 @@ export function BasicBrightnessControls({hass, area, revision = 0}: {hass: Hass;
   </section>;
 }
 
-function BoundaryEditor({label, value, change}: {label: string; value: MotionBoundary | null; change: (value: MotionBoundary | null) => void}) {
+export function BoundaryEditor({label, value, change}: {label: string; value: MotionBoundary | null; change: (value: MotionBoundary | null) => void}) {
   return <fieldset><legend>{label}</legend><label>{label}: Bezug<select className="text-input" value={value === null ? 'none' : value.type === 'time' ? 'time' : value.event} onChange={event => change(event.target.value === 'none' ? null : event.target.value === 'time' ? {type: 'time', value: '00:00'} : {type: 'sun', event: event.target.value as 'sunrise' | 'sunset', offset_min: 0})}><option value="none">Offene Grenze</option><option value="time">Uhrzeit</option><option value="sunrise">Sonnenaufgang</option><option value="sunset">Sonnenuntergang</option></select></label>
     {value?.type === 'time' && <label>{label}: Uhrzeit<input className="text-input" type="time" value={value.value} onChange={event => change({...value, value: event.target.value})}/></label>}
     {value?.type === 'sun' && <label>{label}: Versatz in Minuten<input className="text-input" type="number" min={-1440} max={1440} step={1} value={Number.isNaN(value.offset_min) ? '' : value.offset_min} onChange={event => change({...value, offset_min: event.target.value === '' ? NaN : Number(event.target.value)})}/></label>}

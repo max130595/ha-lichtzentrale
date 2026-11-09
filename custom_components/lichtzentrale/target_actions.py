@@ -49,6 +49,9 @@ def action_targets(hass, store, action, *, _entity_ids=None):
         from .scenes import _scene, _targets, hue_scene_targets
 
         scene = _scene(store, action.get("scene_id"))
+        from .seasonal_scenes import resolve_scene
+
+        scene, _ = resolve_scene(hass, store, scene)
         if entities or (areas and areas != [scene["area_id"]]):
             raise ServiceValidationError("Eine Szene gehört zu genau einem Raum oder einer Zone.")
         targets = (scene["lights"] if scene["kind"] == "snapshot" else
@@ -121,6 +124,9 @@ def _night_active(hass, store, area, scene):
     targets = room_targets(hass, store, area)
     if store.data["rooms"].get(area, {}).get("last_scene_id") != scene["id"]:
         return False
+    from .seasonal_scenes import resolve_scene
+
+    scene, _ = resolve_scene(hass, store, scene)
     if scene["kind"] == "snapshot":
         for entity, value in scene["lights"].items():
             state = hass.states.get(entity)

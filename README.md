@@ -4,11 +4,11 @@ Eine lokale Licht-App als Custom Integration für Home Assistant. Oberfläche au
 für schmale Bildschirme ausgelegt. Kein Cloud-Konto und keine zusätzlichen
 Python-Abhängigkeiten zur Laufzeit.
 
-**Stand: Stufe 5b, Teil 2 (Entwurf zur Abnahme), Version 0.4.0.** Fünf Reiter:
-Zuhause, Farben, Automationen, Taster und Mehr. Räume und frei kombinierbare Zonen,
-eigene Nachtlicht-Szenen, Rückkehr zur heutigen Automatik, geordnete Mehrfachaktionen
-und lernbare Zigbee2MQTT-Taster ergänzen die bestehenden Szenen, Dynamik, Bewegung
-und Grundhelligkeitsregeln. Alle Einstellungen bleiben serverseitig gespeichert.
+**Stand: Stufe 5c (Entwurf zur Abnahme), Version 0.5.0.** Fünf Reiter:
+Zuhause, Farben, Automationen, Taster und Mehr. 37 originale Stimmungen, eigene Paletten
+und ein Live-Szenen-Editor mit Helligkeit und Verhalten pro Lampe ergänzen Räume, Zonen,
+Taster und Automationen. Dynamik kann nach einem Neustart fortgesetzt werden. Alle
+Einstellungen bleiben serverseitig gespeichert. Adaptive Lighting ist optional.
 Der weitere Ausbau ist in [docs/BAUPLAN.md](docs/BAUPLAN.md) beschrieben.
 
 ## Installation über HACS
@@ -78,6 +78,49 @@ und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
 Der [Testplan für Stufe 5b](docs/STUFE_5B_TESTPLAN.md) trennt automatisierte Prüfungen und
 noch erforderliche Sicht-/Geräteabnahme durch Claude. Dieser Branch wurde nicht live installiert.
 
+## Stimmungen und Szenen pro Lampe (Stufe 5c)
+
+- **Farben:** 37 originale Paletten, darunter die unveränderten bisherigen zwölf sowie
+  25 neue Stimmungen in acht Kategorien. Eine Stimmung wählen, Ziel antippen und anwenden.
+  „Als Szene speichern“ öffnet den Editor. Eingebaute Paletten lassen sich als eigene
+  Variante duplizieren. Eigene Paletten haben 2–6 Farben und werden im HA-Store gespeichert.
+- **Szenen-Editor:** Neue und vorhandene Palette-/Momentaufnahme-Szenen bearbeiten.
+  Pro Lampe folgt die Helligkeit der Szene oder bleibt fest. Verhalten: Farbwechsel,
+  feste Farbe/Weißton, Mondlicht oder aus. Reine An/Aus-Lichter zeigen keine Prozentwerte.
+- **Live-Probe:** Änderungen wirken entprellt auf das gewählte Ziel. Speichern übernimmt,
+  Abbrechen stellt die vor dem Öffnen erfassten Lampenwerte wieder her. Neuere manuelle
+  Eingriffe bleiben erhalten. Eine vorherige Dynamik wird beim Abbrechen nicht neu
+  gestartet; die vorherigen Lampenwerte werden statisch wiederhergestellt.
+- **Dynamik:** Vier verständliche Tempi, sortierbare Wellenreihenfolge und optional sanfte
+  Helligkeitsschwankungen. Feste Lampenwerte bleiben davon unabhängig. Laufende Dynamik
+  verteilt ihre Befehle global auf höchstens ungefähr fünf Starts pro Sekunde. Engpässe
+  verlängern den Takt, statt zukünftige Takte aufzustauen. Einzelbedienung nimmt nur die
+  betreffende Lampe aus dem Farbwechsel; übrige Lampen laufen weiter.
+- **Mondlicht:** Lokale Näherung der beleuchteten Mondfläche, ohne Zusatzintegration.
+  Helligkeit und Farbe bei Neu-/Vollmond sind einstellbar, mit optionalem Vollmond-Atmen.
+  Mondwerte werden während des Szenenlaufs alle 30 Minuten aktualisiert. Bestehende
+  externe Automationen werden nicht automatisch verändert oder abgeschaltet.
+- **Zuhause:** Lieblingsszenen als Chips, aktueller Szenenstatus und Dynamik starten/stoppen.
+- **Taster, beim Einschalten:** Letzter Zustand bleibt der Standard. Optional feste
+  Helligkeit, eine Szene oder „nach Tageszeit“ mit Uhrzeit-/Sonnenfenstern und Weißton; Ausschalten bleibt Ausschalten. Bei ausgewählten Lampen
+  wird eine Szene nur auf diese Auswahl statisch angewendet, nie auf zusätzliche Ziele.
+- **Szene nach Jahreszeit:** Pro Raum/Zone eine Zuordnung für Frühling, Sommer, Herbst,
+  Winter und optional Weihnachten. Grenzen sind einstellbar, Weihnachten gilt standardmäßig
+  vom 1. bis einschließlich 26. Dezember. Beim Start zählt das lokale HA-Datum. Fehlt die
+  aktuelle Zuordnung, wird die zeitlich nächstliegende verfügbare Jahreszeit mit Hinweis
+  gewählt. Die Jahreszeiten-Szene ist auch für Taster und Automationen auswählbar.
+- **Tageszeitfenster:** Das erste passende Fenster in Listenreihenfolge gewinnt. Beginn ist
+  inklusive, Ende exklusiv; Nachtfenster über Mitternacht sind erlaubt. Passt kein Fenster,
+  bleibt das bisherige Einschaltverhalten. Die Einstellung wirkt nicht laufend nach dem Druck.
+- **Mehr → Lampe ersetzen:** Vorschau aller betroffenen Verweise, anschließend atomare
+  Übernahme. Die neue Lampe muss zuvor ausdrücklich freigegeben sein. Unterschiedliche
+  bereits vorhandene Werte blockieren den Ersatz, statt sie still zu überschreiben.
+  Entity-Umbenennungen mit derselben Registry-Identität werden automatisch mitgezogen.
+
+Der [Testplan für Stufe 5c](docs/STUFE_5C_TESTPLAN.md) dokumentiert automatisierte Abnahme,
+Handy-Prüfung und noch erforderliche reale Geräteabnahme durch Claude. Es gibt keine
+Live-Installation durch diesen Entwicklungsauftrag und keine automatische Änderung von Zonen.
+
 ## Räume und Szenen
 
 - Räume entsprechen Home-Assistant-Bereichen, unabhängig von Etagen. Eine direkte
@@ -131,8 +174,11 @@ noch erforderliche Sicht-/Geräteabnahme durch Claude. Dieser Branch wurde nicht
   Natürliches Licht** wird es nach Raum aus/an wieder aktiviert. Diese Einstellung
   und die Zuordnung bleiben serverseitig gespeichert. Raum einschalten aktiviert dabei nur
   die von Adaptive Lighting gesteuerten Einzellichter, nicht alle Raumlampen.
-- Dynamik startet nach einem Home-Assistant-Neustart nicht von selbst. Die gespeicherten
-  Szenen bleiben erhalten; laufende Aufgaben und Listener werden beim Entladen beendet.
+- Aktive lokale Dynamik bleibt serverseitig gespeichert und wird nach einem Neustart
+  auf weiterhin freigegebenen, eingeschalteten Lampen fortgesetzt. Ausgeschaltete oder
+  inzwischen ausgeschlossene Lampen werden dabei nicht geweckt. Aus, eine neue Szene
+  oder eine ablösende Automation beendet den bisherigen Lauf. Aufgaben und Listener
+  werden beim Entladen beendet, die Fortsetzungsabsicht bleibt erhalten.
 
 Services für Automationen: `lichtzentrale.apply_palette`, `lichtzentrale.apply_scene`,
 `lichtzentrale.toggle_room`, `lichtzentrale.next_scene`, `lichtzentrale.stop_dynamic`, `lichtzentrale.set_adaptive`.

@@ -1,7 +1,8 @@
 // Geändert für Lichtzentrale
 import {useCallback, useEffect, useRef, useState} from 'react';
+import {BindingTimeWindows, bindingTimeWindowsValid, newBindingTimeWindow} from './BindingTimeWindows';
 import type {AdaptiveStatus} from './RuntimeControls';
-import type {Binding, BindingAction, ButtonEntity, Hass, Light, Room, Scene} from './types';
+import type {Binding, BindingAction, BindingOnBehavior, BindingTimeWindow, ButtonEntity, Hass, Light, Room, Scene} from './types';
 
 const actionLabels: Record<BindingAction, string> = {
   full_brightness: 'Volle Helligkeit', night: 'Nachtlicht', return_auto: 'Zurück zur Automatik', night_auto: 'Nachtlicht ⇄ Automatik',
@@ -22,6 +23,7 @@ const eventLabel = (type: string) => eventLabels[type] || type;
 const failure = (error: unknown) => error instanceof Error ? error.message : typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : 'Bitte erneut versuchen.';
 const hasAdaptive = (status: AdaptiveStatus | null, area: string) => !!status?.available && !!status.rooms?.some(room => room.area_id === area && room.available);
 const approved = (light: Light) => light.allowed && /^(light|switch)\./.test(light.entity_id);
+const hasOnBehavior = (action: BindingAction) => ['toggle_lights', 'turn_on_lights', 'toggle_room', 'turn_on_room'].includes(action);
 const targetsRequired = (action: BindingAction) => ['toggle_lights', 'turn_on_lights', 'turn_off_lights'].includes(action);
 type Editing = {entity: string; event: string; binding?: Binding; attributes?: Record<string, unknown>; ignoredAttributes?: string[]; label?: string; suggestedAction?: BindingAction; suggestedArea?: string};
 type RoomSettings = {cycle: string[]; default_on: string};
@@ -104,7 +106,13 @@ export function Buttons({hass}: {hass: Hass}) {
     const group = groups.get(key) || {name: missing ? 'Nicht mehr gefundene Taster' : button.device_name || 'Taster ohne Gerät', buttons: []};
     group.buttons.push(button); groups.set(key, group);
   }
-  const description = (binding: Binding) => `${actionLabels[binding.action] || binding.action} · ${binding.params.entity_ids ? binding.params.entity_ids.map(id => lights.find(light => light.entity_id === id)?.name || 'Licht nicht mehr vorhanden').join(', ') || 'Keine Lichter ausgewählt' : rooms.find(room => room.area_id === binding.area_id)?.name || 'Raum nicht mehr vorhanden'}${binding.action === 'scene' ? ` · ${scenes.find(scene => scene.id === binding.params.scene_id)?.name || 'Szene nicht mehr vorhanden'}` : ''}`;
+  const onDescription = (binding: Binding) => {
+    const value = binding.params.on_behavior;
+    if (!hasOnBehavior(binding.action) || !value || value.mode === 'last') return '';
+    if (value.mode === 'time') return ` · beim Einschalten nach Tageszeit (${value.windows.length} Zeitfenster)`;
+    return value.mode === 'brightness' ? ` · beim Einschalten ${Math.max(1, Math.round(value.brightness * 100 / 255))} %` : ` · beim Einschalten Szene ${scenes.find(scene => scene.id === value.scene_id)?.name || 'nicht mehr vorhanden'}`;
+  };
+  const description = (binding: Binding) => `${actionLabels[binding.action] || binding.action} · ${binding.params.entity_ids ? binding.params.entity_ids.map(id => lights.find(light => light.entity_id === id)?.name || 'Licht nicht mehr vorhanden').join(', ') || 'Keine Lichter ausgewählt' : rooms.find(room => room.area_id === binding.area_id)?.name || 'Raum nicht mehr vorhanden'}${binding.action === 'scene' ? ` · ${scenes.find(scene => scene.id === binding.params.scene_id)?.name || 'Szene nicht mehr vorhanden'}` : ''}${onDescription(binding)}`;
   function openEdit(edit: Editing) {setEditing(edit); setDeleting(null); setRoomEditor(''); setError(''); setMessage('');}
   return <section aria-label="Tasterbelegungen">
     <div className="section-heading"><div><h2>Taster</h2></div><button disabled={disabled} onClick={() => {setEditing(null); setDeleting(null); setRoomEditor(''); setMessage(''); void load();}}>Taster neu laden</button></div>
@@ -147,6 +155,12 @@ function BindingEditor({editing, lights, rooms, scenes, adaptive, disabled, save
   const [area, setArea] = useState(editing.binding?.area_id || editing.suggestedArea || '');
   const [action, setAction] = useState<BindingAction>(editing.binding?.action || editing.suggestedAction || 'toggle_room');
   const [scene, setScene] = useState(editing.binding?.params.scene_id || '');
+  const savedOnBehavior = editing.binding?.params.on_behavior;
+  const [onMode, setOnMode] = useState<BindingOnBehavior['mode']>(savedOnBehavior?.mode || 'last');
+  const [onBrightness, setOnBrightness] = useState(savedOnBehavior?.mode === 'brightness' ? savedOnBehavior.brightness : 255);
+  const [onScene, setOnScene] = useState(savedOnBehavior?.mode === 'scene' ? savedOnBehavior.scene_id : '');
+  const [onWindows, setOnWindows] = useState<BindingTimeWindow[]>(() => savedOnBehavior?.mode === 'time' ? structuredClone(savedOnBehavior.windows) : [newBindingTimeWindow()]);
+  const [onTouched, setOnTouched] = useState(false);
   const [entityIds, setEntityIds] = useState<string[]>(editing.binding?.params.entity_ids || []);
   const [individual, setIndividual] = useState(editing.binding?.params.entity_ids !== undefined);
   const attributes = editing.attributes ?? editing.binding?.event_attributes;
@@ -162,12 +176,33 @@ function BindingEditor({editing, lights, rooms, scenes, adaptive, disabled, save
     group.lights.push(light); targetGroups.set(key, group);
   }
   const roomScenes = scenes.filter(item => item.area_id === area).sort((a, b) => a.order - b.order);
+  const supportsOnBehavior = hasOnBehavior(action);
+  const onScenes = selectedTargets ? scenes.filter(item => {
+    if (!entityIds.length || item.kind === 'hue') return false;
+    const target = rooms.find(room => room.area_id === item.area_id);
+    if (!entityIds.every(id => target?.lights.some(light => light.entity_id === id))) return false;
+    const compatible = (child: Scene) => child.area_id === item.area_id && (
+      child.kind === 'snapshot' ? entityIds.every(id => Object.hasOwn(child.lights || {}, id))
+        : child.kind === 'palette' && entityIds.every(id => id.startsWith('light.'))
+    );
+    if (item.kind !== 'seasonal') return compatible(item);
+    if (!item.seasonal) return false;
+    const ordinary = Object.values(item.seasonal.scenes).map(id => scenes.find(child => child.id === id)).filter((child): child is Scene => !!child);
+    const holiday = item.seasonal.christmas.enabled ? scenes.find(child => child.id === item.seasonal?.christmas.scene_id) : undefined;
+    // Deleted season children are handled by the server's nearest-season fallback.
+    // Every remaining possible child must fit, not only today's resolved scene.
+    return ordinary.length > 0 && [...ordinary, ...(holiday ? [holiday] : [])].every(compatible);
+  }) : roomScenes;
+  const onValid = !supportsOnBehavior || (onMode === 'scene' ? onScenes.some(item => item.id === onScene) : onMode === 'time' ? bindingTimeWindowsValid(onWindows, onScenes) : true);
+  const onParams: {on_behavior?: BindingOnBehavior} = !supportsOnBehavior || (onMode === 'last' && !savedOnBehavior && !onTouched) ? {} : {
+    on_behavior: onMode === 'brightness' ? {mode: 'brightness', brightness: onBrightness} : onMode === 'scene' ? {mode: 'scene', scene_id: onScene} : onMode === 'time' ? {mode: 'time', windows: onWindows} : {mode: 'last'},
+  };
   const adaptiveAvailable = hasAdaptive(adaptive, area);
-  const valid = (selectedTargets ? entityIds.length > 0 && !invalidIds.length : rooms.some(room => room.area_id === area)) && (action !== 'scene' || roomScenes.some(item => item.id === scene)) && (!action.startsWith('adaptive_') || adaptiveAvailable);
-  return <form onSubmit={event => {event.preventDefault(); if (!disabled && valid) save({...editing.binding, event_entity: editing.entity, event_type: editing.event, ...(attributes ? {event_attributes: attributes} : {}), ...(attributes && (ignored.length || editing.binding?.ignored_event_attributes !== undefined) ? {ignored_event_attributes: ignored} : {}), ...(editing.label ? {control_label: editing.label} : {}), area_id: selectedTargets ? null : area, action, params: selectedTargets ? {entity_ids: entityIds} : action === 'scene' ? {scene_id: scene} : {}});}}><fieldset disabled={disabled}><legend>Aktion zuordnen</legend>
+  const valid = onValid && (selectedTargets ? entityIds.length > 0 && !invalidIds.length : rooms.some(room => room.area_id === area)) && (action !== 'scene' || roomScenes.some(item => item.id === scene)) && (!action.startsWith('adaptive_') || adaptiveAvailable);
+  return <form onSubmit={event => {event.preventDefault(); if (!disabled && valid) save({...editing.binding, event_entity: editing.entity, event_type: editing.event, ...(attributes ? {event_attributes: attributes} : {}), ...(attributes && (ignored.length || editing.binding?.ignored_event_attributes !== undefined) ? {ignored_event_attributes: ignored} : {}), ...(editing.label ? {control_label: editing.label} : {}), area_id: selectedTargets ? null : area, action, params: {...(selectedTargets ? {entity_ids: entityIds} : action === 'scene' ? {scene_id: scene} : {}), ...onParams}});}}><fieldset disabled={disabled}><legend>Aktion zuordnen</legend>
     {attributes && <LearnedAttributes attributes={attributes} ignored={ignored} change={setIgnored} disabled={disabled}/>}
-    {!selectedTargets && <label>Raum oder Zone<select className="text-input" value={rooms.some(room => room.area_id === area) ? area : ''} onChange={event => {const next = event.target.value; setArea(next); setScene(''); if (action.startsWith('adaptive_') && !hasAdaptive(adaptive, next)) setAction('toggle_room');}}><option value="">Raum oder Zone wählen</option>{rooms.map(room => <option key={room.area_id} value={room.area_id}>{room.name}</option>)}</select></label>}
-    <label>Aktion<select className="text-input" value={action.startsWith('adaptive_') && !adaptiveAvailable ? '' : action} onChange={event => {const next = event.target.value as BindingAction; setAction(next); setScene(''); if (!targetsRequired(next) && next !== 'dim_up' && next !== 'dim_down' && next !== 'full_brightness') {setEntityIds([]); setIndividual(false);}}}><option value="" disabled>Aktion wählen</option>{(Object.entries(actionLabels) as [BindingAction, string][]).filter(([value]) => !value.startsWith('adaptive_') || adaptiveAvailable).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+    {!selectedTargets && <label>Raum oder Zone<select className="text-input" value={rooms.some(room => room.area_id === area) ? area : ''} onChange={event => {const next = event.target.value; setArea(next); setScene(''); setOnScene(''); if (action.startsWith('adaptive_') && !hasAdaptive(adaptive, next)) setAction('toggle_room');}}><option value="">Raum oder Zone wählen</option>{rooms.map(room => <option key={room.area_id} value={room.area_id}>{room.name}</option>)}</select></label>}
+    <label>Aktion<select className="text-input" value={action.startsWith('adaptive_') && !adaptiveAvailable ? '' : action} onChange={event => {const next = event.target.value as BindingAction; setAction(next); setScene(''); setOnMode('last'); setOnScene(''); setOnTouched(false); if (!targetsRequired(next) && next !== 'dim_up' && next !== 'dim_down' && next !== 'full_brightness') {setEntityIds([]); setIndividual(false);}}}><option value="" disabled>Aktion wählen</option>{(Object.entries(actionLabels) as [BindingAction, string][]).filter(([value]) => !value.startsWith('adaptive_') || adaptiveAvailable).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
     {flexible && <label>Ziel<select className="text-input" value={individual ? 'lights' : 'room'} onChange={event => {setIndividual(event.target.value === 'lights'); setEntityIds([]);}}><option value="room">Raum oder Zone</option><option value="lights">Einzelne Lichter auswählen</option></select></label>}
     {selectedTargets && <fieldset><legend>Lichter auswählen</legend><p>Freigegebene Lampen und Lichtschalter aus beliebigen Räumen. Mindestens ein Licht auswählen.</p>
       {[...targetGroups].map(([key, group]) => <fieldset key={key}><legend>{group.name}</legend>{group.lights.map(light => <label className="check" key={light.entity_id} style={{minHeight: 44, overflowWrap: 'anywhere'}}><input type="checkbox" checked={entityIds.includes(light.entity_id)} onChange={() => setEntityIds(ids => ids.includes(light.entity_id) ? ids.filter(id => id !== light.entity_id) : [...ids, light.entity_id])}/><span>{light.name}{!light.available && ' (nicht verfügbar)'}</span></label>)}</fieldset>)}
@@ -177,8 +212,16 @@ function BindingEditor({editing, lights, rooms, scenes, adaptive, disabled, save
       {dimming && <p>Nur eingeschaltete, dimmbare Lampen werden geändert. Lichtschalter bleiben unverändert.</p>}
     </fieldset>}
     {action === 'scene' && <label>Szene<select className="text-input" value={roomScenes.some(item => item.id === scene) ? scene : ''} onChange={event => setScene(event.target.value)}><option value="">Szene wählen</option>{roomScenes.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{!roomScenes.length && <small>In diesem Raum ist noch keine Szene gespeichert.</small>}</label>}
+    {supportsOnBehavior && <fieldset><legend>Beim Einschalten</legend>
+      <label>Beim Einschalten<select className="text-input" value={onMode} onChange={event => {setOnMode(event.target.value as BindingOnBehavior['mode']); setOnTouched(true);}}><option value="last">Letzter Zustand (wie bisher)</option><option value="brightness">Feste Helligkeit</option><option value="scene">Eine Szene</option><option value="time">Nach Tageszeit</option></select></label>
+      {onMode === 'brightness' && <><label>Helligkeit beim Einschalten: {Math.max(1, Math.round(onBrightness * 100 / 255))} %<input aria-label="Helligkeit beim Einschalten" type="range" min={1} max={100} step={1} value={Math.max(1, Math.round(onBrightness * 100 / 255))} onChange={event => setOnBrightness(Math.round(Number(event.target.value) * 255 / 100))}/></label><p>Gilt nur beim Einschalten. Reine Lichtschalter schalten nur an, sie werden nie gedimmt.</p></>}
+      {onMode === 'scene' && <><label>Szene beim Einschalten<select className="text-input" value={onScenes.some(item => item.id === onScene) ? onScene : ''} onChange={event => setOnScene(event.target.value)}><option value="">Passende Szene wählen</option>{onScenes.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{!onScenes.length && <p>Für diese Auswahl ist keine passende Szene gespeichert.</p>}{onScene && !onScenes.some(item => item.id === onScene) && <p role="alert">Die gespeicherte Szene passt nicht mehr zur Auswahl. Bitte neu wählen.</p>}{selectedTargets && <p>Nur die ausgewählten Lampen übernehmen die Szene. Andere Lampen bleiben unverändert.</p>}</>}
+      {selectedTargets && (onMode === 'scene' || onMode === 'time') && <p>Es werden nur Szenen angeboten, die zur gesamten Lampenauswahl passen. Bei Jahreszeiten-Szenen müssen alle vorhandenen Teil-Szenen passen; fehlende Jahreszeiten verwenden die serverseitige Ersatzszene.</p>}
+      {onMode === 'time' && <BindingTimeWindows windows={onWindows} scenes={onScenes} change={setOnWindows} selectedTargets={selectedTargets}/>}
+      <p>Ausschalten bleibt unverändert.</p>
+    </fieldset>}
     {action === 'next_scene' && <p>Den Szenenzyklus legst du unter „Szenenzyklus und Einschalten“ fest.</p>}
-    {action === 'turn_on_room' && <p>Verwendet die Einschalt-Einstellung des Zielraums.</p>}
+    {action === 'turn_on_room' && onMode === 'last' && <p>Verwendet die Einschalt-Einstellung des Zielraums.</p>}
     {action.startsWith('adaptive_') && !adaptiveAvailable && <p>Natürliches Licht ist für diesen Raum nicht verfügbar. Bitte eine andere Aktion wählen.</p>}
     <button type="submit" disabled={!valid}>Belegung speichern</button><button type="button" className="secondary" onClick={cancel}>Abbrechen</button>
   </fieldset></form>;

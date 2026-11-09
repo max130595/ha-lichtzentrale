@@ -754,3 +754,31 @@ async def test_zone_motion_scene_waits_for_physical_room_lock(hass, store, motio
             assert not calls
         await task
     assert calls[0].data == {"entity_id": targets[0], "brightness": 90}
+
+
+@pytest.mark.parametrize("dynamic_motion", ["palette"], indirect=True)
+async def test_dynamic_user_color_edit_is_manual_and_excludes_lamp(hass, dynamic_motion):
+    manager, area, target, sensors, _, active, _ = dynamic_motion
+    await change(hass, sensors[0], "on")
+    await change(hass, target, "on", Context(user_id="synthetic_user"), brightness=101)
+    assert manager.status(area)["paused"]
+    assert not active.active or target in active.active[area]["excluded"]
+
+
+@pytest.mark.parametrize("dynamic_motion", ["palette"], indirect=True)
+async def test_explicit_lamp_exclusion_ends_motion_color_exception(hass, dynamic_motion):
+    manager, area, target, sensors, _, active, _ = dynamic_motion
+    await change(hass, sensors[0], "on")
+    await active.exclude_targets([target])
+    await change(hass, target, "on", brightness=102)
+    assert manager.status(area)["paused"]
+
+
+@pytest.mark.parametrize("dynamic_motion", ["palette"], indirect=True)
+async def test_contextless_external_service_is_not_a_device_color_report(hass, dynamic_motion):
+    manager, area, target, sensors, _, active, _ = dynamic_motion
+    await change(hass, sensors[0], "on")
+    await hass.services.async_call("light", "turn_on", {"entity_id": target, "brightness": 103}, blocking=True)
+    await hass.async_block_till_done()
+    assert manager.status(area)["paused"]
+    assert not active.active or target in active.active[area]["excluded"]

@@ -13,6 +13,8 @@ from .bindings import BindingManager
 from .brightness import BrightnessManager
 from .const import DOMAIN, SERVICE_APPLY_PALETTE
 from .dynamic_scenes import DynamicSceneManager, async_stop_room
+from .entity_references import EntityReferenceManager
+from .live_preview import LivePreviewManager
 from .motion import MotionManager
 from .palettes import async_apply_palette
 from .rooms import async_toggle_room
@@ -37,6 +39,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         runtime.pop("store", None)
         raise
     runtime["dynamic"] = DynamicSceneManager(hass, store)
+    runtime["live_preview"] = LivePreviewManager(hass, store)
     if not runtime.get("websocket_registered"):
         async_setup_websocket_api(hass)
         runtime["websocket_registered"] = True
@@ -119,6 +122,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     runtime["bindings"].start()
     runtime["schedules"] = ScheduleManager(hass, store)
     runtime["schedules"].start()
+    runtime["entity_references"] = EntityReferenceManager(hass, store)
+    runtime["entity_references"].start()
+    await runtime["dynamic"].restore()
 
     async def next_scene_service(call: ServiceCall):
         return await hass.data[DOMAIN]["bindings"].async_next_scene(
@@ -138,6 +144,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload without removing persisted user settings."""
+    if references := hass.data[DOMAIN].pop("entity_references", None):
+        await references.shutdown()
+    if preview := hass.data[DOMAIN].pop("live_preview", None):
+        await preview.shutdown()
     if automatic := hass.data[DOMAIN].pop("automatic_state", None):
         await automatic.shutdown()
     if brightness := hass.data[DOMAIN].pop("brightness", None):

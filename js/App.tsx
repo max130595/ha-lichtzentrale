@@ -1,6 +1,9 @@
 // Geändert für Lichtzentrale
 import {displayName, displayError} from './display';
 import {useCallback, useEffect, useRef, useState} from 'react';
+import {PaletteEditor} from './PaletteEditor';
+import {ReplaceLight} from './ReplaceLight';
+import type {NavigationGuard} from './sceneControls';
 import {RoomPalette} from './RoomPalette';
 import {Rooms} from './Rooms';
 import {Buttons} from './Buttons';
@@ -33,6 +36,23 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
   const [grants, setGrants] = useState<string[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [palette, setPalette] = useState<Palette | null>(null);
+  const [paletteEditor, setPaletteEditor] = useState<{palette?: Palette; duplicate?: boolean} | null>(null);
+  const navigationGuard = useRef<NavigationGuard>(null), navigationLock = useRef(false);
+  const [navigating, setNavigating] = useState(false), [hasPreview, setHasPreview] = useState(false);
+  const registerGuard = useCallback((guard: NavigationGuard) => {navigationGuard.current = guard; setHasPreview(!!guard);}, []);
+  async function navigate(action: () => void) {
+    if (navigationLock.current) return;
+    navigationLock.current = true; setNavigating(true);
+    try {if (!navigationGuard.current || await navigationGuard.current()) action();}
+    finally {navigationLock.current = false; if (alive.current) setNavigating(false);}
+  }
+  async function deletePalette(item: Palette) {
+    if (lock.current || !window.confirm(`Palette „${displayName(item.name)}“ löschen?`)) return;
+    lock.current = true; setBusy(true); setError('');
+    try {await api.current.callWS({type: 'lichtzentrale/palette/delete', palette_id: item.id}); if (alive.current) {setPalette(null); await load(); setMessage('Palette gelöscht.');}}
+    catch (e) {if (alive.current) setError(`Löschen nicht möglich: ${errorText(e)}`);}
+    finally {lock.current = false; if (alive.current) setBusy(false);}
+  }
   const [brightness, setBrightness] = useState(128);
   const [transition, setTransition] = useState(2);
   const [distribution, setDistribution] = useState<Distribution>('zufall');
@@ -80,37 +100,39 @@ export function App({hass, onMenu}: {hass: Hass; onMenu?: () => void}) {
     finally { lock.current = false; if (alive.current) setBusy(false); }
   }
   const allowed = lights.filter(light => light.allowed);
-  const disabled = busy || loading;
+  const disabled = busy || loading || navigating;
   return <div className="app">
     <header><button className="menu" aria-label="Seitenleiste öffnen" onClick={onMenu}>☰</button><h1>{tab === 'Zuhause' && detail ? roomName : tab}</h1></header>
     <main>
       {error && <div role="alert" className="error">{displayError(error)}</div>}
       {message && <div role="status" className="notice">{message}</div>}
-      {tab === 'Zuhause' && <>{detail && <button onClick={() => setDetail(false)}>← Zuhause</button>}<Rooms hass={hass} detail={detail} openRoom={() => setDetail(true)} initialArea={roomArea} onRoomChange={(name, area) => {setRoomArea(area); setRoomName(name);}}/></>}
+      {tab === 'Zuhause' && <>{detail && <button disabled={navigating} onClick={() => void navigate(() => setDetail(false))}>← Zuhause</button>}<Rooms hass={hass} registerGuard={registerGuard} detail={detail} openRoom={() => setDetail(true)} initialArea={roomArea} onRoomChange={(name, area) => {setRoomArea(area); setRoomName(name);}}/></>}
       {tab === 'Taster' && <Buttons hass={hass}/>}
       {tab === 'Automationen' ? <Schedules hass={hass}/> : (tab === 'Farben' || tab === 'Mehr') ? <>
+        {tab === 'Mehr' && <ReplaceLight hass={hass}/>}
         {tab === 'Mehr' && <button disabled={disabled} onClick={() => {setGrants(lights.filter(light => light.allowed).map(light => light.entity_id)); setSettings(!settings);}}>Lampen freigeben</button>}
         {loading && <p role="status">Lampen und Paletten werden geladen …</p>}
-        <button className="refresh" disabled={disabled} onClick={() => { setSettings(false); void load(); }}>Neu laden</button>
+        <button className="refresh" disabled={disabled} onClick={() => void navigate(() => {setSettings(false); setPaletteEditor(null); if (hasPreview) setPalette(null); void load();})}>Neu laden</button>
         {tab === 'Mehr' && settings && <section className="card"><h3>Lampen freigeben</h3><p>Nur bewusst freigegebene Einzellampen sind steuerbar. Drucker-, Geräte- und andere Funktionsbeleuchtung nicht auswählen. Gruppen werden nicht angeboten.</p>
           {!lights.length && <p>Keine Einzellampen gefunden.</p>}
           <label className="check"><input type="checkbox" checked={showHidden} disabled={disabled} onChange={event => {preserveGrants.current = true; setShowHidden(event.target.checked);}}/>Ausgeblendete Druckerbeleuchtung anzeigen</label><fieldset disabled={disabled}><legend>Erlaubte Einzellampen und Lichtschalter</legend>{lights.map(light => <label className="check" key={light.entity_id}><input type="checkbox" checked={grants.includes(light.entity_id)} onChange={() => setGrants(toggle(grants, light.entity_id))}/><span>{displayName(light.name)}<small>{light.area_name || 'Ohne Bereich'}{!light.available ? ' · Nicht verfügbar' : ''}</small></span></label>)}</fieldset>
           <button disabled={disabled} onClick={() => void saveGrants()}>Freigaben speichern</button><button className="secondary" disabled={disabled} onClick={() => setSettings(false)}>Abbrechen</button>
         </section>}
-        {tab === 'Farben' && <>{!loading && !allowed.length && <p className="notice">Noch keine Lampen freigegeben. Wähle zuerst unter „Mehr → Lampen freigeben“ die gewünschten Einzellampen aus.</p>}
+        {tab === 'Farben' && <>{paletteEditor && <PaletteEditor hass={hass} palette={paletteEditor.palette} duplicate={paletteEditor.duplicate} registerGuard={registerGuard} onClose={() => setPaletteEditor(null)} onSaved={(saved, notice) => {setPaletteEditor(null); setPalette(saved); setMessage(`Palette gespeichert.${notice ? ` ${notice}` : ''}`); void load();}}/>}{!paletteEditor && <>{!palette && <button className="primary" disabled={disabled} onClick={() => setPaletteEditor({})}>+ Neue Palette</button>}{!loading && !allowed.length && <p className="notice">Noch keine Lampen freigegeben. Wähle zuerst unter „Mehr → Lampen freigeben“ die gewünschten Einzellampen aus.</p>}
         {!loading && !palettes.length && <p>Keine Paletten verfügbar. Lade die Daten erneut.</p>}
         {!palette && [...new Set(palettes.map(item => item.category))].map(category => <section key={category}><h3>{category}</h3><div className="grid">{palettes.filter(item => item.category === category).map(item => <button className="palette" disabled={disabled} key={item.id} aria-pressed={false} onClick={() => { setPalette(item); setBrightness(item.bri); setMessage(''); }}><span className="gradient" style={{background: `linear-gradient(120deg, ${item.preview.join(', ')})`}}/><span className="palette-name">{displayName(item.name)}</span></button>)}</div></section>)}
-        {palette && <button onClick={() => setPalette(null)}>← Farben</button>}
-        {palette && <section ref={application} tabIndex={-1}><RoomPalette key={palette.id} hass={hass} palette={palette}/></section>}
-        {palette && <details><summary>Mehr Optionen · Einzelne Lampen</summary><section className="card" aria-label="Palette anwenden"><h3>{palette.name} anwenden</h3><p>Wähle freigegebene Lampen. Farblose Lampen erhalten nur die Helligkeit, reine Ein/Aus-Lampen werden eingeschaltet.</p>
+        {palette && <button disabled={navigating} onClick={() => void navigate(() => setPalette(null))}>← Farben</button>}
+        {palette && <section ref={application} tabIndex={-1}><RoomPalette key={palette.id} hass={hass} palette={palette} palettes={palettes} registerGuard={registerGuard}/></section>}
+        {palette && !hasPreview && <div className="actions palette-management">{palette.builtin === false && <button disabled={disabled} onClick={() => void navigate(() => setPaletteEditor({palette}))}>Palette bearbeiten</button>}<button disabled={disabled} onClick={() => void navigate(() => setPaletteEditor({palette, duplicate: true}))}>Eigene Variante</button>{palette.builtin === false && <button disabled={disabled} onClick={() => void navigate(() => {void deletePalette(palette);})}>Palette löschen</button>}</div>}
+        {palette && !hasPreview && <details><summary>Mehr Optionen · Einzelne Lampen</summary><section className="card" aria-label="Palette anwenden"><h3>{palette.name} anwenden</h3><p>Wähle freigegebene Lampen. Farblose Lampen erhalten nur die Helligkeit, reine Ein/Aus-Lampen werden eingeschaltet.</p>
           <fieldset disabled={disabled}><legend>Lampen auswählen</legend>{allowed.length === 0 && <p>Bitte zuerst Lampen freigeben.</p>}{allowed.map(light => <label className="check" key={light.entity_id}><input type="checkbox" disabled={!light.available} checked={selected.includes(light.entity_id)} onChange={() => setSelected(toggle(selected, light.entity_id))}/><span>{displayName(light.name)}<small>{light.area_name || 'Ohne Bereich'}{!light.available ? ' · Nicht verfügbar' : ''}</small></span></label>)}
           <label>Farbverteilung für einzelne Lampen<select className="text-input" value={distribution} onChange={event => setDistribution(event.target.value as Distribution)}><option value="zufall">Zufällig</option><option value="verlauf_links_rechts">Verlauf von links nach rechts</option><option value="verlauf_vorne_hinten">Verlauf von vorne nach hinten</option><option value="hoehe">Nach Höhe: unten nach oben</option></select></label><p>Die Positionen stammen aus den jeweiligen Räumen. Lampen ohne Position kommen zuletzt. Bei Höhe erhält Hintergrund die kräftigste Farbe.</p>
           <label className="slider">Helligkeit: {Math.round(brightness / 255 * 100)} %<input aria-label="Helligkeit" type="range" min="1" max="255" value={brightness} onChange={event => setBrightness(Number(event.target.value))}/></label>
           <label className="slider">Übergang: {transition} Sekunden<input aria-label="Übergang" type="range" min="0" max="60" value={transition} onChange={event => setTransition(Number(event.target.value))}/></label></fieldset>
           <button disabled={disabled || !selected.length} onClick={() => void apply()}>{busy ? 'Bitte warten …' : `Auf ${selected.length} Lampe(n) anwenden`}</button>
-        </section></details>}</>}
+        </section></details>}</>}</>}
       </> : null}
     </main>
-    <nav aria-label="Hauptnavigation">{tabs.map(name => <button key={name} aria-current={tab === name ? 'page' : undefined} onClick={() => {setTab(name); setDetail(false); setPalette(null);}}>{name}</button>)}</nav>
+    <nav aria-label="Hauptnavigation">{tabs.map(name => <button key={name} aria-current={tab === name ? 'page' : undefined} disabled={navigating} onClick={() => void navigate(() => {setTab(name); setDetail(false); setPalette(null); setPaletteEditor(null);})}>{name}</button>)}</nav>
   </div>;
 }

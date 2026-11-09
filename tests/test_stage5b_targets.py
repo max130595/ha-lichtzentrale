@@ -179,7 +179,7 @@ async def test_legacy_store_additions_are_idempotent_and_preserve_every_collecti
         "extension": {"unchanged": [9]},
     }
     hass_storage[STORAGE_KEY] = {"version": 1, "data": deepcopy(original)}
-    expected = {**deepcopy(original), "zones": [], "automatic_state": {}}
+    expected = {**deepcopy(original), "zones": [], "automatic_state": {}, "active_dynamic": {}}
     first = LichtzentraleStore(hass)
     await first.async_load()
     assert first.data == expected

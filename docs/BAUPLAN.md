@@ -436,6 +436,38 @@ diese Taste überhaupt ein Doppelklick belegt ist.
   externer Zigbee2MQTT-Automationen. Tests und verbleibende Abnahme mit echten Geräten:
   [STUFE_5B_TESTPLAN.md](STUFE_5B_TESTPLAN.md). Nach Aktualisierung des Draft-PR wieder stoppen.
 
+### Stufe 5c – Stimmungen und Feineinstellung pro Lampe
+
+- Version 0.5.0 ergänzt 25 originale Stimmungen in acht Kategorien zu den unveränderten
+  zwölf bisherigen Paletten. Eigene Paletten, Duplikate und referenzgeschütztes Löschen
+  bleiben im serverseitigen Store. Bestehende IDs und unbekannte Store-Felder bleiben erhalten.
+- Ein gemeinsamer Live-Editor für Palette-/Momentaufnahme-Szenen bietet feste oder
+  szenengeführte Helligkeit sowie Farbwechsel, feste Farbe/Weißton, Mondlicht und Aus pro Lampe.
+  Entprellte, socketgebundene Probesitzungen stellen bei Abbruch nur noch eigene Änderungen
+  zurück. Freigaben und Zielmitgliedschaft werden erneut geprüft. Vorherige Dynamik bleibt
+  nach Abbruch gestoppt; ihr vorheriger physischer Lampenzustand wird wiederhergestellt.
+- Vier Tempovorgaben, sortierbare Wellenliste und sanfte ±10-%-Helligkeitsschwankungen.
+  Ein gemeinsamer Dispatcher begrenzt laufende Dynamik auf ungefähr fünf Befehle pro Sekunde.
+  Persistierte Laufabsicht ermöglicht Neustart-Fortsetzung ohne ausgeschaltete Lampen zu wecken.
+  Einzelbedienung löst nur die betreffende Lampe aus dem Lauf bis zum nächsten Szenenstart.
+- Mondlicht nutzt eine lokale synodische Näherung mit einstellbaren Endwerten und optionalem
+  Atmen. Keine Cloud, keine weitere Integration und keine neuen Produktionsabhängigkeiten.
+- Lieblingsszenen und Dynamikstatus stehen auf Zuhause. Taster erlauben beim Einschalten
+  optional feste Helligkeit oder eine zielbegrenzte Szene, bestehende Belegungen bleiben gleich.
+- Jahreszeiten-Szenen ordnen je Raum/Zone normale Szenen lokalen Jahreszeitabschnitten und
+  optional einem Weihnachtszeitraum zu. Auflösung erfolgt beim Start, dynamische Läufe
+  behalten ihre konkrete Szene. Fehlende Zuordnungen wählen den nächstliegenden verfügbaren
+  Jahreszeitabschnitt mit Hinweis. Keine verschachtelten oder fremden Zielreferenzen.
+- Taster können beim Einschalten nach Uhrzeit-/Sonnenfenstern Helligkeit/Weißton oder eine
+  Szene wählen. Das erste passende Fenster gewinnt, Lücken erhalten das bisherige Verhalten.
+- Identitätsgeprüfte Registry-Umbenennung und „Lampe ersetzen“ übertragen ausschließlich
+  bekannte Entity-Verweise, keine Namen oder freien Texte. Ersatz benötigt eine aktuelle
+  Vorschau und vorherige Freigabe. Konflikte verhindern die gesamte Store-Transaktion.
+- Farbmodus unbekannt und Helligkeit null werden nicht als aus/0 % interpretiert. Unterstützte
+  Farbe/Weißton initialisiert neue Farblampen; An/Aus-Lichter bekommen niemals Dimmwerte.
+- Keine Live-Änderung. Tatsächliche Zigbee-Farben, Übergänge, Geräte-Rückmeldungen und externe
+  Automationskonflikte prüft Claude anhand [STUFE_5C_TESTPLAN.md](STUFE_5C_TESTPLAN.md).
+
 ## Tests
 
 - Python: `pytest-homeassistant-custom-component` für Store, Szenen-Snapshot/Anwenden,

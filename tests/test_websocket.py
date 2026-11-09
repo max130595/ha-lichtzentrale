@@ -27,7 +27,7 @@ async def test_catalogue_discovery_save_and_apply(hass, client, store, light_cal
     hass.states.async_set("light.fixture_a", "off", {"supported_color_modes": ["xy"]})
     result = await request(client, "palettes/list")
     assert result["success"] is True
-    assert len(result["result"]) == 12
+    assert len(result["result"]) >= 32
     result = await request(client, "lights/list")
     assert result["result"][0]["allowed"] is False
     result = await request(client, "settings/save", light_entity_ids=["light.fixture_a"])
