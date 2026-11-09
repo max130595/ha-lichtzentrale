@@ -89,6 +89,16 @@ Die Lichtzentrale ersetzt danach die Hue-App vollständig, auch für Lampen ohne
   genauso angeboten. Deren Ereignisnamen (z. B. `on_press_release`, `button_1_press_release`,
   `dial_rotate_right_step`) werden in Klartext übersetzt. Unbekannte Ereignisse erscheinen mit
   ihrem Rohnamen, statt zu fehlen.
+- **Wichtig (am echten System festgestellt, Zigbee2MQTT 2.14 mit `experimental_event_entities`):**
+  Ein Gerät liefert **eine** Event-Entity mit allgemeinen Typen (`press`, `press_release`,
+  `hold`, `hold_release`, `dial_rotate`, `brightness_step`). Welche Taste bzw. welche
+  Drehrichtung gemeint ist, steht nur in den Ereignis-Attributen (z. B. Taste, Richtung,
+  Geschwindigkeit). Eine Belegung muss deshalb aus Event-Entity **plus** Ereignistyp **plus**
+  diesen Attributen bestehen. Die Attributnamen werden zur Laufzeit aus dem tatsächlichen Ereignis
+  gelesen, nicht fest einprogrammiert. Vorhandene Hue-Belegungen bleiben gültig.
+- Bis das fertig ist, laufen auf dem echten System umgezogene Zigbee2MQTT-Taster über einzelne
+  Home-Assistant-Automationen. Nach Stufe 5b übernimmt die Lichtzentrale sie, und die
+  Automationen werden abgeschaltet (das macht Claude).
 
 ### Bestehendes bleibt erhalten
 
