@@ -348,7 +348,7 @@ def register_target_area(hass, area_id):
 
 
 @pytest.mark.parametrize("target_room", [None, "other"])
-@pytest.mark.parametrize("reference", ["position", "brightness", "scene", "automatic", "dynamic"])
+@pytest.mark.parametrize("reference", ["position", "brightness", "scene", "automatic", "dynamic", "ambient"])
 async def test_physical_room_mismatch_blocks_preview_and_atomic_commit(
     hass, store, manager, target_room, reference
 ):
@@ -363,6 +363,10 @@ async def test_physical_room_mismatch_blocks_preview_and_atomic_commit(
         data["rooms"][area.id] = {"brightness": {"stages": [{"entity_ids": [OLD], "brightness": 40}]}}
     elif reference == "scene":
         data["scenes"] = [{"area_id": area.id, "name": "Testszene", "lights": {OLD: {"on": True}}}]
+    elif reference == "ambient":
+        data["bindings"] = [{"area_id": area.id, "action": "toggle_lights", "params": {
+            "entity_ids": [OLD], "ambient_first": {"scene_id": "fixture_ambient"},
+        }}]
     elif reference == "automatic":
         data["automatic_state"][area.id] = {"action": {"entity_ids": [OLD]}}
     else:
@@ -408,6 +412,11 @@ async def test_zones_and_explicit_cross_room_motion_targets_remain_transferable(
     }
     store._data["scenes"] = [{"area_id": "zone:fixture_zone", "lights": {OLD: {"on": True}}}]
     store._data["active_dynamic"]["zone:fixture_zone"] = {"targets": [OLD]}
+    store._data["bindings"] = [
+        {"area_id": "zone:fixture_zone", "params": {
+            "entity_ids": [OLD], "ambient_first": {"scene_id": "fixture_ambient"}}},
+        {"area_id": area.id, "params": {"entity_ids": [OLD]}},
+    ]
     preview = manager.preview(OLD, NEW)
     assert preview["can_replace"]
     assert preview["conflicts"] == []

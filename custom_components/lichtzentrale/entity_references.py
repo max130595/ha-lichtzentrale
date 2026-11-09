@@ -217,6 +217,12 @@ def _physical_reference_areas(data, entity_id):
     for scene in data.get("scenes", []):
         if entity_id in referenced_lights({"scenes": [scene]}):
             result.add(scene.get("area_id"))
+    for binding in data.get("bindings", []):
+        params = binding.get("params") or {}
+        # Plain selected-light buttons may cross rooms. Ambient buttons have an
+        # explicit container whose physical scope must survive replacement.
+        if params.get("ambient_first") and entity_id in params.get("entity_ids", []):
+            result.add(binding.get("area_id"))
     for kind in ("automatic_state", "active_dynamic"):
         for area_id, value in data.get(kind, {}).items():
             if entity_id in referenced_lights({kind: {area_id: value}}):

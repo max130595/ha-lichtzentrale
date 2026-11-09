@@ -78,6 +78,9 @@ async def async_control_lights(
     hass, store, entity_ids, on=None, context=None, *, brightness=None, color_temp_kelvin=None, transition=None, guard=None, dispatch_guard=None
 ):
     """Any selected on means all off; otherwise restore all selected lights."""
+    from .effects import invalidate
+
+    invalidate(hass, entity_ids)
     validate_control_options(on=on, brightness=brightness, color_temp_kelvin=color_temp_kelvin)
     validate_transition(transition)
     async with _locked_targets(hass, store, entity_ids) as (targets, areas):

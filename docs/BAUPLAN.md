@@ -483,6 +483,27 @@ diese Taste überhaupt ein Doppelklick belegt ist.
 - Tests und reale 390-Pixel-Ansichten: [STUFE_5D_TESTPLAN.md](STUFE_5D_TESTPLAN.md).
   Keine Live-Installation und keine Umsetzung von Stufe 6.
 
+### Stufe 5e – Effekte, Ambiente zuerst und Skripte
+
+- Version 0.5.2 ergänzt pro Lampe einen Effekt aus der aktuellen `effect_list`. Nach
+  Farbe/Helligkeit folgt etwa zwei Sekunden später ein separater Effektbefehl. Neue
+  Szenen ohne Effekt und Ausschalten senden vorher `stop_hue_effect`, sonst `none`.
+  Effektlampen sind vom Farbwechsel ausgenommen. Momentaufnahme, Palette, Jahreszeiten
+  und Live-Probe verwenden denselben Ablauf; reine An/Aus-Lichter bleiben effektfrei.
+- `params.ambient_first` erweitert ausschließlich Toggle-Taster um eine Szene des
+  expliziten Raums/der Zone und ein Uhrzeit-/Sonnenfenster. Laufendes Ambiente hat Vorrang
+  vor ausgeschalteten Tastenzielen. Folgedruck beendet es, schaltet Tastenziele nach
+  `on_behavior` ein und übrige Containerlampen aus. Laufzeitbesitz endet bei Handbedienung;
+  Freigaben und Zugehörigkeit werden vor Befehlen erneut geprüft.
+- Optionales `Scene.start_script` verweist auf ein vorhandenes `script.*`. Nach den
+  Lichtbefehlen startet es einmal, nie für Live-Probe oder Neustart-Fortsetzung. Ein
+  Jahreszeiten-Skript hat Vorrang vor dem Skript der aufgelösten Szene. Fehler erzeugen
+  einen Protokollhinweis, ohne die Lichtaktion zurückzunehmen. Dies ist die ausdrücklich
+  beauftragte Skript-Erweiterung; keine allgemeine Freigabe weiterer Geräte-Domains.
+- Keine zusätzlichen Produktionsabhängigkeiten oder Store-Migration. Keine Einrichtung
+  am echten System, keine Stufe 6. Tests und Browseransichten:
+  [STUFE_5E_TESTPLAN.md](STUFE_5E_TESTPLAN.md).
+
 ## Tests
 
 - Python: `pytest-homeassistant-custom-component` für Store, Szenen-Snapshot/Anwenden,

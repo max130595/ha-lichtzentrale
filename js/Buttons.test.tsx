@@ -746,3 +746,59 @@ it('offers seasonal selected-lamp behavior only when every usable season child f
   await screen.findByText('Belegung in Home Assistant gespeichert.');
   expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({params: {entity_ids: ['light.test_a', 'switch.test_b'], on_behavior: {mode: 'scene', scene_id: seasonal.id}}})}));
 });
+
+describe('Stufe 5e Ambiente zuerst', () => {
+  const light: Light = {entity_id: 'light.test_ambient', name: 'Testlicht Ambiente', area_id: rooms[0].area_id, area_name: rooms[0].name, allowed: true, available: true};
+  const foreign: Light = {...light, entity_id: 'light.test_foreign', name: 'Testlicht anderer Raum', area_id: rooms[1].area_id};
+  const targetRooms = [{...rooms[0], lights: [light]}, {...rooms[1], lights: [foreign]}];
+  const ambient = {scene_id: scenes[0].id, window: {after: {type: 'sun' as const, event: 'sunset' as const, offset_min: -15}, before: {type: 'time' as const, value: '22:30'}}};
+  it('requires explicit shared container for selected lights and saves scene plus sun window with normal behavior', async () => {
+    const {callWS} = await setup({rooms: targetRooms, lights: [light, foreign]}); editEvent();
+    fireEvent.change(screen.getByLabelText('Aktion'), {target: {value: 'toggle_lights'}});
+    fireEvent.click(screen.getByLabelText(light.name)); fireEvent.click(screen.getByLabelText('Zur Ambiente-Zeit zuerst Szene'));
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Ambiente-Raum oder Zone'), {target: {value: rooms[0].area_id}});
+    fireEvent.change(screen.getByLabelText('Ambiente-Szene'), {target: {value: scenes[0].id}});
+    fireEvent.change(screen.getByLabelText('Beim Einschalten'), {target: {value: 'brightness'}});
+    fireEvent.click(screen.getByLabelText(foreign.name)); expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    fireEvent.click(screen.getByLabelText(foreign.name)); fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/binding/save', binding: expect.objectContaining({area_id: rooms[0].area_id, action: 'toggle_lights', params: {entity_ids: [light.entity_id], on_behavior: {mode: 'brightness', brightness: 255}, ambient_first: ambient}})});
+  });
+  it('explicit opt-out restores legacy null area and removes ambient data without losing on behavior', async () => {
+    const {callWS} = await setup({rooms: targetRooms, lights: [light], bindings: [{...binding, action: 'toggle_lights', params: {entity_ids: [light.entity_id], ambient_first: ambient, on_behavior: {mode: 'brightness', brightness: 120}}}]});
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Zur Ambiente-Zeit zuerst Szene')).toBeChecked();
+    fireEvent.click(screen.getByLabelText('Zur Ambiente-Zeit zuerst Szene')); fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenCalledWith({type: 'lichtzentrale/binding/save', binding: expect.objectContaining({area_id: null, params: {entity_ids: [light.entity_id], on_behavior: {mode: 'brightness', brightness: 120}}})});
+  });
+  it('shows stale scene and invalid window for repair; offers only toggle actions', async () => {
+    await setup({rooms: targetRooms, lights: [light], bindings: [{...binding, params: {ambient_first: {...ambient, scene_id: 'test_deleted'}}}]});
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Ambiente-Szene')).toHaveValue('test_deleted'); expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Ambiente-Szene'), {target: {value: scenes[0].id}});
+    fireEvent.change(screen.getByLabelText('Ambiente Beginn: Versatz in Minuten'), {target: {value: '1441'}});
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Ambiente Beginn: Bezug'), {target: {value: 'none'}});
+    fireEvent.change(screen.getByLabelText('Ambiente Ende: Bezug'), {target: {value: 'none'}});
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Aktion'), {target: {value: 'turn_on_room'}});
+    expect(screen.queryByLabelText('Zur Ambiente-Zeit zuerst Szene')).not.toBeInTheDocument();
+  });
+  it('keeps dialog pending and retains failed saves without claiming persistence', async () => {
+    let rejectSave: (reason: Error) => void = () => {};
+    const callWS = makeApi({rooms: targetRooms, lights: [light], bindings: [{...binding, params: {ambient_first: ambient}}]});
+    const wrapped = vi.fn((request: Request) => request.type === 'lichtzentrale/binding/save' ? new Promise((_, reject) => {rejectSave = reject;}) : callWS(request));
+    render(<Buttons hass={{callWS: wrapped} as Hass}/>);
+    await screen.findByRole('region', {name: 'Szenenzyklus und Einschalten'});
+    for (const summary of screen.queryAllByText('Alle Ereignisse und gespeicherte Belegungen')) fireEvent.click(summary);
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
+    expect(screen.queryByText('Belegung in Home Assistant gespeichert.')).not.toBeInTheDocument();
+    await act(async () => rejectSave(new Error('Testfehler')));
+    expect(screen.getByRole('alert')).toHaveTextContent('Testfehler'); expect(screen.getByLabelText('Ambiente-Szene')).toHaveValue(ambient.scene_id);
+    expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeEnabled();
+  });
+});

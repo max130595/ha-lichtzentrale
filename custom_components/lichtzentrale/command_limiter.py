@@ -30,11 +30,20 @@ class DynamicCommandLimiter:
             async with self.entity_lock(entity):
                 if not guard(entity):
                     return "skipped", entity
-                self.last_command = loop.time()
+                async def send(call_domain, call_service, payload, call_context, effect_guard):
+                    if self.last_command is not None:
+                        await asyncio.sleep(max(0, self.last_command + COMMAND_SPACING - loop.time()))
+                    if not guard(entity) or (effect_guard is not None and not effect_guard()):
+                        from homeassistant.exceptions import ServiceValidationError
+
+                        raise ServiceValidationError("Der Lampenauftrag wurde inzwischen ersetzt.")
+                    self.last_command = loop.time()
+                    return await hass.services.async_call(call_domain, call_service, payload, blocking=True, context=call_context)
+
                 try:
-                    await hass.services.async_call(
-                        domain, service, params, blocking=True, context=context
-                    )
+                    from .effects import async_call
+
+                    await async_call(hass, domain, service, params, context, guard=guard, command_call=send)
                 except asyncio.CancelledError:
                     raise
                 except Exception:

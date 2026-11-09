@@ -19,7 +19,7 @@ def validate_lamp_settings(hass, value, targets, palette=None, *, capabilities=T
         raise ServiceValidationError("Lampenwerte dürfen die Ziele der Szene nicht erweitern.")
     result = {}
     for entity_id, raw in value.items():
-        if not isinstance(raw, dict) or set(raw) - {"mode", "brightness", "xy", "color_temp_kelvin", "palette_index", "moon"}:
+        if not isinstance(raw, dict) or set(raw) - {"mode", "brightness", "xy", "color_temp_kelvin", "palette_index", "moon", "effect"}:
             raise ServiceValidationError("Ungültige Einstellung einer Lampe.")
         mode = raw.get("mode", "cycle")
         if not isinstance(mode, str) or mode not in MODES:
@@ -36,6 +36,12 @@ def validate_lamp_settings(hass, value, targets, palette=None, *, capabilities=T
         if index is not None and any(raw.get(k) is not None for k in ("xy", "color_temp_kelvin")):
             raise ServiceValidationError("Bitte genau eine feste Farbe auswählen.")
         state = hass.states.get(entity_id)
+        from .effects import validate_effect
+
+        if raw.get("effect") is not None:
+            item["effect"] = validate_effect(state, raw["effect"]) if capabilities else raw["effect"]
+            if not isinstance(item["effect"], str):
+                raise ServiceValidationError("Ungültiger Effekt.")
         modes = set(state.attributes.get("supported_color_modes") or []) if state else set()
         onoff = entity_id.startswith("switch.") or not (modes - {"onoff", "unknown"})
         if capabilities and onoff and (item["brightness"] is not None or mode == "moon" or any(k in raw for k in ("xy", "color_temp_kelvin", "palette_index"))):

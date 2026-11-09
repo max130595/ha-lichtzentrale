@@ -166,7 +166,7 @@ async def async_apply_palette(
         if only_moon and mode != "moon":
             continue
         if tick_area_id is not None and (
-            mode in {"off", "fixed"} or not modes - {"onoff"}
+            setting.get("effect") or mode in {"off", "fixed"} or not modes - {"onoff"}
             or (mode == "moon" and not moon_due and not (moon_breath and setting.get("moon", {}).get("breath")))
         ):
             continue
@@ -216,6 +216,8 @@ async def async_apply_palette(
             params["brightness"] = base
             if attributes.get("supported_features", 0) & LightEntityFeature.TRANSITION:
                 params["transition"] = transition
+        if setting.get("effect"):
+            params["_effect"] = setting["effect"]
         calls.append(("light", "turn_on", params))
     if tick_area_id is not None:
         # Positional guard keeps the compatibility boundary straightforward.
@@ -242,7 +244,7 @@ async def async_apply_palette(
             key, entity = await limiter(hass).dispatch(hass, *call, context, still_allowed)
             result.setdefault(key, []).append(entity)
         return result
-    return await async_dispatch(hass, calls, result["skipped"], context, guard=still_allowed)
+    return await async_dispatch(hass, calls, result["skipped"], context, guard=still_allowed, effect_guard=still_allowed)
 
 
 async def _async_dispatch_tick(hass, store, area_id, calls, skipped, context, tick_guard=None):

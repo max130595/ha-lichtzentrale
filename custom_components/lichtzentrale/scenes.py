@@ -260,8 +260,11 @@ def validate_scene(hass, store, scene, *, palette_override=None):
     night = scene.get("night", existing.get("night", False) if existing else False)
     if type(night) is not bool:
         _error("Die Nachtlicht-Kennzeichnung muss ein Wahrheitswert sein.")
+    from .scene_scripts import validate_start_script
+
     result = {
         **deepcopy(existing or {}),
+        "start_script": validate_start_script(hass, scene.get("start_script", existing.get("start_script") if existing else None)),
         "night": night,
         "id": existing["id"] if existing else str(uuid4()),
         "name": _name(scene.get("name")),
@@ -344,7 +347,10 @@ async def async_apply_scene_draft(hass, store, scene, context=None, *, palette_o
 
 
 async def async_snapshot(hass, store, area_id, name):
+    from .effects import STOP_EFFECTS, effect_list
+
     lights = {}
+    lamp_settings = {}
     skipped = []
     for entity_id in room_targets(hass, store, area_id):
         state = hass.states.get(entity_id)
@@ -368,8 +374,11 @@ async def async_snapshot(hass, store, area_id, name):
                 if xy is not None:
                     value["xy"] = list(xy)
         lights[entity_id] = value
+        effect = attrs.get("effect")
+        if value["on"] and effect in effect_list(state) and effect not in STOP_EFFECTS:
+            lamp_settings[entity_id] = {"mode": "cycle", "effect": effect}
     scene = await async_save_scene(
-        hass, store, {"name": name, "area_id": area_id, "kind": "snapshot", "lights": lights}
+        hass, store, {"name": name, "area_id": area_id, "kind": "snapshot", "lights": lights, "lamp_settings": lamp_settings}
     )
     return {"scene": scene, "skipped": skipped}
 
@@ -400,6 +409,9 @@ async def async_apply_scene(
 ):
     """Serialize recalls per room; dispatch each recall's individual lamps in parallel."""
     initial = _scene(store, scene_id)
+    from .effects import invalidate
+
+    invalidate(hass, room_targets(hass, store, initial["area_id"]))
     async with locked_room(hass, store, initial["area_id"]):
         return await async_apply_scene_locked(
             hass, store, scene_id, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard
@@ -474,16 +486,18 @@ async def _async_pause_subset_adaptive(hass, store, targets, context, dispatch_g
         )
 
 
-async def async_apply_scene_subset(hass, store, scene_id, entity_ids, context=None, *, transition=None, guard=None, dispatch_guard=None):
+async def async_apply_scene_subset(hass, store, scene_id, entity_ids, context=None, *, transition=None, guard=None, dispatch_guard=None, start_actions=True):
     """Recall an inherited scene only on shared lamps, without a broader loop.
 
     Keep palette placement relative to the complete source. Hue is projected to
     individual light actions, never hue.activate_scene. Unsupported native Hue
     actions fail closed. A partial recall must not mark the source as recalled.
     """
+    from .effects import invalidate
     from .selected_lights import _locked_targets
     from .zones import contains
 
+    invalidate(hass, entity_ids)
     initial = _scene(store, scene_id)
     if initial["kind"] == "seasonal":
         from .seasonal_scenes import decorate_result, guard_resolution, resolve_scene
@@ -492,7 +506,9 @@ async def async_apply_scene_subset(hass, store, scene_id, entity_ids, context=No
         def stable_season():
             return guard_resolution(hass, store, initial, concrete["id"], dispatch_guard)
         result = await async_apply_scene_subset(hass, store, concrete["id"], entity_ids, context,
-            transition=transition, guard=guard, dispatch_guard=stable_season)
+            transition=transition, guard=guard, dispatch_guard=stable_season, start_actions=False)
+        if start_actions and result.get("applied"):
+            await _start_actions(hass, initial, context or Context(), result, script=initial.get("start_script") or concrete.get("start_script"), ownership=False)
         return decorate_result(result, initial, info)
     area_id = initial["area_id"]
     async with _locked_targets(hass, store, entity_ids):
@@ -557,7 +573,7 @@ async def async_apply_scene_subset(hass, store, scene_id, entity_ids, context=No
                         or (entity in captured and state is not captured[entity])):
                     skipped.append(entity)
                     continue
-                payload = light_service_data(state, transition=transition, **values[entity])
+                payload = light_service_data(state, transition=transition, effect=scene.get("lamp_settings", {}).get(entity, {}).get("effect"), **values[entity])
                 if payload is None:
                     skipped.append(entity)
                     continue
@@ -568,16 +584,18 @@ async def async_apply_scene_subset(hass, store, scene_id, entity_ids, context=No
                 stable()
                 return hass.states.get(entity) is prepared[entity]
 
-            result = await async_dispatch(hass, calls, skipped, context, guard=allowed)
+            result = await async_dispatch(hass, calls, skipped, context, guard=allowed, effect_guard=lambda entity: stable())
             if scene["kind"] == "hue" and any(e not in values for e in targets):
                 result.setdefault("notes", []).append("Einzelne Hue-Szenenwerte lassen sich nicht sicher auf gemeinsame Lampen übertragen.")
         if result.get("applied") and (scene.get("dynamic", {}).get("enabled") or (
                 scene["kind"] == "hue" and hue_state.attributes.get("is_dynamic"))):
             result.setdefault("notes", []).append("Die geerbte Szene wurde nur auf den gemeinsamen Lampen statisch wiederhergestellt.")
+        if start_actions and result.get("applied"):
+            await _start_actions(hass, scene, context or Context(), result, script=scene.get("start_script"), ownership=False)
         return result
 
 
-async def async_apply_scene_locked(hass, store, scene_id, context=None, *, transition=None, guard=None, dispatch_guard=None, scene_override=None, palette_override=None, preview_targets=None, persist=True):
+async def async_apply_scene_locked(hass, store, scene_id, context=None, *, transition=None, guard=None, dispatch_guard=None, scene_override=None, palette_override=None, preview_targets=None, persist=True, start_actions=True):
     """Recall while the caller holds this room's scene lock (including room-on)."""
     context = context or Context()
     check_execution_guard(guard)
@@ -591,13 +609,15 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
             return guard_resolution(hass, store, scene, concrete["id"], dispatch_guard)
         result = await async_apply_scene_locked(hass, store, concrete["id"], context,
             transition=transition, guard=guard, dispatch_guard=stable_season, persist=persist,
-            preview_targets=preview_targets, palette_override=palette_override)
+            preview_targets=preview_targets, palette_override=palette_override, start_actions=False)
         incomplete = [e for e in result.get("skipped", [])
                       if concrete["kind"] != "palette" or not e.startswith("switch.")]
         if persist and result.get("applied") and not result.get("failed") and not incomplete:
             # Keep the selectable wrapper on the tile, while dynamics owns the concrete snapshot.
             stable_season()
             await store.async_set_last_scene(scene["area_id"], scene_id)
+        if persist and start_actions and result.get("applied"):
+            await _start_actions(hass, scene, context, result, script=scene.get("start_script") or concrete.get("start_script"))
         return decorate_result(result, scene, info)
     area_id = scene["area_id"]
     _area(hass, area_id, store)
@@ -690,7 +710,7 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
                 continue
             value = snapshot_values(scene, entity_id)
             validate_control_options(**value)
-            payload = light_service_data(state, transition=transition, **value)
+            payload = light_service_data(state, transition=transition, effect=scene.get("lamp_settings", {}).get(entity_id, {}).get("effect"), **value)
             if payload is None:
                 skipped.append(entity_id)
             else:
@@ -705,7 +725,15 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
                 return False
             return hass.states.get(entity_id) is prepared[entity_id]
 
-        result = await async_dispatch(hass, commands, skipped, context, guard=still_allowed)
+        def effect_allowed(entity_id):
+            check_execution_guard(dispatch_guard)
+            try:
+                _targets(hass, store, area_id, [entity_id])
+            except ServiceValidationError:
+                return False
+            return True
+
+        result = await async_dispatch(hass, commands, skipped, context, guard=still_allowed, effect_guard=effect_allowed)
     # Palette switches are intentionally excluded, not incomplete light recalls.
     incomplete = [
         e
@@ -724,4 +752,18 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
                 scene, context, result["applied"], initial_transition=transition,
                 persist=persist, palette_override=palette_override, dispatch_guard=dispatch_guard
             )
+    if persist and start_actions and result.get("applied"):
+        await _start_actions(hass, scene, context, result, script=scene.get("start_script"))
     return result
+
+
+async def _start_actions(hass, scene, context, result, *, script, ownership=True):
+    """A real scene start owns its light result, then optionally launches one script."""
+    tracker = hass.data.get(DOMAIN, {}).get("ambient_first")
+    if tracker is not None and ownership:
+        tracker.scene_started(scene, context, result)
+    if script:
+        from .scene_scripts import async_run_start_script
+
+        if not await async_run_start_script(hass, script, context):
+            result.setdefault("notes", []).append("Das zusätzliche Skript konnte nicht gestartet werden. Die Szene bleibt aktiv.")

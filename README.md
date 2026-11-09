@@ -4,7 +4,7 @@ Eine lokale Licht-App als Custom Integration für Home Assistant. Oberfläche au
 für schmale Bildschirme ausgelegt. Kein Cloud-Konto und keine zusätzlichen
 Python-Abhängigkeiten zur Laufzeit.
 
-**Stand: Stufe 5d (Entwurf zur Abnahme), Version 0.5.1.** Fünf Reiter:
+**Stand: Stufe 5e (Entwurf zur Abnahme), Version 0.5.2.** Fünf Reiter:
 Zuhause, Farben, Automationen, Taster und Mehr. 37 originale Stimmungen, eigene Paletten
 und ein Live-Szenen-Editor mit Helligkeit und Verhalten pro Lampe ergänzen Räume, Zonen,
 Taster und Automationen. Dynamik kann nach einem Neustart fortgesetzt werden. Alle
@@ -45,6 +45,31 @@ nur den Einschaltbefehl. `switch.*`-Lichtschalter bleiben bei statischen und dyn
 Paletten unverändert; Snapshot-Szenen stellen ihren gespeicherten An/Aus-Wert her.
 Nicht erreichbare oder unbekannte Lampen werden übersprungen
 und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
+
+## Effekte, Ambiente und Skripte
+
+- Im Szenen-Editor können Lampen mit passender Fähigkeit einen **Effekt** aus ihrer
+  aktuellen Home-Assistant-Liste erhalten. Farbe/Helligkeit kommen zuerst, der Effekt
+  etwa zwei Sekunden später separat. Auch dimmbare Filamentlampen können Effekte haben;
+  reine An/Aus-Lichter nicht. Effektlampen nehmen nicht am Farbwechsel teil. Wechsel zu
+  einer Szene ohne Effekt und Ausschalten stoppen den Effekt vorher.
+- Taster mit **Ausgewählte Lampen umschalten** oder **Raum umschalten** bieten
+  **Zur Ambiente-Zeit zuerst Szene**. Innerhalb des Uhrzeit-/Sonnenfensters startet der
+  erste Druck bei ausgeschalteten Zielen die Szene im ganzen Raum oder der Zone.
+  Der nächste Druck beendet das Ambiente, schaltet die Tastenziele nach ihrem normalen
+  Einschaltverhalten ein und die übrigen Containerlampen aus. Danach schaltet der nächste
+  Druck aus. Handbedienung beendet die Ambiente-Erkennung. Außerhalb des Fensters bleibt
+  das bisherige Verhalten erhalten.
+- Jede Szene kann ein vorhandenes **Home-Assistant-Skript** nach den Lichtbefehlen starten.
+  Pro Szenenstart höchstens einmal, nicht in der Live-Probe oder beim Fortsetzen nach einem
+  Neustart. Bei Jahreszeiten-Szenen gilt deren eigenes Skript, sonst das der aufgelösten
+  Szene. Skriptfehler werden protokolliert und machen die Lichtaktion nicht rückgängig.
+  Die Integration enthält keine Musikdienst-Logik; Inhalt und Wirkung des gewählten
+  HA-Skripts bleiben beim Nutzer.
+
+Die Erweiterungen bleiben serverseitig und benötigen keine Datenmigration. Prüfungen,
+Grenzen und die drei echten 390-Pixel-Browseransichten stehen im
+[Stufe-5e-Testplan](docs/STUFE_5E_TESTPLAN.md). Keine Live-Installation durch diese Lieferung.
 
 ## Dimm-Untergrenze
 

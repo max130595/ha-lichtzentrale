@@ -4,7 +4,7 @@ import {displayName} from './display';
 import type {BindingTimeWindow, MotionBoundary, Scene} from './types';
 
 const integer = (value: number, min: number, max: number) => Number.isInteger(value) && value >= min && value <= max;
-const boundaryValid = (value: MotionBoundary | null) => value === null || (value.type === 'time'
+export const boundaryValid = (value: MotionBoundary | null) => value === null || (value.type === 'time'
   ? /^([01]\d|2[0-3]):[0-5]\d$/.test(value.value)
   : ['sunrise', 'sunset'].includes(value.event) && integer(value.offset_min, -1440, 1440));
 export const newBindingTimeWindow = (): BindingTimeWindow => ({
