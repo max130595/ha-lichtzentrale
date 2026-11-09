@@ -12,7 +12,7 @@ Bad oben in Tests oder Beispielen, Schalter (`switch`) werden nie gedimmt.
 | 5 Grundhelligkeit | `stufe-5-grundhelligkeit` | erledigt (PR #10, #11) |
 | 5b Einfache Bedienung wie die Hue-App | `stufe-5b-einfach` | erledigt (PR #12, am echten System getestet 09.11.) |
 | 5c Stimmungen, eigene Paletten, Helligkeit pro Lampe | `stufe-5c-paletten` | zusammengeführt (PR #13, Review-Korrekturen K1/K2), Abnahme am echten System läuft |
-| 5d Dimmen schaltet nie aus | `stufe-5d-dimmgrenze` | offen – **als Nächstes**, klein |
+| 5d Dimmen schaltet nie aus + Hue-Effekte in Szenen | `stufe-5d-dimmgrenze` | offen – **als Nächstes** |
 | 6 Anwesenheitssimulation | `stufe-6-urlaub` | offen |
 | 7 Sicherung, „Alles aus“, Öffnung für andere | `stufe-7-sicherung` | offen |
 
@@ -237,7 +237,7 @@ Synthetisch in Tests (keine echten Entity-IDs). Fertig, wenn:
 6. Bestehende Szenen, Zeitpläne, Taster und Zonen unverändert weiterlaufen.
 Nach dem Draft-PR stoppen.
 
-## Stufe 5d – Dimmen schaltet nie aus
+## Stufe 5d – Dimmen schaltet nie aus, Hue-Effekte in Szenen
 
 Kleiner Nachtrag aus der Abnahme von 5c am 09.11. Problem: Wer mit einem Taster oder Drehring
 herunterdimmt, schaltet die Lampe am Ende ganz aus. Grund ist `brightness_step_pct: -10`, denn bei
@@ -259,7 +259,19 @@ absichtlich nur eingeschaltete Lampen anfasst.
    Helligkeit 3 plus `dim_down` ergibt keinen Befehl. Eine Lampe bei 50 % plus `dim_down` ergibt den
    normalen Schritt. Gemischte Auswahl mit einer Lampe an der Grenze und einer darüber. Halten mit
    Wiederholung. Ungültige Einstellwerte. Bestehende Dimm-Tests bleiben grün.
-6. Lieferung als Git-Bundle auf `stufe-5d-dimmgrenze` mit Basis aktuelles `main`, Version 0.5.1,
+6. **Hue-Effekte in Szenen (Nachtrag 09.11.):** Lampen, die `effect_list` melden, zum Beispiel ein Hue-Lichtband
+   über Zigbee2MQTT mit sparkle, candle, fireplace, glisten, enchant oder cosmos, können im Szenen-Editor
+   pro Lampe zusätzlich einen Effekt bekommen. Es zählen nur Werte aus der aktuellen `effect_list` der Lampe.
+   Anzeige auf Deutsch: Funkeln, Kerze, Kamin, Glitzern, Verzaubern, Kosmos usw.
+   Ausführung: zuerst Farbe und Helligkeit, nach etwa 2 s ein eigener `light.turn_on` mit `effect`.
+   Beides im selben Befehl ging am echten System nicht, der Effekt startete nicht.
+   Beim Wechsel auf eine Szene ohne Effekt oder beim Ausschalten wird vorher `stop_hue_effect` gesendet,
+   falls die Lampe den Wert kennt, sonst `none`. Eine Lampe mit Effekt nimmt nicht am Farbwechsel teil
+   (wie „feste Farbe“). Gilt für Momentaufnahme- und Palettenszenen, also auch für Jahreszeiten-Szenen.
+   Die Live-Probe zeigt den Effekt. Tests: Effekt nicht in der Liste → abgelehnt; Ablauf Farbe → Effekt;
+   Stopp beim Szenenwechsel; reine An/Aus-Lampen ohne Effekt.
+   Vorlage am echten System: Schlafzimmer-Band, Ruby xy 0.55/0.25, Helligkeit 140, Funkeln.
+7. Lieferung als Git-Bundle auf `stufe-5d-dimmgrenze` mit Basis aktuelles `main`, Version 0.5.1,
    Screenshot der Einstellung bei 390 px. Keine Vorschauphase.
 
 ## Stufe 6 – Anwesenheitssimulation
