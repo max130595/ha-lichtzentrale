@@ -57,7 +57,7 @@
       rooms: [{area_id: 'fixture_living', type: 'living', weight: 3, on_behavior: {mode: 'scene', scene_id: 'fixture-reading'}}, {area_id: 'fixture_corridor', type: 'passage', weight: 1, on_behavior: {mode: 'brightness', brightness: 102}}],
       evening: {start: {type: 'sun', event: 'sunset', offset_min: -15}, end_earliest: {type: 'time', value: '22:30'}, end_latest: {type: 'time', value: '23:30'}},
       morning: {enabled: true, start: {type: 'time', value: '06:30'}, end: {type: 'time', value: '07:30'}},
-      max_rooms: 3, learn_history: false, notify_service: null,
+      max_rooms: 3, safety_off: true, learn_history: false, notify_service: null,
     }, plan: [], next_switch: null,
   };
   const plan = () => {

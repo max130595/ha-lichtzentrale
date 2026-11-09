@@ -35,7 +35,8 @@ Räume und Zonen mit freigegebenen Lampen sind frei wählbar. Pro Ziel:
 Der globale Höchstwert gleichzeitiger Räume beträgt standardmäßig 3 und ist von 1 bis
 20 einstellbar. Überlappende Zonen übernehmen nicht nochmals bereits eingeschaltete
 Lampen. Die Simulation schaltet nur zu Beginn ausgeschaltete, ausdrücklich freigegebene
-Lampen; bereits eingeschaltete Lampen werden nicht übernommen oder bei Ende ausgeschaltet.
+Lampen; bereits eingeschaltete Lampen werden nicht übernommen. Die separat aktivierte
+Sicherheitsabschaltung am Abschnittsende darf sie dennoch ausschalten, siehe unten.
 
 ## Planung
 
@@ -81,9 +82,9 @@ damit eigene Farbe-/Stoppbefehle den anschließenden Effekt nicht fälschlich ve
 
 Besitz nach Neustart wird nur mit unverändertem Live-Kontext und unveränderter physischer
 Zuordnung wieder übernommen, nicht aus gleicher Helligkeit/Farbe geraten. Lässt sich
-Besitz nicht mehr beweisen, bleibt die Lampe unangetastet. Das kann bei einem vollständigen
-HA-Neustart eine früher simulierte Lampe eingeschaltet lassen; Sicherheit vor dem
-Ausschalten inzwischen fremd bedienter Lampen hat Vorrang. Persistierte alte Dynamik wird
+Besitz nicht mehr beweisen, bleibt die Lampe beim normalen Aufräumen unangetastet.
+Die ausdrücklich beauftragte Sicherheitsabschaltung darf sie am Abschnittsende dennoch
+ausschalten. Taster-Ausnahmen und aktuelle Freigaben bleiben dabei maßgeblich. Persistierte alte Dynamik wird
 bei aktivem Urlaubsmodus nicht automatisch wiederbelebt. Simulationsdynamik selbst ist
 nicht persistent.
 
@@ -140,7 +141,52 @@ Zusätzliche Abschlussregressionen prüfen dynamische Szenen mit gemischten Lamp
 Lichtschaltern, inaktive Enddaten, Probelauf über Mitternacht sowie sofortige
 Abbruchsperre und sichtbare Wiederholbarkeit nach abgebrochenem/fehlgeschlagenem Stoppen.
 
-## Nachgewiesener Stand
+## Review-Korrekturen K1 und K2
+
+Ausgangspunkt ist der geprüfte Stand `3d4d84f`; Branch und Version 0.6.0 bleiben gleich.
+Keine weiteren Funktionen oder Änderungen an den Zeitplänen.
+
+- **K1:** `on → unavailable/unknown → on` mit neuen Kontexten erhält den Besitz.
+  Echte Ein/Aus-Wechsel und fremde Dienste geben die Lampe weiterhin frei. Der
+  Verbindungsausfall wird nicht mit einer Handbedienung verwechselt.
+- **K2:** `safety_off` ist standardmäßig `true`, auch für ältere gespeicherte
+  Konfigurationen ohne dieses Feld. Eine explizit ausgeschaltete Option bleibt aus.
+  Die Oberfläche verwendet exakt **Am Ende jedes Abschnitts alles ausschalten (empfohlen)**.
+- Sicherheitsabschaltung am konfigurierten Abschnittsende, zusätzlich einmalig nach
+  zehn Minuten. Nur solange der reguläre Urlaubsmodus aktiv ist, niemals im Probelauf.
+  Die Auswahl und Freigabe werden vor dem Befehl erneut geprüft. Ziele außerhalb
+  der Auswahl bleiben unberührt. Das gilt auch für unbekannten Besitz nach Neustart.
+- Im Abschnitt per Taster bediente Räume bleiben beim ersten Lauf und Nachlauf
+  ausgenommen. Abschnittsgrenzen, ausgeführte Läufe und Ausnahmen werden für den
+  Neustart erhalten. Der nächste Abschnitt hat seine eigenen Ausnahmen.
+- Ein verspäteter Timer oder kurzer Neustart darf den einmaligen Nachlauf bis zu
+  zehn Minuten nach dessen Fälligkeit ausführen, höchstens bis Abschnittsende +20 Minuten.
+  Ältere offene Läufe werden ohne Befehle verworfen; es gibt keine tagealte Nachholung.
+- Geänderte noch nicht begonnene Zeitfenster werden neu berechnet. Bereits begonnene
+  Abschnitte behalten ihren festgelegten Abschluss und ihre Ausnahmen; ein früheres
+  Enddatum begrenzt sie weiterhin. Am Enddatum erfolgt eine fällige Abschaltung noch
+  vor dem Deaktivieren, danach kein Nachlauf mehr.
+- Tatsächlich ausgeschaltete Lampen ohne Simulationsbesitz erzeugen einen Protokollhinweis.
+
+### Nachgewiesener Korrekturstand
+
+- **1.471 Python-Tests bestanden**, einschließlich 43 neuer K1/K2-Sicherheitsfälle
+  (reguläre HA-Fixtures 2026.10.4).
+- **253 Frontendtests in 18 Dateien bestanden**, TypeScript, ESLint und Ruff fehlerfrei.
+- Alle fünf nativen Smoke-Prüfungen auf **Home Assistant 2026.11.0** bestanden.
+  Die erweiterte Stufe-6-Prüfung verwendet echte Zustandsereignisse und Dienste für
+  K1 sowie synthetisch fällige Abschnittsdatensätze für K2. Sie wartet nicht zehn reale
+  Minuten; Fristen, Nachlauf und Neustart sind in den Zeittests abgedeckt.
+- Zweimal bytegleicher Produktionsbuild; nur die drei bekannten Größenhinweise.
+  Frontend-SHA-256: `86fdb922769211d544cf798f55eb4ef638f71fb5c4ad7c8d00ee0dd1d35e29d9`.
+- Unabhängige fokussierte Prüfung: Ausnahmen bei überlappenden Zonen mit fehlendem
+  Mitglied, künftige Fensteränderung, Neustart und einmaliger verspäteter Nachlauf bestanden.
+- Bundle-Prüfung und separater Import mit Commit-/Tree-Vergleich vor Lieferung.
+  Keine GitHub-Veröffentlichung, CI-Auslösung oder Live-Aktion.
+
+Die folgenden Browseraufnahmen und alten Laufzahlen dokumentieren den ursprünglichen Stand.
+
+## Nachgewiesener ursprünglicher Stand
 
 - Python: **1.415 Tests bestanden** (HA-Fixtures 2026.10.4).
 - Frontend: **249 Tests in 18 Dateien bestanden** mit zwei Vitest-Workern.
@@ -160,7 +206,10 @@ Keine externe GitHub-CI, hassfest-/HACS-Prüfung oder Live-Abnahme wird ausgelö
 
 ## Browseransichten
 
-Originale und Messprotokoll liegen unter `docs/screenshots/stufe6/`.
+Originale und Messprotokoll des ursprünglichen Stands `3d4d84f` liegen unter
+`docs/screenshots/stufe6/`. Sie enthalten noch nicht den neuen Schalter `safety_off`.
+Für diese ausschließlich auf K1/K2 begrenzte Nachlieferung wurden keine neuen
+Browseraufnahmen erstellt; der neue Schalter wird in den Frontendtests geprüft.
 `scripts/qa_stage6_capture.cjs` prüft das echte produktive React-Panel mit dem synthetischen
 Transport `scripts/qa_stage6_fixture.js`: Karte, Räume, Zeitfenster, Plan und Probelauf,
 Speichern/Fehler/Wiederholen, Enddatum, Navigation und horizontalen Überlauf. Es besteht
@@ -186,8 +235,8 @@ In einem sauberen Checkout, ohne fremde Änderungen zu überschreiben:
 
 ```sh
 git fetch origin main
-git bundle verify /Pfad/ha-lichtzentrale-stufe-6-0.6.0.bundle
-git fetch /Pfad/ha-lichtzentrale-stufe-6-0.6.0.bundle stufe-6-urlaub
+git bundle verify /Pfad/ha-lichtzentrale-stufe-6-0.6.0-k1-k2.bundle
+git fetch /Pfad/ha-lichtzentrale-stufe-6-0.6.0-k1-k2.bundle stufe-6-urlaub
 git switch -c stufe-6-review FETCH_HEAD
 ```
 

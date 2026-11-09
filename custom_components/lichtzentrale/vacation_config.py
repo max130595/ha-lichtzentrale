@@ -23,6 +23,7 @@ DEFAULT_VACATION_CONFIG = {
         "end": {"type": "time", "value": "07:30"},
     },
     "max_rooms": 3,
+    "safety_off": True,
     "learn_history": False,
     "notify_service": None,
 }
@@ -56,9 +57,14 @@ def validate_vacation_config(hass, store, raw):
     from .rooms import room_targets
     from .zones import validate_area
 
-    if not isinstance(raw, dict) or set(raw) != set(DEFAULT_VACATION_CONFIG):
+    keys = set(DEFAULT_VACATION_CONFIG)
+    if not isinstance(raw, dict) or set(raw) not in (keys, keys - {"safety_off"}):
         raise ServiceValidationError("Ungültige Einstellungen für den Urlaubsmodus.")
     result = deepcopy(raw)
+    # Older clients may omit the new option; an explicit False must be preserved.
+    result.setdefault("safety_off", True)
+    if type(result["safety_off"]) is not bool:
+        raise ServiceValidationError("Am Abschnittsende ausschalten muss ein Ein/Aus-Wert sein.")
     if type(raw["max_rooms"]) is not int or not 1 <= raw["max_rooms"] <= 20:
         raise ServiceValidationError("Bitte 1 bis 20 gleichzeitige Räume wählen.")
     if type(raw["learn_history"]) is not bool:

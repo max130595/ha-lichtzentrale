@@ -122,12 +122,23 @@ async def run(directory):
         assert [(call.service, call.data["entity_id"]) for call in calls] == [("turn_on", lamp)]
         assert hass.states.get(lamp).state == "on"
         assert hass.states.get(preexisting).attributes["brightness"] == 80
+        # Real state events with fresh contexts model a short Zigbee reconnect.
+        # The same ON state must retain ownership until the interval is stopped.
+        owned_attributes = dict(hass.states.get(lamp).attributes)
+        for transient in ("unavailable", "unknown"):
+            hass.states.async_set(lamp, transient, {}, context=Context())
+            await hass.async_block_till_done()
+            assert lamp in manager._owned
+        hass.states.async_set(lamp, "on", owned_attributes, context=Context())
+        await hass.async_block_till_done()
+        assert lamp in manager._owned
         await manager.async_set_enabled(False)
         await hass.async_block_till_done()
         assert [(call.service, call.data["entity_id"]) for call in calls] == [("turn_on", lamp), ("turn_off", lamp)]
         assert hass.states.get(lamp).state == "off" and hass.states.get(preexisting).state == "on"
         assert not manager.paused and manager._timer is None
         print("PASS native trial: real five-minute deadline/timer, explicit stop, only newly-on owned lamp off")
+        print("PASS native K1: ON/unavailable/unknown/ON with new contexts retains ownership and switches off")
 
         calls.clear()
         await manager.async_test()
@@ -154,6 +165,51 @@ async def run(directory):
         assert hass.states.get(preexisting).state == "on"
         print("PASS native revoked grant: no shutdown commands to removed lamp or preexisting-on lamp")
 
+        # K2 uses actual native service dispatch with synthetic due section
+        # records. Ten-minute scheduling and restart timing are unit-tested;
+        # this smoke does not wait ten real minutes or patch HA's clock.
+        outside = "light.fixture_6_outside"
+        for entity in (lamp, preexisting, outside):
+            hass.states.async_set(entity, "on", attributes, context=Context())
+        await store.async_set_lights([lamp, preexisting, outside])
+        await manager.async_save_config(config)
+        await manager.async_set_enabled(True)
+        await hass.async_block_till_done()
+        assert not manager._owned
+        now = dt_util.utcnow()
+        section_id = f"{dt_util.as_local(now).date().isoformat()}:evening"
+        manager._sections = {section_id: {
+            "section": "evening", "start": (now - timedelta(hours=1)).isoformat(),
+            "end": (now - timedelta(seconds=1)).isoformat(),
+            "end_done": False, "retry_done": False,
+        }}
+        calls.clear()
+        async with manager._lock:
+            await manager._safety_tick(now)
+        await hass.async_block_till_done()
+        assert {call.data["entity_id"] for call in calls} == {lamp, preexisting}
+        assert all(call.service == "turn_off" for call in calls)
+        assert hass.states.get(outside).state == "on"
+        assert manager._sections[section_id]["end_done"]
+        assert not manager._sections[section_id]["retry_done"]
+        hass.states.async_set(preexisting, "on", attributes, context=Context())
+        await hass.async_block_till_done()
+        now = dt_util.utcnow()
+        manager._sections[section_id]["end"] = (now - timedelta(minutes=10, seconds=1)).isoformat()
+        calls.clear()
+        async with manager._lock:
+            await manager._safety_tick(now)
+        assert [(call.service, call.data["entity_id"]) for call in calls] == [("turn_off", preexisting)]
+        assert manager._sections[section_id]["retry_done"]
+        hass.states.async_set(preexisting, "on", attributes, context=Context())
+        await hass.async_block_till_done()
+        calls.clear()
+        async with manager._lock:
+            await manager._safety_tick(dt_util.utcnow())
+        assert not calls and hass.states.get(preexisting).state == "on"
+        await manager.async_set_enabled(False)
+        print("PASS native K2: unknown-ownership selected lamps off, outside untouched, due retry once only")
+
         # Empty configured selection permits an enabled state without real light
         # actions; the synthetic named notification service is still exercised.
         notification_config = default_vacation_config()
@@ -179,4 +235,4 @@ if __name__ == "__main__":
     with TemporaryDirectory(prefix="lichtzentrale-stage6-") as directory:
         asyncio.run(run(directory))
     print("PASS Home Assistant 2026.11.0 isolated native smoke; no physical devices or timing patches")
-    print("Scope: trial start + explicit stop only; five-minute automatic timeout is covered by unit tests")
+    print("Timing scope: trial timeout and ten-minute safety schedule are unit-tested; native safety uses due records")

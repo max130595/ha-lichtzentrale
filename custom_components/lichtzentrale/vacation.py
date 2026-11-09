@@ -14,6 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .rooms import room_targets
+from .vacation_planner import SAFETY_LATE_GRACE, SAFETY_RETRY_DELAY
 
 _LOGGER = logging.getLogger(__name__)
 _UNSET = object()
@@ -45,6 +46,7 @@ class VacationManager:
         self._owned = {}
         self._contexts = set()
         self._excluded = set()
+        self._sections = {}
         self._day = None
         self._test_until = None
         self._last_error = None
@@ -88,6 +90,11 @@ class VacationManager:
         from .lights import entity_area_id
         async with self._lock:
             saved = self.store.data.get("vacation", {}).get("runtime", {})
+            # Section clocks and button exclusions survive a restart, unlike
+            # unknown lamp ownership. Never replay a trial after restarting.
+            if self.store.data["vacation"].get("enabled"):
+                self._sections = deepcopy(saved.get("sections", {}))
+                self._excluded = {tuple(pair) for pair in saved.get("excluded", [])}
             for entity, record in saved.get("owned", {}).items():
                 state = self.hass.states.get(entity)
                 if (state and state.state == "on" and not state.attributes.get("restored")
@@ -125,7 +132,10 @@ class VacationManager:
                     await dynamic.stop(area)
 
     async def _persist(self):
-        await self.store.async_update_vacation({"runtime": {"owned": deepcopy(self._owned)}})
+        await self.store.async_update_vacation({"runtime": {
+            "owned": deepcopy(self._owned), "sections": deepcopy(self._sections),
+            "excluded": [list(pair) for pair in sorted(self._excluded)],
+        }})
         self._publish()
 
     def _arm(self, seconds):
@@ -146,6 +156,7 @@ class VacationManager:
         try:
             async with self._lock:
                 previous = self.paused
+                keep_sections = enabled and self.store.data["vacation"].get("enabled")
                 self._transitioning = True
                 try:
                     await self.store.async_update_vacation({"enabled": enabled, **({"until": until} if until is not _UNSET else {})})
@@ -154,7 +165,8 @@ class VacationManager:
                     self._pause_changed(True)
                     await self._stop_automatic_dynamics()
                     await self._cleanup()
-                    self._reset_plan()
+                    self._reset_plan(clear_sections=not keep_sections)
+                    await self._persist()
                 finally:
                     self._transitioning = False
                     self._pause_changed(self.paused)
@@ -182,16 +194,26 @@ class VacationManager:
 
     async def async_save_config(self, config, until=_UNSET):
         async with self._lock:
+            previous = self.config
             await self.store.async_update_vacation({"config": config, **({"until": until} if until is not _UNSET else {})})
+            # An edited future window must take effect. Started/completed
+            # sections retain their original endpoint and button exceptions.
+            changed = {name for name in ("morning", "evening") if previous[name] != self.config[name]}
+            now = dt_util.utcnow()
+            self._sections = {key: section for key, section in self._sections.items()
+                              if section["section"] not in changed or _instant(section["start"]) <= now}
             self._generation += 1
             await self._cleanup()
-            self._reset_plan()
+            self._reset_plan(clear_sections=False)
+            await self._persist()
         await self._tick()
         return self.status()
 
-    def _reset_plan(self):
+    def _reset_plan(self, *, clear_sections=True):
         self._plan, self._done, self._active = [], set(), {}
-        self._excluded.clear()
+        if clear_sections:
+            self._excluded.clear()
+            self._sections.clear()
         self._day = None
 
     async def async_test(self, context=None):
@@ -222,7 +244,7 @@ class VacationManager:
         return self.status()
 
     async def _build(self, now):
-        from .vacation_planner import build_plan
+        from .vacation_planner import build_plan, build_sections
         learned = None
         if self.config.get("learn_history"):
             from .vacation_history import async_learn_history
@@ -231,11 +253,17 @@ class VacationManager:
             except Exception:
                 _LOGGER.warning("Urlaubsmodus: Verlauf nicht verfügbar; Zufallsplan wird verwendet.")
         ongoing = [e for e in self._active.values() if _instant(e["end"]) > now]
-        self._plan = build_plan(self.hass, self.config, now, seed=secrets.randbits(64),
-                                until=self.store.data["vacation"].get("until"), learned=learned)
+        seed = secrets.randbits(64)
+        until = self.store.data["vacation"].get("until")
+        self._sections = build_sections(self.hass, self.config, now, seed=seed,
+                                        until=until, existing=self._sections)
+        self._excluded = {pair for pair in self._excluded if pair[0] in self._sections}
+        self._plan = build_plan(self.hass, self.config, now, seed=seed,
+                                until=until, learned=learned, sections=self._sections)
         self._plan = ongoing + self._plan
         self._day = dt_util.as_local(now).date()
         self._done = set(self._active)
+        await self._persist()
 
     async def _tick(self):
         async with self._lock:
@@ -247,10 +275,15 @@ class VacationManager:
                        and dt_util.as_local(now).date().isoformat() > until)
             test_expired = self._test_until and now >= self._test_until
             if expired or test_expired:
+                if expired:
+                    # A section clipped to the end-date midnight still gets its
+                    # due safety pass while enabled; never retry after disabling.
+                    await self._safety_tick(now)
                 self._generation += 1
                 await self._cleanup()
                 self._test_until = None
                 self._reset_plan()
+                await self._persist()
                 if expired:
                     await self.store.async_update_vacation({"enabled": False, "until": None})
                     await self._notify(False)
@@ -264,6 +297,12 @@ class VacationManager:
                 # Keep ongoing overnight intervals until their own end, but do
                 # not replay past starts when generating today's fresh plan.
                 await self._build(now)
+            # Retain temporarily unavailable owned lamps after their visit and
+            # retry cleanup when they return, rather than silently forgetting.
+            orphaned = {tuple(record["key"]) for record in self._owned.values()
+                        if tuple(record["key"]) not in self._active}
+            for key in orphaned:
+                await self._cleanup(key)
             for key, entry in list(self._active.items()):
                 if _instant(entry["end"]) <= now:
                     await self._cleanup(key)
@@ -286,12 +325,113 @@ class VacationManager:
                     if not self._stop_requested:
                         self._last_error = str(error)
                         _LOGGER.warning("Urlaubsmodus: Raum konnte nicht gestartet werden: %s", error)
+            # The section boundary wins over a visit that starts on this tick,
+            # including overlapping configured morning/evening windows.
+            await self._safety_tick(now)
             times = [_instant(e[k]) for e in self._plan for k in ("start", "end") if _instant(e[k]) > now]
             times.extend(_instant(e["end"]) for e in self._active.values() if _instant(e["end"]) > now)
             if self._test_until:
                 times.append(self._test_until)
+            elif self._safety_enabled():
+                for section in self._sections.values():
+                    end = _instant(section["end"])
+                    for field, at in (("end_done", end), ("retry_done", end + SAFETY_RETRY_DELAY)):
+                        if not section[field] and at > now:
+                            times.append(at)
             self._arm(min(30, max(.05, (min(times) - dt_util.utcnow()).total_seconds())) if times else 30)
             self._publish()
+
+    def _safety_enabled(self):
+        return bool(not self.closed and not self._stop_requested and not self._test_until
+                    and self.store.data["vacation"].get("enabled")
+                    and self.config.get("safety_off", True))
+
+    def _room_members(self, area):
+        """Resolve each current granted member without one stale sibling masking it."""
+        from .zones import contains, validate_area
+
+        try:
+            validate_area(self.hass, self.store, area)
+        except ServiceValidationError:
+            return set()
+        return {entity for entity in self.store.data["settings"]["light_entity_ids"]
+                if contains(self.hass, self.store, area, entity)}
+
+    def _safety_targets(self, section_id):
+        """Current approved selection minus every overlapping excluded room."""
+        from .lights import is_individual_light
+
+        selected, excluded = set(), set()
+        for room in self.config["rooms"]:
+            selected.update(self._room_members(room["area_id"]))
+        for section, area in self._excluded:
+            if section == section_id:
+                excluded.update(self._room_members(area))
+        return {entity for entity in selected - excluded
+                if (state := self.hass.states.get(entity)) and is_individual_light(self.hass, state)}
+
+    async def _safety_tick(self, now):
+        if not self._safety_enabled():
+            return
+        for section_id, section in self._sections.items():
+            if not self._safety_enabled():
+                return
+            if section["section"] == "morning" and not self.config["morning"]["enabled"]:
+                continue
+            end = _instant(section["end"])
+            retry = end + SAFETY_RETRY_DELAY
+            if now < end or section["retry_done"]:
+                continue
+            # A late tick/restart within the retry window catches the first
+            # boundary once. At +10 it performs only the retry, never two passes.
+            if now >= retry:
+                section["end_done"] = section["retry_done"] = True
+            elif not section["end_done"]:
+                section["end_done"] = True
+            else:
+                continue
+            # Persist the attempt before dispatch: a restart cannot repeat it.
+            await self._persist()
+            if now <= retry + SAFETY_LATE_GRACE:
+                await self._safety_off(section_id)
+
+    async def _safety_off(self, section_id):
+        from .lights import entity_area_id
+        from .selected_lights import _still_allowed, async_control_lights
+
+        generation = self._generation
+        for entity in sorted(self._safety_targets(section_id)):
+            if not self._safety_enabled() or generation != self._generation:
+                break
+            context = Context()
+            self._contexts.add(context.id)
+            physical_area = entity_area_id(self.hass, entity)
+            nonowned = entity not in self._owned
+
+            def guard():
+                state = self.hass.states.get(entity)
+                return bool(self._safety_enabled() and generation == self._generation
+                    and entity in self._safety_targets(section_id)
+                    and state and state.state == "on"
+                    and _still_allowed(self.hass, self.store, entity, {entity: physical_area}))
+
+            try:
+                if not guard():
+                    continue
+                result = await async_control_lights(self.hass, self.store, [entity], on=False,
+                                                   context=context, guard=guard, dispatch_guard=guard)
+                if entity in result.get("applied", []):
+                    self._owned.pop(entity, None)
+                    if nonowned:
+                        _LOGGER.info("Urlaubsmodus: Sicherheitsabschaltung hat eine nicht von der "
+                                     "Simulation eingeschaltete Lampe ausgeschaltet: %s", entity)
+                elif not self._stop_requested:
+                    self._last_error = "Eine Lampe konnte bei der Sicherheitsabschaltung nicht ausgeschaltet werden."
+            except Exception as error:
+                if not self._stop_requested:
+                    self._last_error = str(error)
+                    _LOGGER.warning("Urlaubsmodus: Sicherheitsabschaltung fehlgeschlagen: %s", error)
+        await self._persist()
 
     async def _activate(self, key, entry):
         from .lights import entity_area_id
@@ -357,6 +497,7 @@ class VacationManager:
 
     async def _cleanup(self, key=None):
         from .dynamic_scenes import async_exclude_targets
+        from .lights import entity_area_id
         from .selected_lights import _still_allowed, async_control_lights
         selected = [e for e, record in self._owned.items() if key is None or record["key"] == list(key)]
         if not selected:
@@ -375,6 +516,11 @@ class VacationManager:
                     and _still_allowed(self.hass, self.store, entity, {entity: record["physical_area"]}))
             try:
                 if not guard():
+                    state = self.hass.states.get(entity)
+                    if (state and state.state in {"unavailable", "unknown"}
+                            and entity in room_targets(self.hass, self.store, record["area_id"])
+                            and entity_area_id(self.hass, entity) == record["physical_area"]):
+                        continue
                     self._owned.pop(entity, None)
                     continue
                 result = await async_control_lights(self.hass, self.store, [entity], on=False, context=context,
@@ -391,21 +537,19 @@ class VacationManager:
     async def manual_targets(self, area_id=None, entity_ids=None):
         if not self.paused:
             return
-        targets = set(entity_ids or room_targets(self.hass, self.store, area_id))
+        targets = set(entity_ids or self._room_members(area_id))
         now = dt_util.utcnow()
         sections = {e["section_id"] for e in self._plan
                     if _instant(e.get("section_start", e["start"])) <= now
                     < _instant(e.get("section_end", e["end"]))}
         sections.update(e["section_id"] for e in self._active.values())
+        sections.update(key for key, section in self._sections.items()
+                        if _instant(section["start"]) <= now < _instant(section["end"]))
         affected = set()
         for room in self.config["rooms"]:
             area = room["area_id"]
-            try:
-                members = set(room_targets(self.hass, self.store, area))
-            except ServiceValidationError:
-                # Stale simulation configuration must never block an otherwise
-                # valid ordinary button in another room.
-                members = {e for e, record in self._owned.items() if record["area_id"] == area}
+            members = self._room_members(area)
+            members.update(e for e, record in self._owned.items() if record["area_id"] == area)
             if area == area_id or targets & members:
                 affected.update(members)
                 self._excluded.update((section, area) for section in sections)
@@ -426,8 +570,14 @@ class VacationManager:
         old, new = event.data.get("old_state"), event.data.get("new_state")
         if new and self._own(new.context):
             return
-        if (old is None or new is None or old.state != new.state
-                or (new.context.user_id is not None and old.attributes != new.attributes)):
+        if new and new.state in {"unavailable", "unknown"}:
+            return
+        # Ownership is only acquired for ON lamps. Losing connectivity and
+        # returning ON is not a manual action, even with a fresh context.
+        reconnect = old and old.state in {"unavailable", "unknown"}
+        if (old is None or new is None or (reconnect and new.state != "on")
+                or (not reconnect and old.state != new.state)
+                or (not reconnect and new.context.user_id is not None and old.attributes != new.attributes)):
             self._owned.pop(entity, None)
 
     @callback

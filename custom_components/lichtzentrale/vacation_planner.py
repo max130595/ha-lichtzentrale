@@ -11,6 +11,10 @@ from homeassistant.util import dt as dt_util
 from .schedule_windows import boundary_instant
 from .vacation_config import ROOM_DURATIONS, validate_until
 
+SAFETY_RETRY_DELAY = timedelta(minutes=10)
+# Permit a delayed timer or short restart, but never replay days-old shutdowns.
+SAFETY_LATE_GRACE = timedelta(minutes=10)
+
 
 def until_instant(until, zone):
     """Exclusive UTC deadline following the selected local end date."""
@@ -68,7 +72,48 @@ def _dark_until(hass, instant, zone):
                default=None)
 
 
-def build_plan(hass, config, now, *, seed=0, until=None, learned=None):
+def build_sections(hass, config, now, *, seed=0, until=None, existing=None):
+    """Keep section boundaries independently of visits, including the retry window.
+
+    Existing boundaries are fixed for their anchor day, even after replanning or
+    midnight. Retaining completed records also prevents a new random end from
+    resurrecting an already completed section.
+    """
+    local, now = dt_util.as_local(now), dt_util.as_utc(now)
+    deadline = until_instant(until, local.tzinfo)
+    result = {key: deepcopy(value) for key, value in (existing or {}).items()
+              if _section_end(value) + timedelta(days=4) >= now}
+    if deadline is not None:
+        for value in result.values():
+            if datetime.fromisoformat(value["start"]) < deadline < _section_end(value):
+                value["end"] = deadline.isoformat()
+    for offset in range(-3, 1):
+        day = local.date() + timedelta(days=offset)
+        for section in ("morning", "evening"):
+            if section == "morning" and not config["morning"]["enabled"]:
+                continue
+            key = f"{day.isoformat()}:{section}"
+            if key in result:
+                continue
+            rng = random.Random(f"{seed}:{day.isoformat()}:{section}")
+            bounds = section_bounds(hass, config, day, local.tzinfo, section, rng)
+            if bounds is None:
+                continue
+            start, end = bounds
+            if deadline is not None:
+                end = min(end, deadline)
+            if end <= start or end + SAFETY_RETRY_DELAY + SAFETY_LATE_GRACE < now or (offset < 0 and start > now):
+                continue
+            result[key] = {"section": section, "start": start.isoformat(), "end": end.isoformat(),
+                           "end_done": False, "retry_done": False}
+    return result
+
+
+def _section_end(section):
+    return dt_util.as_utc(datetime.fromisoformat(section["end"]))
+
+
+def build_plan(hass, config, now, *, seed=0, until=None, learned=None, sections=None):
     """Build today's/ongoing sections; restart produces only future commands.
 
     Each entry contains UTC ISO start/end and section_start/section_end,
@@ -93,6 +138,13 @@ def build_plan(hass, config, now, *, seed=0, until=None, learned=None):
             if bounds is None:
                 continue
             start, end = bounds
+            section_id = f"{day.isoformat()}:{section}"
+            if sections is not None:
+                saved = sections.get(section_id)
+                if saved is None:
+                    continue
+                start = dt_util.as_utc(datetime.fromisoformat(saved["start"]))
+                end = _section_end(saved)
             section_start = start
             # Previous anchors are considered only when their section is active.
             if end <= now or (offset < 0 and start > now):

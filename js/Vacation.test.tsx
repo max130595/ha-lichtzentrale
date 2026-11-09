@@ -9,7 +9,7 @@ import type {Hass, Room} from './types';
 import type {NavigationGuard} from './sceneControls';
 import type {VacationStatus} from './VacationTypes';
 afterEach(() => {cleanup(); vi.useRealTimers(); vi.restoreAllMocks();});
-const state = (): VacationStatus => ({enabled: false, until: null, config: {rooms: [{area_id: 'demo_living', type: 'living', weight: 1, on_behavior: {mode: 'last'}}], evening: {start: {type: 'sun', event: 'sunset', offset_min: -15}, end_earliest: {type: 'time', value: '22:30'}, end_latest: {type: 'time', value: '23:30'}}, morning: {enabled: false, start: {type: 'time', value: '06:30'}, end: {type: 'time', value: '07:30'}}, max_rooms: 3, learn_history: false, notify_service: null}, plan: [], next_switch: null, section: null, excluded: [], testing: false, notes: [], time_zone: 'Europe/Berlin'});
+const state = (): VacationStatus => ({enabled: false, until: null, config: {rooms: [{area_id: 'demo_living', type: 'living', weight: 1, on_behavior: {mode: 'last'}}], evening: {start: {type: 'sun', event: 'sunset', offset_min: -15}, end_earliest: {type: 'time', value: '22:30'}, end_latest: {type: 'time', value: '23:30'}}, morning: {enabled: false, start: {type: 'time', value: '06:30'}, end: {type: 'time', value: '07:30'}}, max_rooms: 3, safety_off: true, learn_history: false, notify_service: null}, plan: [], next_switch: null, section: null, excluded: [], testing: false, notes: [], time_zone: 'Europe/Berlin'});
 const rooms = [{area_id: 'demo_living', name: 'Wohnbereich', lights: [{allowed: true}]}, {area_id: 'zone_demo', name: 'Lesezone', kind: 'zone', lights: [{allowed: true}]}] as Room[];
 function setup(initial = state(), guard?: (g: NavigationGuard) => void) {
   const mutate = vi.fn(async (request: Record<string, unknown>) => ({...initial, ...(request.type === 'lichtzentrale/vacation/save' ? {config: request.config, until: request.until} : request.type === 'lichtzentrale/vacation/set' ? {enabled: request.enabled, until: request.until} : {testing: true})}));
@@ -19,6 +19,7 @@ function setup(initial = state(), guard?: (g: NavigationGuard) => void) {
 const ready = () => screen.findByRole('switch');
 const max = () => screen.getByLabelText('Maximal gleichzeitig eingeschaltete Räume');
 const save = () => screen.getByRole('button', {name: 'Urlaubseinstellungen speichern'});
+const safetyOff = () => screen.getByLabelText('Am Ende jedes Abschnitts alles ausschalten (empfohlen)');
 const testButton = () => screen.getByRole('button', {name: 'Probelauf 5 min · echte Lampen'});
 describe('Urlaubsmodus', () => {
   it('loads server defaults without any lamp command and shows selectable zones and all boundaries', async () => {
@@ -26,6 +27,7 @@ describe('Urlaubsmodus', () => {
     expect(max()).toHaveValue(3); expect(screen.getByLabelText(/Lesezone/)).toBeInTheDocument();
     expect(screen.getByLabelText('Abend beginnt: Bezug')).toHaveValue('sunset');
     expect(screen.getByLabelText('Abend beginnt: Versatz in Minuten')).toHaveValue(-15);
+    expect(safetyOff()).toBeChecked();
     expect(save()).toBeDisabled(); expect(mutate).not.toHaveBeenCalled(); expect(callWS).toHaveBeenCalledTimes(4);
   });
   it('saves chosen types, weights, brightness, windows and notification server-side', async () => {
@@ -38,6 +40,37 @@ describe('Urlaubsmodus', () => {
     fireEvent.change(screen.getByLabelText('Push-Hinweis beim Ein- und Ausschalten'), {target: {value: 'notify.demo'}});
     fireEvent.click(save()); await screen.findByText('Urlaubseinstellungen in Home Assistant gespeichert.');
     expect(mutate).toHaveBeenCalledWith(expect.objectContaining({type: 'lichtzentrale/vacation/save', config: expect.objectContaining({max_rooms: 2, notify_service: 'notify.demo', rooms: [expect.objectContaining({type: 'passage', weight: 5, on_behavior: {mode: 'brightness', brightness: 128}})]})}));
+  });
+  it.each([false, true])('saves safety_off=%s only after server confirmation and guards dirty edits', async value => {
+    const initial = {...state(), config: {...state().config, safety_off: !value}};
+    let guard: NavigationGuard = null;
+    const {mutate} = setup(initial, next => {guard = next;}); await ready();
+    expect((safetyOff() as HTMLInputElement).checked).toBe(!value);
+    fireEvent.click(safetyOff());
+    expect((safetyOff() as HTMLInputElement).checked).toBe(value);
+    expect(save()).toBeEnabled(); expect(testButton()).toBeDisabled();
+    expect(screen.getByRole('switch')).toBeDisabled();
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    expect(await guard!()).toBe(false);
+    let resolve!: (result: VacationStatus) => void;
+    mutate.mockImplementationOnce(() => new Promise(done => {resolve = done;}));
+    fireEvent.click(save()); fireEvent.click(save());
+    expect(mutate).toHaveBeenCalledExactlyOnceWith({type: 'lichtzentrale/vacation/save', config: {...initial.config, safety_off: value}, until: null});
+    expect(safetyOff()).toBeDisabled(); expect(await guard!()).toBe(false);
+    expect(screen.queryByText('Urlaubseinstellungen in Home Assistant gespeichert.')).not.toBeInTheDocument();
+    await act(async () => {resolve({...initial, config: {...initial.config, safety_off: value}});});
+    expect(screen.getByText('Urlaubseinstellungen in Home Assistant gespeichert.')).toBeInTheDocument();
+    expect((safetyOff() as HTMLInputElement).checked).toBe(value);
+    expect(save()).toBeDisabled(); expect(guard).toBeNull();
+  });
+  it.each([false, true])('retains safety_off=%s after a mismatching acknowledgement and retries', async value => {
+    const initial = {...state(), config: {...state().config, safety_off: !value}};
+    const {mutate} = setup(initial); await ready(); fireEvent.click(safetyOff());
+    mutate.mockResolvedValueOnce(initial); fireEvent.click(save());
+    expect(await screen.findByRole('alert')).toHaveTextContent('nicht bestätigt');
+    expect((safetyOff() as HTMLInputElement).checked).toBe(value); expect(save()).toBeEnabled();
+    fireEvent.click(save()); await screen.findByText('Urlaubseinstellungen in Home Assistant gespeichert.');
+    expect(save()).toBeDisabled(); expect((safetyOff() as HTMLInputElement).checked).toBe(value);
   });
   it.each(['', '0', '21', '1.5'])('rejects invalid maximum %s', async value => {setup(); await ready(); fireEvent.change(max(), {target: {value}}); expect(save()).toBeDisabled(); expect(testButton()).toBeDisabled();});
   it('requires a scene belonging to the selected room', async () => {setup(); await ready(); fireEvent.change(screen.getByLabelText('Wohnbereich: Einschalten'), {target: {value: 'scene'}}); expect(save()).toBeDisabled(); fireEvent.change(screen.getByLabelText('Wohnbereich: Szene'), {target: {value: 'demo_scene'}}); expect(save()).toBeEnabled();});
@@ -101,9 +134,11 @@ describe('Urlaubsstatus automatisch aktuell halten', () => {
     callWS.mockImplementationOnce(() => new Promise(done => {resolve = done;}));
     await act(async () => {await vi.advanceTimersByTimeAsync(10000);});
     fireEvent.change(max(), {target: {value: '2'}});
+    fireEvent.click(safetyOff());
     fireEvent.change(screen.getByLabelText('Enddatum (optional, einschließlich)'), {target: {value: '2027-01-10'}});
     await act(async () => {resolve({...state(), enabled: true, config: {...state().config, max_rooms: 4}});});
     expect(max()).toHaveValue(2);
+    expect(safetyOff()).not.toBeChecked();
     expect(screen.getByLabelText('Enddatum (optional, einschließlich)')).toHaveValue('2027-01-10');
     expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
     expect(save()).toBeEnabled();

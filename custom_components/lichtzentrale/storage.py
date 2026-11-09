@@ -57,6 +57,11 @@ class LichtzentraleStore:
             if saved is not None:
                 updated.update(deepcopy(saved))
                 updated["vacation"] = {**empty_data()["vacation"], **deepcopy(saved.get("vacation", {}))}
+                # Default legacy settings in memory, without a storage migration
+                # or changing any saved option, including explicit safety_off=False.
+                vacation_config = updated["vacation"].get("config")
+                if isinstance(vacation_config, dict):
+                    vacation_config.setdefault("safety_off", True)
                 updated["settings"] = {
                     "light_entity_ids": [],
                     "dim_min_pct": DEFAULT_DIM_MIN_PCT,

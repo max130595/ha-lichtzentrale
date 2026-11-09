@@ -38,8 +38,35 @@ async def test_valid_independent_config(hass, store, vacation_config):
     assert validate_vacation_config(hass, store, vacation_config) == vacation_config
 
 
+def test_safety_off_defaults_on_in_independent_configs():
+    config = default_vacation_config()
+    assert config["safety_off"] is True
+    config["safety_off"] = False
+    assert default_vacation_config()["safety_off"] is True
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_safety_off_accepts_both_boolean_values(hass, store, vacation_config, enabled):
+    vacation_config["safety_off"] = enabled
+    assert validate_vacation_config(hass, store, vacation_config) == vacation_config
+
+
+async def test_legacy_config_defaults_safety_off_without_mutating_input(hass, store, vacation_config):
+    vacation_config.pop("safety_off")
+    original = deepcopy(vacation_config)
+    assert validate_vacation_config(hass, store, vacation_config) == {
+        **original, "safety_off": True,
+    }
+    assert vacation_config == original
+    vacation_config.pop("learn_history")
+    with pytest.raises(ServiceValidationError):
+        validate_vacation_config(hass, store, vacation_config)
+
+
 @pytest.mark.parametrize("key,value", [
     ("max_rooms", True), ("max_rooms", 0), ("max_rooms", 21),
+    ("safety_off", 0), ("safety_off", 1), ("safety_off", "false"),
+    ("safety_off", None), ("safety_off", {}), ("safety_off", []),
     ("learn_history", 1), ("rooms", {}), ("evening", {}), ("morning", {}),
     ("notify_service", "light.turn_on"), ("notify_service", "notify.missing"),
     ("unexpected", 1),

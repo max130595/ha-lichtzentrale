@@ -70,6 +70,13 @@ Ein optionales Enddatum gilt einschließlich des gewählten Tages in der HA-Zeit
   Handbedienung hat Vorrang. Zustand und Enddatum bleiben im HA-Store; nach Neustart
   wird der aktuelle Abschnitt neu geplant. Nicht mehr sicher nachweisbarer Lampenbesitz
   wird nicht aus einem gleichen Farb-/Helligkeitswert geraten.
+- **Am Ende jedes Abschnitts alles ausschalten (empfohlen)** ist standardmäßig an.
+  Am Ende des Abend-/Morgenabschnitts und einmalig zehn Minuten später werden alle
+  aktuell eingeschalteten, freigegebenen Lampen der ausgewählten Räume ausgeschaltet,
+  auch ohne nachweisbaren Simulationsbesitz. Im Abschnitt per Taster bediente Räume
+  bleiben ausgenommen. Nur bei aktivem Urlaubsmodus, niemals beim Probelauf.
+- Kurze Nichterreichbarkeit (`unavailable`/`unknown`) mit Rückkehr zum gleichen Zustand
+  beendet den Simulationsbesitz nicht; echte Ein/Aus-Wechsel und fremde Dienste weiterhin schon.
 - Optionales Lernen liest die letzten 14 Tage aus einem vorhandenen Recorder. Mindestens
   drei unterschiedliche Tage müssen eine typische Einschaltzeit stützen. Sonst gilt der
   Zufallsplan. Ohne Recorder läuft der Modus ebenfalls. Optional sind Ein-/Aus-Hinweise
