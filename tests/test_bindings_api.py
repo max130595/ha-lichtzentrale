@@ -77,6 +77,9 @@ async def test_button_api_roundtrip_and_room_configuration(hass, client, setup, 
 
 
 @pytest.mark.parametrize("name,payload", [
+    ("buttons/learn/start", {"entity_id": "event.synthetic"}),
+    ("buttons/learn/status", {"token": "synthetic"}),
+    ("buttons/learn/cancel", {"token": "synthetic"}),
     ("buttons/list", {}), ("bindings/list", {}), ("binding/save", {"binding": {}}),
     ("binding/delete", {"binding_id": "synthetic"}),
     ("binding/settings", {"double_click_ms": 600}),
@@ -199,3 +202,66 @@ async def test_selected_binding_api_roundtrip(client, setup, store, action):
     assert result["result"]["area_id"] is None
     assert (await request(client, "bindings/list"))["result"]["bindings"] == [result["result"]]
     assert store.data["bindings"] == [result["result"]]
+
+
+async def test_learning_commands_are_ephemeral_and_cancelable(hass, client, setup, store):
+    from custom_components.lichtzentrale.bindings import BindingManager
+
+    manager = BindingManager(hass, store)
+    hass.data[DOMAIN]["bindings"] = manager
+    before = store.data
+    try:
+        result = await request(client, "buttons/learn/start", entity_id=setup[3]["event_entity"])
+        assert result["success"]
+        token = result["result"]["token"]
+        assert (await request(client, "buttons/learn/status", token=token))["result"] == {"status": "waiting", "observation": None}
+        assert (await request(client, "buttons/learn/cancel", token=token))["result"] == {"cancelled": True}
+        assert not (await request(client, "buttons/learn/status", token=token))["success"]
+        assert store.data == before
+    finally:
+        await manager.shutdown()
+
+
+async def test_ignored_attributes_roundtrip_conflict_and_reset(client, setup, hass, store):
+    _, _, _, binding = setup
+    learned = {**binding, "event_attributes": {"direction": "right", "speed": 2},
+               "ignored_event_attributes": ["speed"]}
+    result = await request(client, "binding/save", binding=learned)
+    assert result["success"]
+    saved = result["result"]
+    assert saved["ignored_event_attributes"] == ["speed"]
+    assert (await request(client, "bindings/list"))["result"]["bindings"] == [saved]
+    restored = LichtzentraleStore(hass)
+    await restored.async_load()
+    assert restored.data["bindings"] == [saved]
+
+    before = store.data
+    conflict = await request(client, "binding/save", binding={
+        **learned, "event_attributes": {"direction": "right", "speed": 50},
+    })
+    assert not conflict["success"]
+    assert "gleich genaue Belegung" in conflict["error"]["message"]
+    assert store.data == before
+
+    with patch.object(store._store, "async_save", AsyncMock(side_effect=HomeAssistantError("synthetic disk error"))):
+        failed = await request(client, "binding/save", binding={**saved, "ignored_event_attributes": []})
+    assert not failed["success"]
+    assert store.data == before
+    result = await request(client, "binding/save", binding={**saved, "ignored_event_attributes": []})
+    assert result["success"]
+    assert result["result"]["ignored_event_attributes"] == []
+    restored = LichtzentraleStore(hass)
+    await restored.async_load()
+    assert restored.data["bindings"] == [result["result"]]
+
+
+async def test_concurrent_equivalent_wildcard_saves_are_atomic(hass, setup, store):
+    _, _, _, binding = setup
+    drafts = [{**binding, "event_attributes": {"direction": "right", "speed": speed},
+               "ignored_event_attributes": ["speed"]} for speed in (2, 20)]
+    outcomes = await asyncio.gather(*(store.async_save_binding(draft) for draft in drafts), return_exceptions=True)
+    assert sum(isinstance(outcome, ServiceValidationError) for outcome in outcomes) == 1
+    assert len(store.data["bindings"]) == 1
+    restored = LichtzentraleStore(hass)
+    await restored.async_load()
+    assert restored.data["bindings"] == store.data["bindings"]

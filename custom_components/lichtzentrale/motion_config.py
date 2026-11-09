@@ -70,8 +70,9 @@ def validate_boundary(raw):
 
 def validate_motion(hass, store, area_id, raw):
     """Validate all references before persistence and again before runtime actions."""
-    if not isinstance(area_id, str) or ar.async_get(hass).async_get_area(area_id) is None:
-        raise ServiceValidationError("Der Raum wurde nicht gefunden. Bitte neu laden.")
+    from .zones import validate_area
+
+    validate_area(hass, store, area_id)
     keys = {
         "enabled", "sensor_entity_ids", "timeout_seconds", "dim_before_off",
         "lux_sensor_entity_id", "lux_below", "windows",

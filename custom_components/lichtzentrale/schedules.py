@@ -296,8 +296,15 @@ class ScheduleManager:
                 raise ServiceValidationError("Der Zeitplan wurde nicht gefunden.")
             if not test and not plan["enabled"]:
                 return {"condition_met": False, "applied": [], "skipped": [], "reason": "disabled"}
+            original_plan = deepcopy(plan)
             plan = validate_schedule(self.hass, self.store, plan)
-            targets = action_targets(self.hass, self.store, plan["action"])
+            if "actions" in plan:
+                from .target_actions import action_targets as common_targets
+
+                targets = list(dict.fromkeys(entity for action in plan["actions"]
+                    for entity in common_targets(self.hass, self.store, action)))
+            else:
+                targets = action_targets(self.hass, self.store, plan["action"])
             if not self._conditions(plan, targets):
                 return {"condition_met": False, "applied": [], "skipped": [], "reason": "conditions"}
             if (not test and plan["trigger"]["type"] == "lux"
@@ -310,22 +317,44 @@ class ScheduleManager:
                 if not claimed:
                     return {"condition_met": False, "applied": [], "skipped": [], "reason": "daily_limit"}
             context = context or Context()
-            action, transition = plan["action"], plan["transition"]
-            kind = action["type"]
+            transition = plan["transition"]
 
             def dispatch_guard():
                 # Unlike the full condition, time/lux eligibility must survive
                 # asynchronous preparation without rechecking a batch's own on/off changes.
                 if self.closed or generation != runtime["generation"]:
                     raise ServiceValidationError("Der Zeitplan wurde zwischenzeitlich geändert.")
-                if self._plan(plan_id) != plan:
+                if self._plan(plan_id) != original_plan:
                     raise ServiceValidationError("Der Zeitplan wurde zwischenzeitlich geändert.")
-                return (window_is_open(self.hass, plan["condition"].get("time_window"))
+                return (dt_util.now().weekday() in plan["condition"]["weekdays"]
+                        and window_is_open(self.hass, plan["condition"].get("time_window"))
                         and (test or plan["trigger"]["type"] != "lux"
                              or not plan["condition"].get("time_window")
                              or (self._lux(plan) and runtime["lux_ready"]
                                  and lux_epoch == runtime["lux_epoch"]
                                  and dt_util.now().date().isoformat() == execution_day)))
+
+            if "actions" in plan:
+                from .target_actions import async_execute_action
+
+                response = {"condition_met": True, "applied": [], "skipped": [], "failed": []}
+                # Await every action. Never deduplicate across actions: when targets
+                # overlap, the later action must see and replace the earlier state.
+                for action in plan["actions"]:
+                    if not dispatch_guard():
+                        raise ServiceValidationError("Das Zeitfenster ist nicht mehr geöffnet.")
+                    result = await async_execute_action(
+                        self.hass, self.store, action, context=context, transition=transition,
+                        guard=dispatch_guard, dispatch_guard=dispatch_guard, automatic=True)
+                    if isinstance(result, dict):
+                        for key in ("applied", "skipped", "failed"):
+                            response[key].extend(result.get(key, []))
+                runtime["last_error"] = ("Nicht alle Ziele konnten geschaltet werden."
+                    if response["skipped"] or response["failed"] else None)
+                return response
+
+            action = plan["action"]
+            kind = action["type"]
 
             def guard():
                 return (dispatch_guard()
@@ -359,6 +388,10 @@ class ScheduleManager:
             else:
                 result = await self.store.async_set_motion_enabled(
                     action["area_id"], action["enabled"], guard=guard)
+            from .automatic_state import async_record_action
+
+            if isinstance(result, dict):
+                await async_record_action(self.hass, self.store, action, result)
             response = {"condition_met": True, "applied": [], "skipped": []}
             if isinstance(result, dict):
                 response.update({key: result[key] for key in ("applied", "skipped", "failed")

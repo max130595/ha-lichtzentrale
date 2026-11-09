@@ -2,6 +2,7 @@
 """Runtime event buttons and narrowly scoped, cancellable room actions."""
 
 import asyncio
+import json
 import logging
 from copy import deepcopy
 from time import monotonic
@@ -52,6 +53,7 @@ ACTIONS = frozenset(
         "adaptive_on",
         "adaptive_off",
         "stop_dynamic",
+        "full_brightness", "night", "return_auto", "night_auto",
     }
 )
 CYCLE_RESET_SECONDS = 600
@@ -91,6 +93,8 @@ def list_buttons(hass: HomeAssistant) -> list[dict]:
                 else state.name,
                 "area_id": entity_area_id(hass, state.entity_id),
                 "event_types": event_types,
+                "manufacturer": device.manufacturer if device else None,
+                "model": device.model if device else None,
                 # An event entity is unknown until its first press, not necessarily offline.
                 "available": state.state != STATE_UNAVAILABLE
                 and not state.attributes.get("restored"),
@@ -103,6 +107,98 @@ def list_buttons(hass: HomeAssistant) -> list[dict]:
             item["name"].casefold(),
             item["entity_id"],
         ),
+    )
+
+
+# HA metadata describes the entity rather than the physical gesture. All other
+# attribute names/values come from the observed event; no device-specific keys.
+_EVENT_METADATA = frozenset({"event_type", "event_types", "friendly_name", "icon", "device_class", "restored"})
+
+
+def validate_event_attributes(value):
+    if not isinstance(value, dict) or len(value) > 64 or any(
+        not isinstance(key, str) or not key or key in _EVENT_METADATA for key in value
+    ):
+        raise ServiceValidationError("Ungültige gelernte Ereignisattribute.")
+    try:
+        encoded = json.dumps(value, allow_nan=False)
+        if len(encoded) > 8192:
+            raise ValueError
+        return json.loads(encoded)
+    except (ValueError, TypeError, OverflowError) as error:
+        raise ServiceValidationError("Ungültige gelernte Ereignisattribute.") from error
+
+
+def event_attributes(state):
+    return validate_event_attributes({key: value for key, value in state.attributes.items() if key not in _EVENT_METADATA})
+
+
+def validate_ignored_attributes(value, attributes):
+    """Only explicitly observed fields may become wildcards."""
+    if (
+        not isinstance(attributes, dict)
+        or not isinstance(value, list)
+        or len(value) > 64
+        or any(not isinstance(key, str) or key not in attributes for key in value)
+    ):
+        raise ServiceValidationError("Ungültige als egal markierte Ereignisattribute.")
+    return sorted(set(value))
+
+
+def _attribute_pattern(binding):
+    attributes = validate_event_attributes(binding["event_attributes"])
+    ignored = validate_ignored_attributes(binding.get("ignored_event_attributes", []), attributes)
+    return {key: value for key, value in attributes.items() if key not in ignored}, ignored
+
+
+def _same_attributes(left, right):
+    # JSON comparison keeps booleans distinct from numeric selector values.
+    return json.dumps(left, sort_keys=True, allow_nan=False) == json.dumps(
+        right, sort_keys=True, allow_nan=False
+    )
+
+
+def _matches_payload(binding, attributes):
+    # Old type-only bindings and exact learned bindings retain their semantics.
+    # Only fields explicitly marked as ignored may change or disappear.
+    if "event_attributes" not in binding:
+        return True
+    try:
+        required, ignored = _attribute_pattern(binding)
+        return _same_attributes(
+            required, {key: value for key, value in attributes.items() if key not in ignored}
+        )
+    except (ServiceValidationError, TypeError, ValueError):
+        return False
+
+
+def matches_attributes(binding, state):
+    try:
+        return _matches_payload(binding, event_attributes(state))
+    except ServiceValidationError:
+        return False
+
+
+def _specificity(binding):
+    if "event_attributes" not in binding:
+        return (-1, 0)
+    required, ignored = _attribute_pattern(binding)
+    return (len(required), -len(ignored))
+
+
+def binding_patterns_conflict(left, right):
+    """Reject equally specific overlapping patterns, regardless of ignored values."""
+    if _specificity(left) != _specificity(right):
+        return False
+    if "event_attributes" not in left:
+        return True
+    left_values, left_ignored = _attribute_pattern(left)
+    right_values, right_ignored = _attribute_pattern(right)
+    left_keys, right_keys = set(left_values), set(right_values)
+    return (
+        left_keys <= right_keys | set(right_ignored)
+        and right_keys <= left_keys | set(left_ignored)
+        and all(_same_attributes(left_values[key], right_values[key]) for key in left_keys & right_keys)
     )
 
 
@@ -124,6 +220,9 @@ def validate_binding(hass, store, raw) -> dict:
         "action",
         "area_id",
         "params",
+        "event_attributes",
+        "ignored_event_attributes",
+        "control_label",
     }:
         raise ServiceValidationError("Ungültige Tasterbelegung.")
     binding_id = raw.get("id")
@@ -143,8 +242,17 @@ def validate_binding(hass, store, raw) -> dict:
         raise ServiceValidationError("Bitte ein verfügbares Taster-Ereignis auswählen.")
     if not isinstance(action, str) or action not in ACTIONS:
         raise ServiceValidationError("Diese Tasteraktion ist nicht erlaubt.")
+    attributes = raw.get("event_attributes")
+    if attributes is not None:
+        attributes = validate_event_attributes(attributes)
+    ignored = None
+    if "ignored_event_attributes" in raw:
+        ignored = validate_ignored_attributes(raw["ignored_event_attributes"], attributes)
+    label = raw.get("control_label")
+    if label is not None and (not isinstance(label, str) or not label.strip() or len(label) > 80):
+        raise ServiceValidationError("Ungültige Tastenbezeichnung.")
     params = raw.get("params", {})
-    selected_action = action in {"toggle_lights", "turn_on_lights", "turn_off_lights"}
+    selected_action = action in {"toggle_lights", "turn_on_lights", "turn_off_lights"} or (action == "full_brightness" and isinstance(params, dict) and "entity_ids" in params)
     dim_action = action in {"dim_up", "dim_down"}
     if not isinstance(params, dict):
         raise ServiceValidationError("Ungültige Parameter der Tasteraktion.")
@@ -162,6 +270,9 @@ def validate_binding(hass, store, raw) -> dict:
         area_id = None
     elif not isinstance(area_id, str) or not room_targets(hass, store, area_id):
         raise ServiceValidationError("Bitte einen Raum mit freigegebenen Lampen auswählen.")
+    if action in {"full_brightness", "night", "return_auto", "night_auto"}:
+        from .target_actions import validate_action
+        validate_action(hass, store, {"type": action, **({"entity_ids": params["entity_ids"]} if "entity_ids" in params else {"area_id": area_id})})
     if action == "scene":
         _scene_for_room(store, params["scene_id"], area_id)
     return {
@@ -171,6 +282,9 @@ def validate_binding(hass, store, raw) -> dict:
         "action": action,
         "area_id": area_id,
         "params": deepcopy(params),
+        **({"event_attributes": attributes} if attributes is not None else {}),
+        **({"ignored_event_attributes": ignored} if ignored is not None else {}),
+        **({"control_label": label.strip()} if label is not None else {}),
     }
 
 
@@ -230,6 +344,7 @@ class BindingManager:
         self._task_bindings = {}
         self._locks = {}
         self._cycles = {}
+        self._learning = {}
 
     @callback
     def start(self):
@@ -238,6 +353,36 @@ class BindingManager:
             raise ServiceValidationError("Lichtzentrale ist nicht geladen.")
         if self._unsubscribe is None:
             self._unsubscribe = self.hass.bus.async_listen(EVENT_STATE_CHANGED, self._changed)
+
+    def _prune_learning(self):
+        self._learning = {token: session for token, session in self._learning.items() if session["expires"] > monotonic()}
+
+    @callback
+    def learn_start(self, entity_id):
+        self._prune_learning()
+        if self.closed or not any(b["entity_id"] == entity_id and b["available"] for b in list_buttons(self.hass)):
+            raise ServiceValidationError("Dieser Taster ist nicht verfügbar.")
+        if len(self._learning) >= 20:
+            raise ServiceValidationError("Bitte eine laufende Anlernung beenden.")
+        token = str(uuid4())
+        self._learning[token] = {"entity_id": entity_id, "expires": monotonic() + 120, "observation": None}
+        return {"token": token}
+
+    @callback
+    def learn_status(self, token):
+        self._prune_learning()
+        session = self._learning.get(token)
+        if self.closed or session is None:
+            raise ServiceValidationError("Anlernen abgelaufen. Bitte erneut starten.")
+        if not any(b["entity_id"] == session["entity_id"] and b["available"] for b in list_buttons(self.hass)):
+            self._learning.pop(token, None)
+            raise ServiceValidationError("Dieser Taster ist nicht mehr verfügbar.")
+        return {"status": "captured" if session["observation"] else "waiting", "observation": deepcopy(session["observation"])}
+
+    @callback
+    def learn_cancel(self, token):
+        self._learning.pop(token, None)
+        return {"cancelled": True}
 
     def _lock(self, area_id):
         return self._locks.setdefault(area_id, asyncio.Lock())
@@ -256,9 +401,9 @@ class BindingManager:
             if binding not in current:
                 task.cancel()
         for entity_id, pending in list(self._pending.items()):
-            if pending["bindings"] != self._bindings(entity_id, "short_release") or pending[
+            if pending["bindings"] != self._matching_bindings(entity_id, "short_release", pending["attributes"]) or pending[
                 "doubles"
-            ] != self._bindings(entity_id, DOUBLE_RELEASE):
+            ] != self._matching_bindings(entity_id, DOUBLE_RELEASE, pending["attributes"]):
                 self._cancel_pending(entity_id)
 
     @callback
@@ -272,6 +417,15 @@ class BindingManager:
             for b in self.store.data["bindings"]
             if b.get("event_entity") == entity_id and b.get("event_type") == event_type
         ]
+
+    def _matching_bindings(self, entity_id, event_type, attributes):
+        matches = [
+            binding for binding in self._bindings(entity_id, event_type)
+            if _matches_payload(binding, attributes)
+        ]
+        # A precise learned gesture overrides a wildcard or legacy fallback.
+        # Store validation prevents ties; old/corrupt duplicates still run only once.
+        return [max(matches, key=_specificity)] if matches else []
 
     @callback
     def _queue(self, bindings, context):
@@ -320,8 +474,20 @@ class BindingManager:
             or event_type == DOUBLE_RELEASE
         ):
             return
-        bindings = self._bindings(entity_id, event_type)
-        doubles = self._bindings(entity_id, DOUBLE_RELEASE)
+        try:
+            attributes = event_attributes(new)
+        except ServiceValidationError:
+            return
+        self._prune_learning()
+        learning = [session for session in self._learning.values() if session["entity_id"] == entity_id and session["observation"] is None]
+        if learning:
+            observed = {"event_entity": entity_id, "event_type": event_type, "event_attributes": attributes}
+            for session in learning:
+                session["observation"] = deepcopy(observed)
+            self._cancel_pending(entity_id)
+            return  # Learning does not run a previously saved action for this gesture.
+        bindings = self._matching_bindings(entity_id, event_type, attributes)
+        doubles = self._matching_bindings(entity_id, DOUBLE_RELEASE, attributes)
         if event_type != "short_release" or not doubles:
             # A removed double binding must not leave a stale delayed single behind.
             if event_type == "short_release":
@@ -331,7 +497,12 @@ class BindingManager:
             return
         now = monotonic()
         pending = self._pending.get(entity_id)
-        if pending and now <= pending["deadline"] and pending["doubles"] == doubles:
+        ignored = doubles[0].get("ignored_event_attributes", [])
+        if (pending and now <= pending["deadline"] and pending["doubles"] == doubles
+                and _same_attributes(
+                    {key: value for key, value in pending["attributes"].items() if key not in ignored},
+                    {key: value for key, value in attributes.items() if key not in ignored},
+                )):
             self._cancel_pending(entity_id)
             self._queue(doubles, event.context)
             return
@@ -342,6 +513,7 @@ class BindingManager:
             milliseconds = 500
         pending = {
             "bindings": bindings,
+            "attributes": attributes,
             "doubles": doubles,
             "context": event.context,
             "deadline": now + milliseconds / 1000,
@@ -387,6 +559,9 @@ class BindingManager:
 
     async def _action(self, binding, context):
         area_id, action = binding["area_id"], binding["action"]
+        if action in {"full_brightness", "night", "return_auto", "night_auto"}:
+            from .target_actions import async_execute_action
+            return await async_execute_action(self.hass, self.store, {"type": action, **({"entity_ids": binding["params"]["entity_ids"]} if "entity_ids" in binding["params"] else {"area_id": area_id})}, context=context)
         if action in {"toggle_room", "turn_on_room", "turn_off_room"}:
             return await async_toggle_room(
                 self.hass,
@@ -454,7 +629,7 @@ class BindingManager:
                 state = self.hass.states.get(entity_id)
                 return bool(
                     entity_id in self.store.data["settings"]["light_entity_ids"]
-                    and entity_area_id(self.hass, entity_id) == area_id
+                    and entity_id in room_targets(self.hass, self.store, area_id)
                     and state is not None
                     and state.domain == "light"
                     and state.state == "on"
@@ -525,5 +700,6 @@ class BindingManager:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
         self._task_bindings.clear()
+        self._learning.clear()
         self._cycles.clear()
         self._locks.clear()

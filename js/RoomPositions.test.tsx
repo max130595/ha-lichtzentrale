@@ -101,18 +101,18 @@ function api() {return vi.fn(async (request: Record<string, unknown>) => {
 describe('Räumliche Paletten und Hue-Stopp', () => {
   it('sends spatial distribution on direct static applications', async () => {
     const callWS = api(); render(<RoomPalette hass={{callWS} as Hass} palette={palette}/>);
-    await waitFor(() => expect(screen.getByLabelText('Zielraum')).toBeEnabled());
-    fireEvent.change(screen.getByLabelText('Zielraum'), {target: {value: room.area_id}});
+    await waitFor(() => expect(screen.getByLabelText('Raum oder Zone')).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Raum oder Zone'), {target: {value: room.area_id}}); fireEvent.click(screen.getByText('Mehr Optionen'));
     expect(screen.queryByLabelText('Welle durch den Raum')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Farbverteilung'), {target: {value: 'hoehe'}});
     fireEvent.click(screen.getByRole('button', {name: 'Im gewählten Raum anwenden'}));
-    await waitFor(() => expect(callWS).toHaveBeenCalledWith(expect.objectContaining({type: 'lichtzentrale/palette/apply', verteilung: 'hoehe'})));
+    await waitFor(() => expect(callWS).toHaveBeenCalledWith(expect.objectContaining({type: 'lichtzentrale/palette/apply', layout_area_id: room.area_id, verteilung: 'hoehe'})));
     expect(await screen.findByText(/1 fehlgeschlagen/)).toBeInTheDocument();
   });
   it('chooses an explicit wave axis, saves it, and clears wave for a static scene', async () => {
     const callWS = api(); render(<RoomPalette hass={{callWS} as Hass} palette={palette}/>);
-    await waitFor(() => expect(screen.getByLabelText('Zielraum')).toBeEnabled());
-    fireEvent.change(screen.getByLabelText('Zielraum'), {target: {value: room.area_id}});
+    await waitFor(() => expect(screen.getByLabelText('Raum oder Zone')).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Raum oder Zone'), {target: {value: room.area_id}}); fireEvent.click(screen.getByText('Mehr Optionen'));
     fireEvent.click(screen.getByLabelText('Als Szene im Raum speichern'));
     fireEvent.click(screen.getByLabelText('Dynamischer Farbwechsel'));
     fireEvent.click(screen.getByLabelText('Welle durch den Raum'));
@@ -129,8 +129,8 @@ describe('Räumliche Paletten und Hue-Stopp', () => {
   });
   it('clears wave when disabling dynamics so re-enabling with random distribution stays valid', async () => {
     const callWS = api(); render(<RoomPalette hass={{callWS} as Hass} palette={palette}/>);
-    await waitFor(() => expect(screen.getByLabelText('Zielraum')).toBeEnabled());
-    fireEvent.change(screen.getByLabelText('Zielraum'), {target: {value: room.area_id}});
+    await waitFor(() => expect(screen.getByLabelText('Raum oder Zone')).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Raum oder Zone'), {target: {value: room.area_id}}); fireEvent.click(screen.getByText('Mehr Optionen'));
     fireEvent.click(screen.getByLabelText('Dynamischer Farbwechsel'));
     fireEvent.click(screen.getByLabelText('Welle durch den Raum'));
     fireEvent.click(screen.getByLabelText('Dynamischer Farbwechsel'));

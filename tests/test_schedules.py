@@ -262,6 +262,7 @@ async def test_scene_and_room_action_route_with_current_targets(hass, store, man
         assert action.call_args.args[2] == "synthetic-scene"
         assert action.call_args.kwargs["transition"] == 600
         assert action.call_args.kwargs["guard"]()
+    plan = store._data["schedules"][0]
     plan["action"] = {"type": "room_off", "area_id": area}
     with patch("custom_components.lichtzentrale.rooms.async_toggle_room",
                new=AsyncMock(return_value={"applied": [entity.entity_id], "skipped": []})) as action:
@@ -269,6 +270,7 @@ async def test_scene_and_room_action_route_with_current_targets(hass, store, man
         assert action.call_args.kwargs["on"] is False
         assert action.call_args.kwargs["guard"]()
     store._data["scenes"] = []
+    plan = store._data["schedules"][0]
     plan["action"] = {"type": "scene", "scene_id": "synthetic-scene"}
     with pytest.raises(ServiceValidationError):
         await manager.async_test(plan["id"])

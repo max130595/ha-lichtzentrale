@@ -50,7 +50,7 @@ describe('Grundhelligkeit', () => {
   });
   it('preserves stale sensor, person and light selections until corrected', async () => {
     const saved = config(); saved.lux_sensor_entity_id = 'sensor.test_removed'; saved.person_entity_ids = ['person.test_removed']; saved.stages[0].entity_ids = ['light.test_other'];
-    setup(response(saved)); await edit(); expect(save()).toBeDisabled(); expect(screen.getByText(/sensor.test_removed/)).toBeInTheDocument(); expect(screen.getByText(/person.test_removed/)).toBeInTheDocument(); expect(screen.getByText(/light.test_other/)).toBeInTheDocument();
+    setup(response(saved)); await edit(); expect(save()).toBeDisabled(); expect(screen.getByText(/Gespeicherter Sensor/)).toBeInTheDocument(); expect(screen.getByText(/Gespeicherte Person/)).toBeInTheDocument(); expect(screen.getByText(/Gespeicherte Lampe/)).toBeInTheDocument(); expect(document.body.textContent).not.toMatch(/sensor.test_removed|person.test_removed|light.test_other/); expect(screen.getByLabelText('Lux-Sensor')).toHaveValue('sensor.test_removed');
     change('Lux-Sensor', 'sensor.test_lux'); fireEvent.click(screen.getByText('Person entfernen')); fireEvent.click(screen.getByText('Licht aus Stufe 1 entfernen')); expect(save()).toBeDisabled(); fireEvent.click(screen.getByLabelText('Stufe 1: Testlampe')); expect(save()).toBeEnabled();
   });
   it('blocks invalid numbers, duplicate targets and empty stages', async () => {

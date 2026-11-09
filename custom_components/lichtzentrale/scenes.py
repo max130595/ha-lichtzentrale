@@ -26,6 +26,7 @@ from .rooms import (
     async_dispatch,
     check_execution_guard,
     light_service_data,
+    locked_room,
     room_targets,
     validate_control_options,
     validate_transition,
@@ -43,20 +44,26 @@ def _name(value):
     return value.strip()
 
 
-def _area(hass, area_id):
+def _area(hass, area_id, store=None):
+    if store is not None:
+        from .zones import validate_area
+
+        return validate_area(hass, store, area_id)
     if not isinstance(area_id, str) or ar.async_get(hass).async_get_area(area_id) is None:
         _error("Der Raum wurde nicht gefunden.")
 
 
 def _targets(hass, store, area_id, targets):
-    _area(hass, area_id)
+    _area(hass, area_id, store)
     if any(not isinstance(entity_id, str) for entity_id in targets):
         _error("Ungültige Lampenkennung.")
     ids = validate_lights(hass, list(targets))
     allowed = store.data["settings"]["light_entity_ids"]
     if not ids or any(e not in allowed for e in ids):
         _error("Alle Lampen der Szene müssen ausdrücklich freigegeben sein.")
-    if any(entity_area_id(hass, e) != area_id for e in ids):
+    from .zones import contains
+
+    if any(not contains(hass, store, area_id, e) for e in ids):
         _error("Alle Lampen der Szene müssen zum gewählten Raum gehören.")
     return ids
 
@@ -219,7 +226,7 @@ async def async_save_scene(hass, store, scene):
     if not isinstance(scene, dict):
         _error("Ungültige Szene.")
     area_id = scene.get("area_id")
-    _area(hass, area_id)
+    _area(hass, area_id, store)
     existing = _scene(store, scene["id"]) if scene.get("id") else None
     if existing and existing["area_id"] != area_id:
         _error("Eine Szene kann nicht in einen anderen Raum verschoben werden.")
@@ -237,7 +244,12 @@ async def async_save_scene(hass, store, scene):
     verteilung = validate_distribution(scene.get("verteilung", "zufall"))
     if dynamic["welle"] and verteilung == "zufall":
         _error("Für eine Welle bitte eine räumliche Verteilung auswählen.")
+    night = scene.get("night", existing.get("night", False) if existing else False)
+    if type(night) is not bool:
+        _error("Die Nachtlicht-Kennzeichnung muss ein Wahrheitswert sein.")
     result = {
+        **deepcopy(existing or {}),
+        "night": night,
         "id": existing["id"] if existing else str(uuid4()),
         "name": _name(scene.get("name")),
         "area_id": area_id,
@@ -342,11 +354,163 @@ async def async_apply_scene(
 ):
     """Serialize recalls per room; dispatch each recall's individual lamps in parallel."""
     initial = _scene(store, scene_id)
-    locks = hass.data.setdefault(DOMAIN, {}).setdefault("scene_locks", {})
-    async with locks.setdefault(initial["area_id"], Lock()):
+    async with locked_room(hass, store, initial["area_id"]):
         return await async_apply_scene_locked(
             hass, store, scene_id, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard
         )
+
+
+def _hue_subset_values(hass, entity_id, targets):
+    """Project verifiable native Hue actions without activating the whole scene."""
+    hue_scene_targets(hass, entity_id)
+    registry = er.async_get(hass)
+    entry = registry.async_get(entity_id)
+    resource = hass.config_entries.async_get_entry(entry.config_entry_id).runtime_data.api.scenes.get(entry.unique_id)
+    values = {}
+    for item in resource.actions:
+        target = registry.async_get_entity_id("light", "hue", item.target.rid)
+        if target not in targets:
+            continue
+        action = getattr(item, "action", None)
+        on = getattr(getattr(action, "on", None), "on", None)
+        if type(on) is not bool:
+            continue
+        value = {"on": on}
+        if on:
+            # Gradients/effects cannot be faithfully expressed as a single color.
+            if any(getattr(action, key, None) is not None for key in ("gradient", "effects", "effects_v2")):
+                continue
+            brightness = getattr(getattr(action, "dimming", None), "brightness", None)
+            if brightness is not None:
+                if type(brightness) not in (int, float) or not math.isfinite(brightness) or not 0 <= brightness <= 100:
+                    continue
+                value["brightness"] = max(1, round(brightness * 255 / 100))
+            xy = getattr(getattr(action, "color", None), "xy", None)
+            mirek = getattr(getattr(action, "color_temperature", None), "mirek", None)
+            if mirek is not None:
+                if type(mirek) not in (int, float) or not math.isfinite(mirek) or mirek <= 0:
+                    continue
+                value["color_temp_kelvin"] = round(1_000_000 / mirek)
+            elif xy is not None:
+                value["xy"] = [getattr(xy, "x", None), getattr(xy, "y", None)]
+        try:
+            validate_control_options(**value)
+        except ServiceValidationError:
+            continue
+        values[target] = value
+    return values
+
+
+async def _async_pause_subset_adaptive(hass, store, targets, context, dispatch_guard):
+    """Pause only selected lamps; never switch off an entire AL group."""
+    from .adaptive import ADAPTIVE_DOMAIN, _primary
+
+    if not hass.data.get(ADAPTIVE_DOMAIN):
+        return
+    for state in hass.states.async_all("switch"):
+        try:
+            primary = _primary(hass, state.entity_id)
+        except ServiceValidationError:
+            continue
+        lights = getattr(primary, "lights", None)
+        if not isinstance(lights, (list, tuple, set)):
+            continue
+        selected = [e for e in targets if e.startswith("light.") and e in lights]
+        if not selected or state.state == "off":
+            continue
+        if state.state != "on":
+            _error("Adaptive Lighting ist nicht erreichbar.")
+        check_execution_guard(dispatch_guard)
+        await hass.services.async_call(
+            ADAPTIVE_DOMAIN, "set_manual_control",
+            {"entity_id": state.entity_id, "lights": selected, "manual_control": True},
+            blocking=True, context=context,
+        )
+
+
+async def async_apply_scene_subset(hass, store, scene_id, entity_ids, context=None, *, transition=None, guard=None, dispatch_guard=None):
+    """Recall an inherited scene only on shared lamps, without a broader loop.
+
+    Keep palette placement relative to the complete source. Hue is projected to
+    individual light actions, never hue.activate_scene. Unsupported native Hue
+    actions fail closed. A partial recall must not mark the source as recalled.
+    """
+    from .selected_lights import _locked_targets
+    from .zones import contains
+
+    initial = _scene(store, scene_id)
+    area_id = initial["area_id"]
+    async with _locked_targets(hass, store, entity_ids):
+        check_execution_guard(guard)
+        validate_transition(transition)
+        scene = _scene(store, scene_id)
+        targets = _targets(hass, store, area_id, entity_ids)
+
+        def stable():
+            check_execution_guard(guard)
+            check_execution_guard(dispatch_guard)
+            if _scene(store, scene_id) != scene:
+                _error("Die Szene hat sich geändert. Bitte erneut versuchen.")
+            _targets(hass, store, area_id, targets)
+            return True
+
+        stable()
+        if scene["kind"] == "hue":
+            hue_state = hass.states.get(scene["hue_scene"])
+            if hue_state is None or hue_state.state == "unavailable":
+                return {"applied": [], "skipped": targets}
+            values = _hue_subset_values(hass, scene["hue_scene"], targets)
+        elif scene["kind"] == "snapshot":
+            values = {e: scene["lights"][e] for e in targets if e in scene["lights"]}
+            for value in values.values():
+                validate_control_options(**value)
+        else:
+            values = {}
+        from .dynamic_scenes import async_stop_overlapping
+
+        await async_stop_overlapping(hass, targets)
+        stable()
+        await _async_pause_subset_adaptive(hass, store, targets, context, stable)
+        if scene["kind"] == "palette":
+            result = await async_apply_palette(
+                hass, store, scene["palette_id"], targets, brightness=scene.get("brightness"),
+                context=context, manage=False, layout_area_id=area_id,
+                layout_targets=[e for e in store.data["settings"]["light_entity_ids"]
+                                if contains(hass, store, area_id, e)],
+                verteilung=scene.get("verteilung", "zufall"),
+                welle=scene.get("dynamic", {}).get("welle", False),
+                transition=scene["dynamic"]["transition"] if transition is None else transition,
+                schedule_transition=transition is not None, dispatch_guard=stable,
+            )
+        else:
+            off_targets = [e for e, value in values.items() if not value["on"]]
+            captured = await store.async_remember_light_states(off_targets) if off_targets else {}
+            stable()
+            calls, skipped, prepared = [], [], {}
+            for entity in targets:
+                state = hass.states.get(entity)
+                if (entity not in values or state is None or state.state not in {"on", "off"}
+                        or (entity in captured and state is not captured[entity])):
+                    skipped.append(entity)
+                    continue
+                payload = light_service_data(state, transition=transition, **values[entity])
+                if payload is None:
+                    skipped.append(entity)
+                    continue
+                calls.append((state.domain, *payload))
+                prepared[entity] = state
+
+            def allowed(entity):
+                stable()
+                return hass.states.get(entity) is prepared[entity]
+
+            result = await async_dispatch(hass, calls, skipped, context, guard=allowed)
+            if scene["kind"] == "hue" and any(e not in values for e in targets):
+                result.setdefault("notes", []).append("Einzelne Hue-Szenenwerte lassen sich nicht sicher auf gemeinsame Lampen übertragen.")
+        if result.get("applied") and (scene.get("dynamic", {}).get("enabled") or (
+                scene["kind"] == "hue" and hue_state.attributes.get("is_dynamic"))):
+            result.setdefault("notes", []).append("Die geerbte Szene wurde nur auf den gemeinsamen Lampen statisch wiederhergestellt.")
+        return result
 
 
 async def async_apply_scene_locked(hass, store, scene_id, context=None, *, transition=None, guard=None, dispatch_guard=None):
@@ -355,7 +519,7 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
     validate_transition(transition)
     scene = _scene(store, scene_id)
     area_id = scene["area_id"]
-    _area(hass, area_id)
+    _area(hass, area_id, store)
     from .adaptive import async_pause_adaptive
 
     validate_dynamic(scene.get("dynamic", {}), scene["kind"])
@@ -386,6 +550,7 @@ async def async_apply_scene_locked(hass, store, scene_id, context=None, *, trans
             brightness=scene.get("brightness"),
             context=context,
             manage=False,
+            layout_area_id=area_id,
             verteilung=scene.get("verteilung", "zufall"),
             welle=scene.get("dynamic", {}).get("welle", False),
             transition=scene["dynamic"]["transition"] if transition is None else transition,

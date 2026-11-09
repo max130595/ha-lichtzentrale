@@ -1,4 +1,5 @@
 // Geändert für Lichtzentrale
+import {displayName, displayError} from './display';
 import {useEffect, useRef, useState} from 'react';
 import type {ApplyResult, Hass} from './types';
 export interface DynamicRun {scene_id: string; area_id: string; name: string; interval: number; transition: number}
@@ -36,14 +37,14 @@ export function RuntimeControls({hass, area, revision = 0}: {hass: Hass; area: s
   }
   const room = adaptive?.rooms?.find(item => item.area_id === area);
   return <section aria-label="Dynamik und natürliches Licht">
-    {error && <p role="alert">{error} <button onClick={() => setRefresh(value => value + 1)}>Lichtstatus neu laden</button></p>}
+    {error && <p role="alert">{displayError(error)} <button onClick={() => setRefresh(value => value + 1)}>Lichtstatus neu laden</button></p>}
     <div className="card"><h3>Dynamik stoppen</h3><p>Stoppt Lichtzentrale-Szenen und Hue-Dynamik im Raum. Eingeschaltete, freigegebene Lampen werden mit ihrer aktuellen Farbe und Helligkeit festgesetzt. Ausgeschaltete Lampen, Schalter und nicht verfügbare Geräte bleiben unverändert.</p>
-      {runs.filter(run => run.area_id === area).map(run => <p key={run.area_id}>Dynamische Szene läuft: {run.name} · Wechsel alle {run.interval} Sekunden · Übergang {run.transition} Sekunden</p>)}
+      {runs.filter(run => run.area_id === area).map(run => <p key={run.area_id}>Dynamische Szene läuft: {displayName(run.name)} · Wechsel alle {run.interval} Sekunden · Übergang {run.transition} Sekunden</p>)}
       <button disabled={busy} onClick={() => void update('dynamic/stop', {})}>Dynamik stoppen</button>{message && <p role="status">{message}</p>}
     </div>
     {adaptive?.available && <div className="card"><h3>Natürliches Licht</h3><p>Farbszenen pausieren natürliches Licht. Beim Einschalten kann es automatisch wieder starten.</p>
       {room?.reason && <p role="status">{room.reason}</p>}
-      <label>Adaptive Lighting zuordnen<select className="text-input" value={room?.switch_entity_id || ''} disabled={busy} onChange={event => void update('adaptive/set', {adaptive_switch: event.target.value || null})}><option value="">Keine Zuordnung</option>{adaptive.switches?.map(item => <option key={item.entity_id} value={item.entity_id}>{item.name}{item.available ? '' : ' · Nicht verfügbar'}</option>)}</select></label>
+      <label>Adaptive Lighting zuordnen<select className="text-input" value={room?.switch_entity_id || ''} disabled={busy} onChange={event => void update('adaptive/set', {adaptive_switch: event.target.value || null})}><option value="">Keine Zuordnung</option>{adaptive.switches?.map(item => <option key={item.entity_id} value={item.entity_id}>{displayName(item.name)}{item.available ? '' : ' · Nicht verfügbar'}</option>)}</select></label>
       {room?.switch_entity_id && <><label className="check"><input type="checkbox" checked={room.enabled} disabled={busy || !room.available} onChange={event => void update('adaptive/set', {enabled: event.target.checked})}/>Natürliches Licht aktiv</label>{!room.available && <p>Adaptive Lighting ist für diesen Raum nicht verfügbar.</p>}<label className="check"><input type="checkbox" checked={room.default_on === 'adaptive'} disabled={busy} onChange={event => void update('adaptive/set', {default_on: event.target.checked ? 'adaptive' : 'last'})}/>Beim Einschalten natürliches Licht starten</label></>}
     </div>}
   </section>;

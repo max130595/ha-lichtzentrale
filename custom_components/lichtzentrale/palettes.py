@@ -14,6 +14,7 @@ from .lights import entity_area_id, is_individual_light, validate_lights
 from .positions import ordered_targets, palette_indices, validate_distribution
 from .rooms import async_dispatch, check_execution_guard, validate_transition
 from .storage import LichtzentraleStore
+from .zones import contains, validate_area
 
 # Original names and color choices; no upstream presets or image assets.
 _PALETTES = [
@@ -77,6 +78,7 @@ async def async_apply_palette(
     welle: bool = False,
     layout_targets: list[str] | None = None,
     tick_area_id: str | None = None,
+    layout_area_id: str | None = None,
     schedule_transition: bool = False,
     dispatch_guard=None,
 ) -> dict[str, list[str]]:
@@ -92,6 +94,10 @@ async def async_apply_palette(
     if not entity_ids:
         raise ServiceValidationError("Bitte mindestens eine Lampe auswählen.")
     targets = validate_lights(hass, entity_ids)
+    if layout_area_id is not None:
+        validate_area(hass, store, layout_area_id)
+        if any(not contains(hass, store, layout_area_id, entity) for entity in targets):
+            raise ServiceValidationError("Die Lampen gehören nicht vollständig zum gewählten Ziel.")
     allowed = store.data["settings"]["light_entity_ids"]
     if any(entity_id not in allowed for entity_id in targets):
         raise ServiceValidationError("Bitte die ausgewählten Lampen zuerst freigeben.")
@@ -111,7 +117,7 @@ async def async_apply_palette(
 
         from .adaptive import async_pause_adaptive
         from .const import DOMAIN
-        from .dynamic_scenes import stop_dynamic
+        from .dynamic_scenes import async_stop_overlapping, stop_dynamic
 
         areas = sorted(
             {entity_area_id(hass, e) for e in targets if e.startswith("light.")} - {None}
@@ -120,6 +126,7 @@ async def async_apply_palette(
         async with AsyncExitStack() as stack:
             for area_id in areas:
                 await stack.enter_async_context(locks.setdefault(area_id, Lock()))
+            await async_stop_overlapping(hass, targets)
             for area_id in areas:
                 await stop_dynamic(hass, area_id)
                 await async_pause_adaptive(hass, store, area_id, context=context, dispatch_guard=dispatch_guard)
@@ -137,6 +144,7 @@ async def async_apply_palette(
                 welle=welle,
                 layout_targets=layout_targets,
                 tick_area_id=tick_area_id,
+                layout_area_id=layout_area_id,
                 schedule_transition=schedule_transition,
                 dispatch_guard=dispatch_guard,
             )
@@ -145,11 +153,11 @@ async def async_apply_palette(
     targets = [e for e in targets if e.startswith("light.")]
     result: dict[str, list[str]] = {"applied": [], "skipped": skipped_switches}
     calls = []
-    layout = layout_targets if welle and layout_targets is not None else targets
+    layout = layout_targets if layout_targets is not None else targets
     layout = [e for e in layout if e.startswith("light.")]
     positions = {}
     for entity_id in layout:
-        area_id = entity_area_id(hass, entity_id)
+        area_id = layout_area_id or tick_area_id or entity_area_id(hass, entity_id)
         positions.update(
             {entity_id: store.data["rooms"].get(area_id, {}).get("positions", {}).get(entity_id)}
         )
@@ -186,7 +194,7 @@ async def async_apply_palette(
     # Only the initial recall carries this guard; running ticks keep their own checks.
     def still_allowed(entity_id):
         check_execution_guard(dispatch_guard)
-        return True
+        return layout_area_id is None or contains(hass, store, layout_area_id, entity_id)
 
     return await async_dispatch(hass, calls, result["skipped"], context, guard=still_allowed)
 
@@ -203,7 +211,7 @@ async def _async_dispatch_tick(hass, store, area_id, calls, skipped, context):
             or state.domain != "light"
             or state.state != "on"
             or entity_id not in store.data["settings"]["light_entity_ids"]
-            or entity_area_id(hass, entity_id) != area_id
+            or not contains(hass, store, area_id, entity_id)
             or not is_individual_light(hass, state)
         ):
             return "skipped", entity_id

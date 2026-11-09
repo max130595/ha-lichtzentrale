@@ -56,12 +56,13 @@ function makeApi(options: Options = {}) {
 async function setup(options: Options = {}) {
   const callWS = makeApi(options), view = render(<Buttons hass={{callWS} as Hass}/>);
   await screen.findByRole('region', {name: 'Szenenzyklus und Einschalten'});
+  for (const summary of screen.queryAllByText('Alle Ereignisse und gespeicherte Belegungen')) fireEvent.click(summary);
   return {callWS, ...view};
 }
 const writes = (callWS: ReturnType<typeof makeApi>) => callWS.mock.calls.filter(([request]) => !request.type.endsWith('/list') && !request.type.endsWith('/status'));
 function eventGroup(type = 'Kurz drücken', button = 'Testtaste eins') {return within(within(screen.getByRole('region', {name: button})).getByRole('group', {name: type}));}
 function editEvent(type = 'Kurz drücken', button = 'Testtaste eins') {fireEvent.click(eventGroup(type, button).getByRole('button', {name: 'Belegen'}));}
-function chooseRoom(area = rooms[0].area_id) {fireEvent.change(screen.getByLabelText('Zielraum'), {target: {value: area}});}
+function chooseRoom(area = rooms[0].area_id) {fireEvent.change(screen.getByLabelText('Raum oder Zone'), {target: {value: area}});}
 function chooseAction(action: string) {fireEvent.change(screen.getByLabelText('Aktion'), {target: {value: action}});}
 function openSettings(area = rooms[0].area_id) {fireEvent.change(screen.getByLabelText('Raum für Einstellungen'), {target: {value: area}});}
 afterEach(cleanup);
@@ -86,10 +87,10 @@ describe('Tasterbelegungen', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
     await screen.findByText('Belegung in Home Assistant gespeichert.');
     expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/binding/save', binding: {event_entity: buttons[0].entity_id, event_type: 'short_release', action: 'next_scene', area_id: rooms[0].area_id, params: {}}});
-    expect(eventGroup().getByText('Nächste Szene im Zyklus · Testraum A')).toBeVisible();
-    expect(screen.queryByLabelText('Zielraum')).not.toBeInTheDocument();
+    expect(eventGroup().getByText(/Nächste Szene im Zyklus · Testraum A/)).toBeVisible();
+    expect(screen.queryByLabelText('Raum oder Zone')).not.toBeInTheDocument();
     unmount(); render(<Buttons hass={{callWS} as Hass}/>);
-    await screen.findByText('Nächste Szene im Zyklus · Testraum A');
+    await screen.findAllByText(/Nächste Szene im Zyklus · Testraum A/);
   });
   it('requires a room and a matching scene, resetting scene selection on a room change', async () => {
     const {callWS} = await setup(); editEvent();
@@ -113,17 +114,17 @@ describe('Tasterbelegungen', () => {
     chooseAction('dim_down'); fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
     await screen.findByText('Belegung in Home Assistant gespeichert.');
     expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/binding/save', binding: {...binding, action: 'dim_down'}});
-    expect(eventGroup().getByText('Dunkler (10 %) · Testraum A')).toBeVisible();
+    expect(eventGroup().getByText(/Dunkler \(10 %\) · Testraum A/)).toBeVisible();
   });
   it('does not persist canceled edits or reuse another event draft', async () => {
     const {callWS} = await setup(); editEvent(); chooseRoom(); chooseAction('scene');
     fireEvent.change(screen.getByLabelText('Szene'), {target: {value: scenes[0].id}});
     fireEvent.click(screen.getByRole('button', {name: 'Abbrechen'}));
     expect(writes(callWS)).toHaveLength(0);
-    editEvent(); expect(screen.getByLabelText('Zielraum')).toHaveValue('');
+    editEvent(); expect(screen.getByLabelText('Raum oder Zone')).toHaveValue('');
     chooseRoom(); chooseAction('dim_up');
     editEvent('Im Uhrzeigersinn drehen', 'Testdrehrad');
-    expect(screen.getByLabelText('Zielraum')).toHaveValue('');
+    expect(screen.getByLabelText('Raum oder Zone')).toHaveValue('');
     expect(screen.getByLabelText('Aktion')).toHaveValue('toggle_room');
   });
   it('keeps a failed write unsaved and the draft available for an explicit retry', async () => {
@@ -145,13 +146,13 @@ describe('Tasterbelegungen', () => {
     const save = screen.getByRole('button', {name: 'Belegung speichern'});
     fireEvent.click(save); fireEvent.click(save);
     expect(writes(callWS)).toHaveLength(1);
-    expect(screen.getByLabelText('Zielraum')).toBeDisabled();
+    expect(screen.getByLabelText('Raum oder Zone')).toBeDisabled();
     expect(screen.getByRole('button', {name: 'Abbrechen'})).toBeDisabled();
     expect(screen.getByRole('button', {name: 'Taster neu laden'})).toBeDisabled();
     expect(eventGroup('Gedrückt halten (Wiederholung)').getByRole('button', {name: 'Belegen'})).toBeDisabled();
     expect(eventGroup().getByText('Noch nicht belegt')).toBeVisible();
     await act(async () => finish({...binding, action: 'dim_down'}));
-    expect(eventGroup().getByText('Dunkler (10 %) · Testraum A')).toBeVisible();
+    expect(eventGroup().getByText(/Dunkler \(10 %\) · Testraum A/)).toBeVisible();
   });
   it('deletes vanished and obsolete bindings with cancel, failure and repeated-click protection', async () => {
     const vanished = {...binding, id: 'test_vanished_binding', event_entity: 'event.test_vanished', event_type: 'old_event'};
@@ -176,7 +177,7 @@ describe('Tasterbelegungen', () => {
   });
   it('retains obsolete event assignments on present buttons so they can be deleted', async () => {
     await setup({bindings: [{...binding, event_type: 'obsolete_test_event'}]});
-    const old = eventGroup('Geräteereignis');
+    const old = eventGroup('obsolete_test_event');
     expect(old.getByText('obsolete_test_event')).toBeVisible();
     expect(old.getByRole('button', {name: 'Belegung löschen'})).toBeEnabled();
     expect(old.getByRole('button', {name: 'Belegung bearbeiten'})).toBeDisabled();
@@ -186,7 +187,7 @@ describe('Tasterbelegungen', () => {
     expect(screen.queryByRole('option', {name: 'Natürliches Licht einschalten'})).not.toBeInTheDocument();
     unmount(); await setup({adaptive}); editEvent(); chooseRoom();
     const actions = within(screen.getByLabelText('Aktion'));
-    expect(actions.getAllByRole('option')).toHaveLength(14); // placeholder + 13 actions
+    expect(actions.getAllByRole('option')).toHaveLength(18); // placeholder + 13 actions
     chooseAction('adaptive_on'); chooseRoom(rooms[1].area_id);
     expect(screen.getByLabelText('Aktion')).toHaveValue('toggle_room');
     expect(screen.queryByRole('option', {name: 'Natürliches Licht einschalten'})).not.toBeInTheDocument();
@@ -195,7 +196,7 @@ describe('Tasterbelegungen', () => {
     await setup({bindings: [{...binding, area_id: 'test_missing_room', action: 'adaptive_on'}]});
     expect(eventGroup().getByText(/Raum nicht mehr vorhanden/)).toBeVisible();
     fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
-    expect(screen.getByLabelText('Zielraum')).toHaveValue('');
+    expect(screen.getByLabelText('Raum oder Zone')).toHaveValue('');
     expect(screen.getByLabelText('Aktion')).toHaveValue('');
     expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
   });
@@ -223,14 +224,14 @@ describe('Tasterbelegungen', () => {
     let finish: (value: Binding) => void = () => {};
     callWS.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
     fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
-    fireEvent.click(screen.getByRole('button', {name: 'Zeitpläne'}));
+    fireEvent.click(screen.getByRole('button', {name: 'Automationen'}));
     await act(async () => finish(binding));
-    expect(await screen.findByText('Noch keine Zeitpläne.')).toBeVisible();
+    expect(await screen.findByText(/Noch keine (Zeitpläne|Automationen)/)).toBeVisible();
     expect(screen.queryByText('Belegung in Home Assistant gespeichert.')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', {name: 'Taster'}));
     await screen.findByRole('region', {name: 'Testgerät'});
     expect(callWS.mock.calls.filter(([request]) => request.type === 'lichtzentrale/bindings/list')).toHaveLength(2);
-    expect(screen.queryByLabelText('Zielraum')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Raum oder Zone')).not.toBeInTheDocument();
   });
 });
 
@@ -347,7 +348,7 @@ const selectLight = (name: string) => fireEvent.click(screen.getByRole('checkbox
 describe('Einzellampen für Taster', () => {
   it.each(['toggle_lights', 'turn_on_lights', 'turn_off_lights'])('saves %s across rooms without an area, with approved targets only', async action => {
     const {callWS, unmount} = await setup({lights: testLights}); editEvent(); chooseAction(action);
-    expect(screen.queryByLabelText('Zielraum')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Raum oder Zone')).not.toBeInTheDocument();
     expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
     expect(screen.queryByRole('checkbox', {name: /Nicht freigegeben|Falsche Domain/})).not.toBeInTheDocument();
     expect(screen.getByRole('group', {name: 'Testraum A'})).toBeVisible();
@@ -373,16 +374,16 @@ describe('Einzellampen für Taster', () => {
   });
   it.each(['dim_up', 'dim_down'])('retains room-wide %s and omits entity_ids until individual targets are requested', async action => {
     const {callWS} = await setup({lights: testLights}); editEvent(); chooseRoom(); chooseAction(action);
-    expect(screen.getByLabelText('Dimmziel')).toHaveValue('room');
-    fireEvent.change(screen.getByLabelText('Dimmziel'), {target: {value: 'lights'}});
+    expect(screen.getByLabelText('Ziel')).toHaveValue('room');
+    fireEvent.change(screen.getByLabelText('Ziel'), {target: {value: 'lights'}});
     expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
     selectLight('Testlicht B');
     fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
     await screen.findByText('Belegung in Home Assistant gespeichert.');
     expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({action, area_id: null, params: {entity_ids: ['switch.test_b']}})}));
     fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
-    expect(screen.getByLabelText('Dimmziel')).toHaveValue('lights');
-    fireEvent.change(screen.getByLabelText('Dimmziel'), {target: {value: 'room'}}); chooseRoom();
+    expect(screen.getByLabelText('Ziel')).toHaveValue('lights');
+    fireEvent.change(screen.getByLabelText('Ziel'), {target: {value: 'room'}}); chooseRoom();
     fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
     await screen.findByText('Belegung in Home Assistant gespeichert.');
     expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({action, area_id: rooms[0].area_id, params: {}})}));
@@ -392,9 +393,9 @@ describe('Einzellampen für Taster', () => {
     fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
     expect(screen.getByRole('alert')).toHaveTextContent('nicht mehr freigegeben oder vorhanden');
     expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', {name: 'light.test_missing aus Auswahl entfernen'}));
+    fireEvent.click(screen.getAllByRole('button', {name: 'Fehlendes Licht aus Auswahl entfernen'})[0]);
     expect(screen.getByRole('button', {name: 'Belegung speichern'})).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', {name: 'light.test_denied aus Auswahl entfernen'}));
+    fireEvent.click(screen.getByRole('button', {name: 'Fehlendes Licht aus Auswahl entfernen'}));
     fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
     await screen.findByText('Belegung in Home Assistant gespeichert.');
     expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({binding: expect.objectContaining({params: {entity_ids: ['light.test_a']}})}));
@@ -423,6 +424,152 @@ describe('Einzellampen für Taster', () => {
     expect(screen.getByRole('checkbox', {name: /Testlicht A/})).toBeDisabled();
     expect(screen.getByRole('button', {name: 'Abbrechen'})).toBeDisabled();
     await act(async () => finish({...binding, action: 'toggle_lights', area_id: null, params: {entity_ids: ['switch.test_b']}}));
-    expect(eventGroup().getByText('Ausgewählte Lichter ein / aus · Testlicht B')).toBeVisible();
+    expect(eventGroup().getByText(/Ausgewählte Lichter ein \/ aus · Testlicht B/)).toBeVisible();
+  });
+});
+
+describe('Gerätezeichnung und Anlernen', () => {
+  it('learns runtime attributes, uses template defaults and saves no irrelevant scene parameter', async () => {
+    const {callWS} = await setup({lights: testLights});
+    const group = within(screen.getByRole('region', {name: 'Testgerät'}));
+    fireEvent.click(group.getByText('Dimmer-Vorlage'));
+    fireEvent.change(group.getByLabelText('Ziel für die Vorlage'), {target: {value: rooms[0].area_id}});
+    fireEvent.click(group.getByRole('button', {name: 'Vorlage verwenden'}));
+    const original = callWS.getMockImplementation()!;
+    callWS.mockImplementation(async request => {
+      if (request.type === 'lichtzentrale/buttons/learn/start') return {token: 'synthetic-token'};
+      if (request.type === 'lichtzentrale/buttons/learn/status') return {status: 'captured', observation: {event_entity: buttons[0].entity_id, event_type: 'short_release', event_attributes: {arbitrary_runtime_key: 'first', arbitrary_direction: 1}}};
+      if (request.type === 'lichtzentrale/buttons/learn/cancel') return {cancelled: true};
+      return original(request);
+    });
+    fireEvent.click(group.getByRole('button', {name: 'Taste anlernen'}));
+    await group.findByText('Erkannt: Kurz drücken');
+    fireEvent.click(group.getAllByRole('button', {name: 'Aktion und Ziel auswählen'})[0]);
+    expect(screen.getByLabelText('Aktion')).toHaveValue('full_brightness');
+    expect(screen.getByLabelText('Raum oder Zone')).toHaveValue(rooms[0].area_id);
+    expect(screen.queryByLabelText('Szene')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    const save = callWS.mock.calls.find(([request]) => request.type === 'lichtzentrale/binding/save')![0];
+    expect(save.binding).toEqual({event_entity: buttons[0].entity_id, event_type: 'short_release', event_attributes: {arbitrary_runtime_key: 'first', arbitrary_direction: 1}, control_label: 'An · Kurz drücken', action: 'full_brightness', area_id: rooms[0].area_id, params: {}});
+    expect(document.body.textContent).not.toContain(buttons[0].entity_id);
+    expect(document.body.textContent).not.toContain(testLights[0].entity_id);
+  });
+
+  it('cancels a late learning start without opening or saving a stale draft', async () => {
+    const {callWS} = await setup();
+    const group = within(screen.getByRole('region', {name: 'Testgerät'}));
+    fireEvent.click(group.getByRole('button', {name: 'Hue Dimmer An'}));
+    let finish: (value: unknown) => void = () => {};
+    callWS.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    fireEvent.click(group.getByRole('button', {name: 'Taste anlernen'}));
+    fireEvent.click(group.getByRole('button', {name: 'Anlernen abbrechen'}));
+    await act(async () => finish({token: 'late-synthetic-token'}));
+    expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/buttons/learn/cancel', token: 'late-synthetic-token'});
+    expect(group.queryByText(/Erkannt:/)).not.toBeInTheDocument();
+    expect(callWS.mock.calls.some(([request]) => request.type === 'lichtzentrale/binding/save')).toBe(false);
+  });
+
+  it('offers each drawing, preserves unknown event names and displays learning failures', async () => {
+    const {callWS} = await setup();
+    const group = within(screen.getByRole('region', {name: 'Testgerät'}));
+    for (const shape of ['Tap Dial', 'Wandschalter-Modul', 'Shelly']) {
+      fireEvent.change(group.getByLabelText('Gerätezeichnung'), {target: {value: shape}});
+      expect(group.getByRole('group', {name: `Zeichnung ${shape}`})).toBeInTheDocument();
+    }
+    fireEvent.click(group.getByRole('button', {name: 'Shelly Taste'}));
+    callWS.mockRejectedValueOnce(new Error('Taster nicht erreichbar'));
+    fireEvent.click(group.getByRole('button', {name: 'Taste anlernen'}));
+    expect(await group.findByRole('alert')).toHaveTextContent('Taster nicht erreichbar');
+    expect(screen.getByRole('group', {name: 'custom_event'})).toBeInTheDocument();
+  });
+});
+
+async function captureLearnedEvent(eventType: string, attributes: Record<string, unknown>) {
+  const source = {...buttons[0], event_types: [eventType], model: 'Tap Dial'};
+  const result = await setup({buttons: [source]});
+  const group = within(screen.getByRole('region', {name: 'Testgerät'}));
+  fireEvent.click(group.getByRole('button', {name: 'Tap Dial Drehrad'}));
+  fireEvent.click(group.getByRole('button', {name: 'Drehen nach rechts'}));
+  const original = result.callWS.getMockImplementation()!;
+  result.callWS.mockImplementation(async request => {
+    if (request.type === 'lichtzentrale/buttons/learn/start') return {token: 'synthetic-wildcard-token'};
+    if (request.type === 'lichtzentrale/buttons/learn/status') return {status: 'captured', observation: {event_entity: source.entity_id, event_type: eventType, event_attributes: attributes}};
+    if (request.type === 'lichtzentrale/buttons/learn/cancel') return {cancelled: true};
+    return original(request);
+  });
+  fireEvent.click(group.getByRole('button', {name: 'Taste anlernen'}));
+  await group.findByText(/^Erkannt:/);
+  return {...result, group};
+}
+
+describe('Gelernte Merkmale und Egal-Auswahl', () => {
+  it('defaults only observed dial speed to egal and retains it through save, reload and edit', async () => {
+    const {callWS, group, unmount} = await captureLearnedEvent('dial_rotate', {direction: 'right', speed: 2, runtime_marker: 'synthetic'});
+    expect(group.getByLabelText('Geschwindigkeit beachten')).toHaveValue('ignore');
+    expect(group.getByLabelText('Richtung beachten')).toHaveValue('match');
+    expect(group.getByLabelText('runtime_marker beachten')).toHaveValue('match');
+    fireEvent.click(group.getAllByRole('button', {name: 'Aktion und Ziel auswählen'})[0]);
+    expect(screen.getByLabelText('Geschwindigkeit beachten')).toHaveValue('ignore');
+    chooseRoom(); chooseAction('dim_up');
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    const saved = callWS.mock.calls.find(([request]) => request.type === 'lichtzentrale/binding/save')![0].binding;
+    expect(saved).toMatchObject({event_attributes: {direction: 'right', speed: 2, runtime_marker: 'synthetic'}, ignored_event_attributes: ['speed']});
+    unmount(); render(<Buttons hass={{callWS} as Hass}/>);
+    await screen.findByRole('region', {name: 'Testgerät'});
+    fireEvent.click(screen.getByText('Alle Ereignisse und gespeicherte Belegungen'));
+    fireEvent.click(eventGroup('Drehen').getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Geschwindigkeit beachten')).toHaveValue('ignore');
+    expect(screen.getByLabelText('Richtung beachten')).toHaveValue('match');
+    fireEvent.change(screen.getByLabelText('Geschwindigkeit beachten'), {target: {value: 'match'}});
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({type: 'lichtzentrale/binding/save', binding: expect.objectContaining({ignored_event_attributes: [], event_attributes: {direction: 'right', speed: 2, runtime_marker: 'synthetic'}})}));
+    expect(document.body.textContent).not.toContain(buttons[0].entity_id);
+  });
+
+  it('can ignore unknown observed attributes while required fields remain exact', async () => {
+    const {callWS, group} = await captureLearnedEvent('press_release', {button: 'button_1', unexpected_detail: {nested: 3}, speed: 5});
+    expect(group.getByLabelText('Taste beachten')).toHaveValue('match');
+    expect(group.getByLabelText('Geschwindigkeit beachten')).toHaveValue('match');
+    fireEvent.change(group.getByLabelText('unexpected_detail beachten'), {target: {value: 'ignore'}});
+    fireEvent.click(group.getAllByRole('button', {name: 'Aktion und Ziel auswählen'})[0]);
+    expect(screen.getByLabelText('unexpected_detail beachten')).toHaveValue('ignore');
+    chooseRoom();
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith(expect.objectContaining({type: 'lichtzentrale/binding/save', binding: expect.objectContaining({ignored_event_attributes: ['unexpected_detail'], event_attributes: {button: 'button_1', unexpected_detail: {nested: 3}, speed: 5}})}));
+  });
+
+  it('never adds an unobserved speed field or changes old exact dial bindings by default', async () => {
+    const {group, unmount} = await captureLearnedEvent('dial_rotate', {direction: 'right'});
+    expect(group.queryByLabelText('Geschwindigkeit beachten')).not.toBeInTheDocument();
+    expect(group.getByLabelText('Richtung beachten')).toHaveValue('match');
+    fireEvent.click(group.getByRole('button', {name: 'Anlernen abbrechen'}));
+    expect(group.queryByText(/^Erkannt:/)).not.toBeInTheDocument();
+    unmount();
+    const exact = {...binding, event_type: 'dial_rotate', event_attributes: {direction: 'right', speed: 2}};
+    const {callWS} = await setup({buttons: [{...buttons[0], event_types: ['dial_rotate']}], bindings: [exact]});
+    fireEvent.click(eventGroup('Drehen').getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('Geschwindigkeit beachten')).toHaveValue('match');
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    await screen.findByText('Belegung in Home Assistant gespeichert.');
+    expect(callWS).toHaveBeenLastCalledWith({type: 'lichtzentrale/binding/save', binding: exact});
+  });
+
+  it('keeps conflicting edits as an unsaved draft and cancellation restores saved matching', async () => {
+    const existing = {...binding, event_attributes: {button: 'button_1', unknown_observed_key: 'synthetic'}};
+    const {callWS} = await setup({bindings: [existing]});
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    fireEvent.change(screen.getByLabelText('unknown_observed_key beachten'), {target: {value: 'ignore'}});
+    callWS.mockRejectedValueOnce(new Error('Für dieses Ereignis gibt es bereits eine gleich genaue Belegung.'));
+    fireEvent.click(screen.getByRole('button', {name: 'Belegung speichern'}));
+    expect(await screen.findByRole('alert')).toHaveTextContent('gleich genaue Belegung');
+    expect(screen.getByLabelText('unknown_observed_key beachten')).toHaveValue('ignore');
+    expect(screen.queryByText('Belegung in Home Assistant gespeichert.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {name: 'Abbrechen'}));
+    fireEvent.click(eventGroup().getByRole('button', {name: 'Belegung bearbeiten'}));
+    expect(screen.getByLabelText('unknown_observed_key beachten')).toHaveValue('match');
   });
 });

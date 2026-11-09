@@ -281,3 +281,36 @@ async def test_invalid_adaptive_room_on_preserves_pending_off_cycle(hass, store,
     assert reloaded.data["rooms"][area]["pre_off_pending"] == [light]
     assert reloaded.data["rooms"][area]["pre_off_lights"][light]["brightness"] == 83
     assert not calls
+
+
+async def test_zone_color_pauses_intersecting_room_mapping_only(hass, store, adaptive):
+    area, light, switch, _, calls = adaptive
+    await async_set_adaptive(hass, store, area, adaptive_switch=switch)
+    zone = await store.async_save_zone({"name": "Synthetic overlapping zone", "entity_ids": [light]})
+    await async_pause_adaptive(hass, store, "zone:" + zone["id"])
+    assert [(call.domain, call.service, call.data) for call in calls] == [
+        ("switch", "turn_off", {"entity_id": switch}),
+    ]
+
+
+async def test_room_color_pauses_intersecting_zone_mapping_only(hass, store, adaptive):
+    area, light, switch, _, calls = adaptive
+    zone = await store.async_save_zone({"name": "Synthetic adaptive zone", "entity_ids": [light]})
+    await async_set_adaptive(hass, store, "zone:" + zone["id"], adaptive_switch=switch)
+    await async_pause_adaptive(hass, store, area)
+    assert [(call.domain, call.service, call.data) for call in calls] == [
+        ("switch", "turn_off", {"entity_id": switch}),
+    ]
+
+
+async def test_unrelated_color_area_does_not_pause_or_resume_mapping(hass, store, adaptive):
+    area, light, switch, _, calls = adaptive
+    await async_set_adaptive(hass, store, area, adaptive_switch=switch)
+    other = ar.async_get(hass).async_create("Synthetic unrelated room")
+    entry = er.async_get(hass).async_get_or_create("light", "synthetic", "other-adaptive-test")
+    er.async_get(hass).async_update_entity(entry.entity_id, area_id=other.id)
+    hass.states.async_set(entry.entity_id, "on", {"supported_color_modes": ["color_temp"]})
+    await store.async_set_lights([light, entry.entity_id])
+    await async_pause_adaptive(hass, store, other.id)
+    assert calls == []
+    assert hass.states.get(switch).state == "on"

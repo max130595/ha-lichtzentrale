@@ -4,8 +4,11 @@ Eine lokale Licht-App als Custom Integration für Home Assistant. Oberfläche au
 für schmale Bildschirme ausgelegt. Kein Cloud-Konto und keine zusätzlichen
 Python-Abhängigkeiten zur Laufzeit.
 
-**Stand: Stufe 4 (Entwurf zur Abnahme).** Räume und Einzellampen, gespeicherte Raum-Szenen, Hue-Import,
-zwölf eigene Farbpaletten, räumliche Verteilung und Wellen, dynamische Palettenszenen, optionales natürliches Licht und konfigurierbare **Taster** mit raumübergreifender Einzellampen-Auswahl. Bewegungsautomatik und **Zeitpläne** sind serverseitig gespeichert.
+**Stand: Stufe 5b, Teil 2 (Entwurf zur Abnahme), Version 0.4.0.** Fünf Reiter:
+Zuhause, Farben, Automationen, Taster und Mehr. Räume und frei kombinierbare Zonen,
+eigene Nachtlicht-Szenen, Rückkehr zur heutigen Automatik, geordnete Mehrfachaktionen
+und lernbare Zigbee2MQTT-Taster ergänzen die bestehenden Szenen, Dynamik, Bewegung
+und Grundhelligkeitsregeln. Alle Einstellungen bleiben serverseitig gespeichert.
 Der weitere Ausbau ist in [docs/BAUPLAN.md](docs/BAUPLAN.md) beschrieben.
 
 ## Installation über HACS
@@ -27,12 +30,12 @@ Frontend-Dateien direkt verwenden; Node.js wird auf dem HA-System nicht benötig
 
 ## Erste Farbpalette anwenden
 
-1. In der Galerie **Lampen freigeben** öffnen und ausschließlich die gewünschten
+1. Unter **Mehr → Lampen freigeben** öffnen und ausschließlich die gewünschten
    **Einzellampen und als Licht genutzte Shelly-Schalter** auswählen. Druckerbeleuchtung
    wird standardmäßig ausgeblendet und nur über eine ausdrückliche Anzeigeoption angeboten.
    Zunächst ist keine Lampe freigegeben.
 2. Freigabe speichern. Sie wird serverseitig in Home Assistant gespeichert.
-3. Eine Palette und eine oder mehrere freigegebene Lampen wählen.
+3. Unter **Farben** eine Palette und einen Raum, eine Zone oder freigegebene Lampen wählen.
 4. Helligkeit und Übergang nach Bedarf einstellen und **anwenden**.
 
 Gruppenlampen von Hue und Home Assistant werden ausgeschlossen. Paletten verteilen
@@ -42,6 +45,38 @@ nur den Einschaltbefehl. `switch.*`-Lichtschalter bleiben bei statischen und dyn
 Paletten unverändert; Snapshot-Szenen stellen ihren gespeicherten An/Aus-Wert her.
 Nicht erreichbare oder unbekannte Lampen werden übersprungen
 und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
+
+## Zonen, Automationen und Nachtlicht
+
+- **Zuhause:** Zonen stehen über Räumen. „Neue Zone“ kombiniert freigegebene Lampen aus
+  mehreren Bereichen. Lampen dürfen mehreren Zonen angehören. Löschen einer Zone löscht
+  keine Szenen oder Regeln stillschweigend; veraltete Verweise müssen ausdrücklich repariert werden.
+- **+ Neue Szene:** Lampen einstellen, Namen vergeben und speichern. Eine normale Szene
+  kann je Raum/Zone als Nachtlicht markiert werden. Der kleine Nachtlichtknopf ruft sie ab.
+- **Automationen:** Wann → Wo → Was. Die erste Aktion übernimmt die Ziele aus „Wo“;
+  zusätzliche Aktionen wählen eigene Ziele. Aktionen werden streng nacheinander ausgeführt.
+  Eine spätere Aktion gewinnt bei überschneidenden Zielen. Ein Beispiel ist Zone aus,
+  danach ein Raum dieser Zone auf Nachtlicht. Eine gespeicherte Szene gehört zu genau
+  einem Raum oder einer Zone; für verschiedene Szenen weitere Aktionen anlegen.
+- **Zurück zur Automatik / Nachtlicht ⇄ Automatik:** Als Taster- und Automationsaktionen
+  verfügbar. Die letzte zumindest teilweise ausgeführte Szene, Nachtlicht oder Aus pro Ziel bleibt
+  bis zum lokalen Tageswechsel gespeichert, auch über einen Neustart. Manuelle Bedienung
+  überschreibt diesen Stand nicht. Fehlt ein eigener Stand, gilt für gemeinsame Lampen der
+  jüngste heutige Stand aus überlappenden Räumen/Zonen. Andere Lampen bleiben unverändert.
+  Ohne passenden Stand wird nichts geschaltet und ein Hinweis ausgegeben. Kleine gerätebedingte
+  Rundungen verhindern die Nachtlicht-Rückkehr nicht.
+- **Taster:** Gerät und Taste wählen, Ereignis anlernen und Aktion/Ziel speichern. Bei
+  Zigbee2MQTT werden Ereignisquelle, Typ und tatsächlich beobachtete Attribute gemeinsam
+  verwendet. Unbekannte Ereignisse bleiben sichtbar. Die Dimmer-Vorlage schlägt passende
+  Aktionen vor; reale Tastenzuordnungen werden nicht aus Namen geraten. Beobachtete Attribute
+  können beim Anlernen einzeln als „egal“ markiert werden. Bei Drehen (`dial_rotate`) ist
+  `speed` standardmäßig egal, damit dieselbe Drehrichtung bei jeder Geschwindigkeit passt.
+  Bestehende gespeicherte genaue Zuordnungen bleiben unverändert.
+- Bewegung, Grundhelligkeit, Positionen und weitere seltene Einstellungen bleiben unter
+  **Mehr Optionen** erreichbar. Adaptive Lighting ist weiterhin optional.
+
+Der [Testplan für Stufe 5b](docs/STUFE_5B_TESTPLAN.md) trennt automatisierte Prüfungen und
+noch erforderliche Sicht-/Geräteabnahme durch Claude. Dieser Branch wurde nicht live installiert.
 
 ## Räume und Szenen
 
