@@ -51,6 +51,9 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements-ha2026.11.txt
       - run: python scripts/smoke_target.py
+      - run: python scripts/smoke_stage5c_review.py
+      - run: python scripts/smoke_stage5d.py
+      - run: python scripts/smoke_stage5e.py
   hassfest:
     name: hassfest
     runs-on: ubuntu-latest

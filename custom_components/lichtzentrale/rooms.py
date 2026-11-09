@@ -123,10 +123,12 @@ def validate_transition(transition):
 
 
 def light_service_data(
-    state: State, on=None, brightness=None, xy=None, color_temp_kelvin=None, *, transition=None
+    state: State, on=None, brightness=None, xy=None, color_temp_kelvin=None, *, transition=None, effect=None
 ):
     """Build a safe native payload; switch and on/off lamps never get color values."""
     params = {"entity_id": state.entity_id}
+    if effect is not None and on is not False and state.domain == "light":
+        params["_effect"] = effect
     if (
         transition is not None
         and state.domain == "light"
@@ -172,7 +174,7 @@ def light_service_data(
     return None
 
 
-async def async_dispatch(hass, calls, skipped=None, context=None, guard=None):
+async def async_dispatch(hass, calls, skipped=None, context=None, guard=None, effect_guard=None):
     """Start all prepared calls together and isolate individual device failures."""
     result = {"applied": [], "skipped": list(skipped or [])}
     not_allowed = object()
@@ -181,9 +183,9 @@ async def async_dispatch(hass, calls, skipped=None, context=None, guard=None):
         # gather schedules children later: revalidate at that final boundary.
         if guard is not None and not guard(params["entity_id"]):
             return not_allowed
-        return await hass.services.async_call(
-            domain, service, params, blocking=True, context=context
-        )
+        from .effects import async_call
+
+        return await async_call(hass, domain, service, params, context, guard=effect_guard)
 
     outcomes = await asyncio.gather(
         *(dispatch(domain, service, params) for domain, service, params in calls),
@@ -217,7 +219,9 @@ async def async_set_light(
     if entity_id not in store.data["settings"]["light_entity_ids"]:
         raise ServiceValidationError("Bitte die Lampe zuerst freigeben.")
     from .dynamic_scenes import async_exclude_targets
+    from .effects import invalidate
 
+    invalidate(hass, [entity_id])
     await async_exclude_targets(hass, [entity_id])
     validate_lights(hass, [entity_id])
     if entity_id not in store.data["settings"]["light_entity_ids"]:
@@ -265,6 +269,9 @@ async def locked_room(hass, store, area_id):
 async def async_toggle_room(
     hass, store, area_id, on=None, context=None, *, transition=None, guard=None, dispatch_guard=None
 ):
+    from .effects import invalidate
+
+    invalidate(hass, room_targets(hass, store, area_id))
     async with locked_room(hass, store, area_id):
         return await _toggle_room(
             hass, store, area_id, on, context, transition=transition, guard=guard, dispatch_guard=dispatch_guard

@@ -136,7 +136,10 @@ async def test_dynamic_launch_does_not_retain_window_guard(hass, store, dispatch
     ):
         result = await async_apply_scene(hass, store, scene["id"], dispatch_guard=guard)
     assert result["applied"] == [entity]
-    guard.assert_called_once_with()
+    # Rechecked before the limited dispatch and immediately before its native
+    # service call; neither launch check remains attached to the running scene.
+    assert guard.call_count == 2
+    guard.assert_called_with()
     manager.start.assert_awaited_once_with(
         {key: value for key, value in scene.items() if key != "preview"},
         ANY, [entity], initial_transition=None, persist=True,

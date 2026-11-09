@@ -1,0 +1,43 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844,
+    "deviceScaleFactor": 1
+  },
+  "fixture": "Synthetic room/zone/device data; no live HA",
+  "screenshots": [
+    {
+      "filename": "01-lampen-effekt-390.png",
+      "viewport": 390,
+      "document": 390,
+      "main": 390,
+      "mainScroll": 390,
+      "overflow": []
+    },
+    {
+      "filename": "03-szenen-skript-390.png",
+      "viewport": 390,
+      "document": 390,
+      "main": 390,
+      "mainScroll": 390,
+      "overflow": []
+    },
+    {
+      "filename": "02-taster-ambiente-zuerst-390.png",
+      "viewport": 390,
+      "document": 390,
+      "main": 390,
+      "mainScroll": 390,
+      "overflow": []
+    }
+  ],
+  "passed": [
+    "Color and brightness-only lamp effects reach the real live-preview payload; German effect labels and no effect field for on/off lamps.",
+    "Scene save failure retains edits; retry commits effect and start_script.",
+    "Reopening preserves saved fields; navigation cancels unsaved live changes.",
+    "Ambient-first scene and sunset-minus-15 to 22:30 window survive failed save, retry, and reopening."
+  ],
+  "errors": [],
+  "browser": "157.0.8103.38",
+  "productionBundleSha256": "2031c9a739b6ee47cc8e1b2c7ec360c2fa158aa5bd1641304c8604a38e0fc637"
+}

@@ -13,10 +13,11 @@ const winter: Scene = {...autumn, id: 'test_winter', name: 'Testwinter'};
 const seasonal: Scene = {...autumn, id: 'test_seasonal', name: 'Testjahreszeit', kind: 'seasonal', seasonal: {...defaultSeasonal(), scenes: {spring: null, summer: null, autumn: autumn.id, winter: winter.id}}, favorite: true, resolved_scene_id: autumn.id, resolved_name: autumn.name, resolution_note: 'Frühling fehlt. Testglut wird verwendet.'};
 const foreign: Scene = {...autumn, id: 'test_foreign', name: 'Fremde Szene', area_id: 'test_other'};
 afterEach(cleanup);
-function setup(scene?: Scene, api?: ReturnType<typeof vi.fn>) {
+function setup(scene?: Scene, api?: ReturnType<typeof vi.fn<(request: Record<string, unknown>) => Promise<unknown>>>) {
   const callWS = api || vi.fn(async (request: Record<string, unknown>) => ({...request.scene as object, id: scene?.id || 'test_created'}));
   const saved = vi.fn(), closed = vi.fn();
-  render(<SeasonalSceneEditor hass={{callWS} as Hass} room={room} scenes={[autumn, winter, seasonal, foreign]} scene={scene} onClose={closed} onSaved={saved}/>);
+  const withScripts = (request: {type: string; [key: string]: unknown}) => request.type === 'lichtzentrale/scripts/list' ? Promise.resolve([]) : callWS(request);
+  render(<SeasonalSceneEditor hass={{callWS: withScripts} as Hass} room={room} scenes={[autumn, winter, seasonal, foreign]} scene={scene} onClose={closed} onSaved={saved}/>);
   return {callWS, saved, closed};
 }
 describe('Jahreszeiten-Szenen', () => {

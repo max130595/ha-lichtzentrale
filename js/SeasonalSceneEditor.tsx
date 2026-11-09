@@ -1,5 +1,6 @@
 // Geändert für Lichtzentrale
 import {useEffect, useRef, useState} from 'react';
+import {SceneScriptField, scriptValid, useSceneScripts} from './SceneScript';
 import {displayError, displayName} from './display';
 import {errorText} from './sceneControls';
 import type {Hass, Room, Scene, SeasonalConfig, SeasonName} from './types';
@@ -21,6 +22,8 @@ export function MonthDaySelect({label, value, change}: {label: string; value: st
   return <fieldset className="month-day"><legend>{label}</legend><div className="month-day-fields"><label>Tag<select className="text-input" aria-label={`${label} Tag`} value={day} onChange={event => change(format(month, Number(event.target.value)))}>{Array.from({length: days}, (_, index) => <option key={index + 1} value={index + 1}>{index + 1}.</option>)}</select></label><label>Monat<select className="text-input" aria-label={`${label} Monat`} value={month} onChange={event => {const next = Number(event.target.value); change(format(next, Math.min(day, new Date(2000, next, 0).getDate())));}}>{months.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}</select></label></div></fieldset>;
 }
 export function SeasonalSceneEditor({hass, room, scenes, scene, onClose, onSaved}: {hass: Hass; room: Room; scenes: Scene[]; scene?: Scene; onClose: () => void; onSaved: (scene: Scene) => void}) {
+  const scripts = useSceneScripts(hass);
+  const [startScript, setStartScript] = useState<string | null | undefined>(scene?.start_script);
   const [name, setName] = useState(scene?.name || 'Nach Jahreszeit');
   const [config, setConfig] = useState<SeasonalConfig>(() => scene?.seasonal ? {scenes: {...scene.seasonal.scenes}, boundaries: {...scene.seasonal.boundaries}, christmas: {...scene.seasonal.christmas}} : defaultSeasonal());
   const [favorite, setFavorite] = useState(scene?.favorite ?? true), [busy, setBusy] = useState(false), [error, setError] = useState('');
@@ -29,7 +32,7 @@ export function SeasonalSceneEditor({hass, room, scenes, scene, onClose, onSaved
   const candidates = scenes.filter(item => item.area_id === room.area_id && item.kind !== 'seasonal');
   const ids = Object.values(config.scenes).filter(Boolean);
   const boundaries = Object.values(config.boundaries);
-  const valid = name.trim() && ids.some(id => candidates.some(item => item.id === id)) && validSeasonBoundaries(config.boundaries) && (!config.christmas.enabled || (validMonthDay(config.christmas.start) && validMonthDay(config.christmas.end)));
+  const valid = scriptValid(startScript, scripts) && name.trim() && ids.some(id => candidates.some(item => item.id === id)) && validSeasonBoundaries(config.boundaries) && (!config.christmas.enabled || (validMonthDay(config.christmas.start) && validMonthDay(config.christmas.end)));
   function select(label: string, value: string | null, change: (value: string | null) => void) {
     const missing = value && !candidates.some(item => item.id === value);
     return <label>{label}<select className="text-input" value={value || ''} onChange={event => change(event.target.value || null)}><option value="">Keine · nächste Jahreszeit verwenden</option>{missing && <option value={value}>Szene nicht mehr vorhanden</option>}{candidates.map(item => <option key={item.id} value={item.id}>{displayName(item.name)}</option>)}</select></label>;
@@ -38,7 +41,7 @@ export function SeasonalSceneEditor({hass, room, scenes, scene, onClose, onSaved
     if (lock.current || !valid) return;
     lock.current = true; setBusy(true); setError('');
     try {
-      const result = await api.current.callWS<Scene>({type: 'lichtzentrale/scene/save', scene: {...scene, name: name.trim(), area_id: room.area_id, kind: 'seasonal', favorite, seasonal: config}});
+      const result = await api.current.callWS<Scene>({type: 'lichtzentrale/scene/save', scene: {...scene, name: name.trim(), area_id: room.area_id, kind: 'seasonal', ...(startScript !== undefined ? {start_script: startScript} : {}), favorite, seasonal: config}});
       if (mounted.current) onSaved(result);
     } catch (e) {if (mounted.current) setError(`Speichern fehlgeschlagen: ${errorText(e)}`);}
     finally {lock.current = false; if (mounted.current) setBusy(false);}
@@ -48,6 +51,7 @@ export function SeasonalSceneEditor({hass, room, scenes, scene, onClose, onSaved
     <p className="editor-context">{displayName(room.name)} · Beim Start wird die passende gespeicherte Szene gewählt.</p>
     {error && <p role="alert" className="error">{displayError(error)}</p>}
     <fieldset disabled={busy}><label>Szenenname<input className="text-input" value={name} maxLength={100} onChange={event => setName(event.target.value)}/></label>
+      <SceneScriptField value={startScript} change={setStartScript} catalogue={scripts} seasonal/>
       {Object.entries(seasons).map(([key, label]) => <section className="season-choice" key={key}>{select(label, config.scenes[key as SeasonName], value => setConfig(current => ({...current, scenes: {...current.scenes, [key]: value}})))}</section>)}
       {!candidates.length && <p className="notice">Speichere zuerst mindestens eine normale Szene für dieses Ziel.</p>}
       <small>Fehlt eine Zuordnung, startet die nächstliegende Jahreszeit. Ein Hinweis nennt die Ersatzszene.</small>

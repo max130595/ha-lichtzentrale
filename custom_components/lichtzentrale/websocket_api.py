@@ -249,11 +249,18 @@ async def scenes_reorder(hass, store, msg, context):
     return await async_reorder_scenes(store, msg["area_id"], msg["scene_ids"])
 
 
+async def scripts_list(hass, store, msg, context):
+    from .scene_scripts import list_scripts
+
+    return list_scripts(hass)
+
+
 async def hue_scenes_list(hass, store, msg, context):
     return list_hue_scenes(hass, store, msg.get("area_id"))
 
 
 STAGE_ONE_HANDLERS = (
+    command("scripts/list", {}, scripts_list),
     command("rooms/list", {}, rooms_list),
     command("room/toggle", {**AREA_FIELDS, vol.Optional("on"): bool}, room_toggle),
     command(

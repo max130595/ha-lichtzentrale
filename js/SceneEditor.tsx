@@ -3,18 +3,21 @@ import {useEffect, useMemo, useRef, useState} from 'react';
 import {displayError, displayName} from './display';
 import {brightnessValue, dimmable, moonIllumination, percent, rgbToXy, tempos, xyToHex} from './sceneControls';
 import type {GuardRegistration} from './sceneControls';
+import {SceneScriptField, scriptValid, useSceneScripts} from './SceneScript';
 import {useLivePreview} from './useLivePreview';
 import type {LampSetting, Light, MoonSettings, Palette, Room, Scene, Tempo, Hass} from './types';
 export function normalizeScene(scene: Scene, room: Room): Scene {
   const lights = {...scene.lights}, lamp_settings = {...scene.lamp_settings};
   for (const light of room.lights) {
     if (!dimmable(light)) {
-      if (lamp_settings[light.entity_id]) lamp_settings[light.entity_id] = {mode: lamp_settings[light.entity_id].mode === 'off' ? 'off' : 'fixed', brightness: null};
+      if (lamp_settings[light.entity_id]) lamp_settings[light.entity_id] = {mode: lamp_settings[light.entity_id].mode === 'off' ? 'off' : 'fixed', brightness: null, ...(lamp_settings[light.entity_id].effect ? {effect: lamp_settings[light.entity_id].effect} : {})};
       if (lights[light.entity_id]) lights[light.entity_id] = {on: lights[light.entity_id].on};
     }
   }
   return {...scene, ...(scene.kind === 'snapshot' ? {lights} : {}), lamp_settings};
 }
+const effectNames: Record<string, string> = {sparkle: 'Funkeln', candle: 'Kerze', fireplace: 'Kamin', glisten: 'Glitzern', enchant: 'Verzaubern', cosmos: 'Kosmos', prism: 'Prisma', opal: 'Opal', underwater: 'Unter Wasser', sunbeam: 'Sonnenstrahl', none: 'Kein Effekt (Lampe)', stop_hue_effect: 'Hue-Effekt stoppen'};
+const effectLabel = (effect: string) => effectNames[effect] || effect;
 const defaultMoon = (): MoonSettings => ({new_brightness: 26, full_brightness: 204, new_xy: [.25, .27], full_xy: [.3127, .329], breath: false});
 export function snapshotLights(room: Room): NonNullable<Scene['lights']> {
   return Object.fromEntries(room.lights.filter(light => light.allowed && light.available).map(light => {
@@ -37,15 +40,15 @@ export function LampSceneRow({light, setting, palette, sceneBrightness, moon, up
   return <fieldset className="lamp-scene-row" data-testid="lamp-scene-row" disabled={disabled}>
     <legend>{name}</legend>
     {!light.available && <small>Nicht verfügbar. Einstellungen werden trotzdem gespeichert.</small>}
-    {!isDimmable ? <label>{name} An / Aus<select className="text-input" aria-label={`${name} An / Aus`} value={unchanged ? 'unchanged' : setting.mode === 'off' ? 'off' : 'cycle'} onChange={event => update({mode: event.target.value === 'off' ? 'off' : 'fixed'})}>{unchanged && <option value="unchanged">Wie bisher · unverändert</option>}<option value="cycle">An</option><option value="off">Aus</option></select><small>Nur Ein/Aus · keine Helligkeits- oder Farbbefehle.</small></label> : <>
+    {!isDimmable ? <label>{name} An / Aus<select className="text-input" aria-label={`${name} An / Aus`} value={unchanged ? 'unchanged' : setting.mode === 'off' ? 'off' : 'cycle'} onChange={event => update({...(setting.effect ? {effect: setting.effect} : {}), mode: event.target.value === 'off' ? 'off' : 'fixed'})}>{unchanged && <option value="unchanged">Wie bisher · unverändert</option>}<option value="cycle">An</option><option value="off">Aus</option></select><small>Nur Ein/Aus · keine Helligkeits- oder Farbbefehle.</small></label> : <>
       {setting.mode !== 'off' && <><label>Helligkeit<select className="text-input" aria-label={`${name} Helligkeit`} value={setting.brightness == null ? 'scene' : 'fixed'} onChange={event => update({...setting, brightness: event.target.value === 'scene' ? null : sceneBrightness})}><option value="scene">Wie Szene</option><option value="fixed">Fest für diese Lampe</option></select></label>
         {setting.brightness != null && <label className="slider">Fest: {percent(setting.brightness)} %<input aria-label={`${name} feste Helligkeit`} type="range" min="1" max="100" value={percent(setting.brightness)} onChange={event => update({...setting, brightness: brightnessValue(Number(event.target.value))})}/></label>}</>}
       <label>Verhalten<select className="text-input" aria-label={`${name} Verhalten`} value={setting.mode} onChange={event => {
         const mode = event.target.value as LampSetting['mode'];
-        update({mode, brightness: setting.brightness ?? null, ...(mode === 'fixed' ? palette?.preview.length ? {palette_index: 0} : {color_temp_kelvin: light.color_temp_kelvin || 2700} : {}), ...(mode === 'moon' ? {moon: defaultMoon()} : {})});
+        update({mode, ...(setting.effect ? {effect: setting.effect} : {}), brightness: setting.brightness ?? null, ...(mode === 'fixed' ? palette?.preview.length ? {palette_index: 0} : {color_temp_kelvin: light.color_temp_kelvin || 2700} : {}), ...(mode === 'moon' ? {moon: defaultMoon()} : {})});
       }}><option value="cycle">Farbwechsel</option><option value="fixed">Feste Farbe</option><option value="moon">Mondlicht nach Mondphase</option><option value="off">In dieser Szene aus</option></select></label>
       {setting.mode === 'fixed' && <><label>Farbe auswählen<select className="text-input" aria-label={`${name} Farbquelle`} value={source} onChange={event => {
-        const base: LampSetting = {mode: 'fixed', brightness: setting.brightness ?? null};
+        const base: LampSetting = {mode: 'fixed', ...(setting.effect ? {effect: setting.effect} : {}), brightness: setting.brightness ?? null};
         update(event.target.value === 'palette' ? {...base, palette_index: 0} : event.target.value === 'white' ? {...base, color_temp_kelvin: light.color_temp_kelvin || 2700} : {...base, xy: rgbToXy('#ff9a2e')});
       }}>{palette && <option value="palette">Aus der Palette</option>}<option value="color">Eigene Farbe</option><option value="white">Weißton</option></select></label>
         {source === 'palette' && <div className="color-swatches" role="group" aria-label={`${name} Palettenfarbe`}>{palette?.preview.map((color, index) => <button type="button" key={index} aria-label={`${name} Palettenfarbe ${index + 1}`} aria-pressed={setting.palette_index === index} style={{background: color}} onClick={() => update({...setting, palette_index: index})}>{setting.palette_index === index ? '✓' : ''}</button>)}</div>}
@@ -59,10 +62,12 @@ export function LampSceneRow({light, setting, palette, sceneBrightness, moon, up
         <label className="check"><input aria-label={`${name} bei Vollmond langsam atmen`} type="checkbox" checked={moonSettings.breath} onChange={event => setMoon({breath: event.target.checked})}/>Bei Vollmond langsam atmen</label>
       </div>}
     </>}
+    {((isDimmable && !!light.effect_list?.length) || setting.effect) && <label>Effekt<select className="text-input" aria-label={`${name} Effekt`} value={setting.effect || ''} onChange={event => {const next = {...setting}; if (event.target.value) next.effect = event.target.value; else delete next.effect; update(next);}}><option value="">Kein Effekt</option>{setting.effect && (!isDimmable || !light.effect_list?.includes(setting.effect)) && <option value={setting.effect}>{effectLabel(setting.effect)} · nicht mehr unterstützt</option>}{isDimmable && light.effect_list?.map(effect => <option key={effect} value={effect}>{effectLabel(effect)}</option>)}</select><small>Effekt startet nach Farbe und Helligkeit. Diese Lampe nimmt nicht am Farbwechsel teil.</small>{setting.effect && (!isDimmable || !light.effect_list?.includes(setting.effect)) && <p role="alert">Dieser Effekt wird nicht mehr angeboten. Bitte einen aktuellen Effekt oder „Kein Effekt“ wählen.</p>}</label>}
   </fieldset>;
 }
 export function SceneEditor({hass, room, palettes, scene, palette, onClose, onSaved, registerGuard}: {hass: Hass; room: Room; palettes: Palette[]; scene?: Scene; palette?: Palette; onClose: () => void; onSaved: (scene?: Scene, notice?: string) => void; registerGuard?: GuardRegistration}) {
   const [draft, setDraft] = useState<Partial<Scene>>(() => scene ? normalizeScene(scene, room) : {name: palette?.name || '', area_id: room.area_id, kind: palette ? 'palette' : 'snapshot', ...(palette ? {palette_id: palette.id, brightness: palette.bri} : {lights: snapshotLights(room)}), dynamic: {enabled: false, interval: tempos[palette?.tempo || 'slow'].interval, transition: tempos[palette?.tempo || 'slow'].transition, tempo: palette?.tempo || 'slow'}, favorite: false, order: 0, lamp_settings: {}});
+  const scripts = useSceneScripts(hass);
   const [changed, setChanged] = useState(false);
   const operation = useRef(false), mounted = useRef(false);
   useEffect(() => {mounted.current = true; return () => {mounted.current = false;};}, []);
@@ -87,10 +92,11 @@ export function SceneEditor({hass, room, palettes, scene, palette, onClose, onSa
   const brightness = draft.brightness || 128;
   const dynamic = draft.dynamic || {enabled: false, interval: 90, transition: 40, tempo: 'slow' as Tempo};
   const settings = draft.lamp_settings || {};
-  const cycleTargets = targets.filter(light => dimmable(light) && (!settings[light.entity_id] || settings[light.entity_id].mode === 'cycle'));
+  const cycleTargets = targets.filter(light => dimmable(light) && !settings[light.entity_id]?.effect && (!settings[light.entity_id] || settings[light.entity_id].mode === 'cycle'));
   const order = [...(draft.wave_order || []).filter(id => cycleTargets.some(light => light.entity_id === id)), ...cycleTargets.map(light => light.entity_id).filter(id => !draft.wave_order?.includes(id))];
   const disabled = !live.ready || live.closing;
-  const invalid = !draft.name?.trim() || (draft.kind === 'palette' && !selectedPalette) || dynamic.interval < 5 || dynamic.interval > 3600 || dynamic.transition < 0 || dynamic.transition > Math.min(dynamic.interval, 60);
+  const invalidEffects = targets.some(light => settings[light.entity_id]?.effect && (!dimmable(light) || !light.effect_list?.includes(settings[light.entity_id].effect!)));
+  const invalid = invalidEffects || !scriptValid(draft.start_script, scripts) || !draft.name?.trim() || (draft.kind === 'palette' && !selectedPalette) || dynamic.interval < 5 || dynamic.interval > 3600 || dynamic.transition < 0 || dynamic.transition > Math.min(dynamic.interval, 60);
   function update(patch: Partial<Scene>) {setDraft(current => ({...current, ...patch})); setChanged(true);}
   function updateDynamic(patch: Partial<NonNullable<Scene['dynamic']>>) {update({dynamic: {...dynamic, ...patch}});}
   async function cancel() {if (await live.cancel() && mounted.current) onClose();}
@@ -108,7 +114,8 @@ export function SceneEditor({hass, room, palettes, scene, palette, onClose, onSa
     {!live.ready && !live.error && <p role="status">Vorherigen Zustand sichern …</p>}
     {live.message && <p className="preview-status" role="status">{live.message}</p>}
     <fieldset disabled={disabled}><label>Szenenname<input className="text-input" value={draft.name || ''} maxLength={100} onChange={event => update({name: event.target.value})}/></label>
-      <label>Grundlage<select className="text-input" value={draft.kind} onChange={event => update(event.target.value === 'palette' ? {kind: 'palette', palette_id: selectedPalette?.id || palettes[0]?.id} : {kind: 'snapshot', lights: draft.lights || live.capturedLights || snapshotLights(room), dynamic: {...dynamic, enabled: false, welle: false}, wave_order: [], lamp_settings: Object.fromEntries(Object.entries(settings).map(([id, value]) => [id, value.palette_index !== undefined ? {mode: value.mode, brightness: value.brightness, xy: selectedPalette?.colors[value.palette_index] ? [selectedPalette.colors[value.palette_index].x, selectedPalette.colors[value.palette_index].y] : [.45, .41]} : value]))})}><option value="palette" disabled={!palettes.length}>Farbpalette</option><option value="snapshot">Momentaufnahme</option></select></label>
+      <SceneScriptField value={draft.start_script} change={start_script => update({start_script})} catalogue={scripts}/>
+      <label>Grundlage<select className="text-input" value={draft.kind} onChange={event => update(event.target.value === 'palette' ? {kind: 'palette', palette_id: selectedPalette?.id || palettes[0]?.id} : {kind: 'snapshot', lights: draft.lights || live.capturedLights || snapshotLights(room), dynamic: {...dynamic, enabled: false, welle: false}, wave_order: [], lamp_settings: Object.fromEntries(Object.entries(settings).map(([id, value]) => [id, value.palette_index !== undefined ? {...value, palette_index: undefined, xy: selectedPalette?.colors[value.palette_index] ? [selectedPalette.colors[value.palette_index].x, selectedPalette.colors[value.palette_index].y] : [.45, .41]} : value]))})}><option value="palette" disabled={!palettes.length}>Farbpalette</option><option value="snapshot">Momentaufnahme</option></select></label>
       {draft.kind === 'palette' && <><label>Palette<select className="text-input" value={draft.palette_id || ''} onChange={event => {const item = palettes.find(p => p.id === event.target.value); update({palette_id: event.target.value, lamp_settings: Object.fromEntries(Object.entries(settings).map(([id, value]) => [id, value.palette_index !== undefined && item ? {...value, palette_index: Math.min(value.palette_index, item.colors.length - 1)} : value])), ...(item ? {brightness: item.bri, dynamic: {...dynamic, interval: tempos[item.tempo || 'slow'].interval, transition: tempos[item.tempo || 'slow'].transition, tempo: item.tempo || 'slow'}} : {})});}}><option value="" disabled>Palette wählen</option>{palettes.map(item => <option key={item.id} value={item.id}>{displayName(item.name)}</option>)}</select></label>{selectedPalette && <div className="scene-strip editor-gradient" style={{background: `linear-gradient(100deg, ${selectedPalette.preview.join(',')})`}}/>}</>}
       {targets.some(dimmable) && <label className="slider">Gesamthelligkeit: {draft.kind === 'snapshot' && draft.brightness == null ? 'gespeicherte Werte' : `${percent(brightness)} %`}<input aria-label="Gesamthelligkeit" type="range" min="1" max="100" value={percent(brightness)} onChange={event => update({brightness: brightnessValue(Number(event.target.value))})}/><small>Feste Lampenwerte bleiben unverändert.</small></label>}
       {draft.kind === 'palette' && <label className="check"><input type="checkbox" checked={dynamic.enabled} onChange={event => updateDynamic({enabled: event.target.checked, ...(!event.target.checked ? {welle: false} : {})})}/>Dynamischer Farbwechsel</label>}

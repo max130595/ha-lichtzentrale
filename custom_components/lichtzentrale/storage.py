@@ -117,6 +117,12 @@ class LichtzentraleStore:
     async def async_save_scene(self, scene: dict, *, is_update: bool = False) -> None:
         """Upsert a validated scene without overwriting concurrent Store changes."""
         async with self._lock:
+            from .effects import validate_effect
+            from .scene_scripts import validate_start_script
+
+            validate_start_script(self._hass, scene.get("start_script"))
+            for entity, setting in scene.get("lamp_settings", {}).items():
+                validate_effect(self._hass.states.get(entity), setting.get("effect"))
             if scene.get("kind") == "palette":
                 from .palette_catalogue import get_palette
 

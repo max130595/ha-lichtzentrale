@@ -261,6 +261,8 @@ def validate_binding(hass, store, raw, *, _runtime=False) -> dict:
         {"entity_ids"} if selected_action or (dim_action and "entity_ids" in params) else set()
     )
     optional = {"on_behavior"} if action in ON_ACTIONS else set()
+    if action in {"toggle_lights", "toggle_room"}:
+        optional.add("ambient_first")
     if not expected <= set(params) or set(params) - expected - optional:
         raise ServiceValidationError("Ungültige Parameter der Tasteraktion.")
     params = deepcopy(params)
@@ -269,9 +271,13 @@ def validate_binding(hass, store, raw, *, _runtime=False) -> dict:
         # Explicit targets are independent of the button's or an editor's room.
         if area_id is not None and not isinstance(area_id, str):
             raise ServiceValidationError("Ungültiger Raum.")
-        area_id = None
+        if "ambient_first" not in params:
+            area_id = None
     elif not isinstance(area_id, str) or not room_targets(hass, store, area_id):
         raise ServiceValidationError("Bitte einen Raum mit freigegebenen Lampen auswählen.")
+    if "ambient_first" in params:
+        from .ambient_first import validate_ambient_first
+        params["ambient_first"] = validate_ambient_first(hass, store, params["ambient_first"], area_id, params.get("entity_ids"), runtime=_runtime)
     if action in {"full_brightness", "night", "return_auto", "night_auto"}:
         from .target_actions import validate_action
         validate_action(hass, store, {"type": action, **({"entity_ids": params["entity_ids"]} if "entity_ids" in params else {"area_id": area_id})})
@@ -419,12 +425,16 @@ class BindingManager:
         self._locks = {}
         self._cycles = {}
         self._learning = {}
+        from .ambient_first import AmbientFirstTracker
+        self.ambient_first = AmbientFirstTracker(hass, store)
 
     @callback
     def start(self):
         """Register once; adding or editing a binding needs no listener rebuild."""
         if self.closed:
             raise ServiceValidationError("Lichtzentrale ist nicht geladen.")
+        self.hass.data.setdefault(DOMAIN, {})["ambient_first"] = self.ambient_first
+        self.ambient_first.start()
         if self._unsubscribe is None:
             self._unsubscribe = self.hass.bus.async_listen(EVENT_STATE_CHANGED, self._changed)
 
@@ -633,6 +643,12 @@ class BindingManager:
 
     async def _action(self, binding, context):
         area_id, action = binding["area_id"], binding["action"]
+        if action in {"toggle_room", "toggle_lights"} and "ambient_first" in binding["params"]:
+            from .ambient_first import async_ambient_action
+            result = await async_ambient_action(self, binding, context)
+            if result is not None:
+                return result
+            binding = {**binding, "params": {key: value for key, value in binding["params"].items() if key != "ambient_first"}}
         if action in {"full_brightness", "night", "return_auto", "night_auto"}:
             from .target_actions import async_execute_action
             return await async_execute_action(self.hass, self.store, {"type": action, **({"entity_ids": binding["params"]["entity_ids"]} if "entity_ids" in binding["params"] else {"area_id": area_id})}, context=context)
@@ -673,7 +689,7 @@ class BindingManager:
             return await async_stop_room(self.hass, self.store, area_id, context=context)
         raise ServiceValidationError("Diese Tasteraktion ist nicht erlaubt.")
 
-    async def _with_on_behavior(self, binding, context):
+    async def _with_on_behavior(self, binding, context, *, outer_guard=None):
         """Resolve toggle once, then fail closed if a queued on/off decision became stale."""
         params, area_id, action = binding["params"], binding["area_id"], binding["action"]
         selected = "entity_ids" in params
@@ -688,6 +704,8 @@ class BindingManager:
 
         def guard():
             nonlocal pending
+            if outer_guard is not None:
+                outer_guard()
             current = (validate_selected_lights(self.hass, self.store, targets) if selected
                        else room_targets(self.hass, self.store, area_id))
             if current != targets:
@@ -700,14 +718,18 @@ class BindingManager:
 
         if not on:
             if selected:
-                return await async_control_lights(self.hass, self.store, targets, on=False, context=context, guard=guard)
-            return await async_toggle_room(self.hass, self.store, area_id, on=False, context=context, guard=guard)
+                return await async_control_lights(self.hass, self.store, targets, on=False, context=context, guard=guard, dispatch_guard=outer_guard)
+            return await async_toggle_room(self.hass, self.store, area_id, on=False, context=context, guard=guard, dispatch_guard=outer_guard)
         if behavior["mode"] == "time":
             from .schedule_windows import window_is_open
 
             behavior = next(({key: value for key, value in item.items() if key != "window"}
                              for item in behavior["windows"] if window_is_open(self.hass, item["window"])), {"mode": "last"})
             if behavior["mode"] == "last":
+                if outer_guard is not None:
+                    if selected:
+                        return await async_control_lights(self.hass, self.store, targets, on=True, context=context, guard=guard, dispatch_guard=outer_guard)
+                    return await async_toggle_room(self.hass, self.store, area_id, on=True, context=context, guard=guard, dispatch_guard=outer_guard)
                 return await self._action({**binding, "params": {key: value for key, value in params.items()
                                                                 if key != "on_behavior"}}, context)
         behavior = validate_on_behavior(self.hass, self.store, behavior, area_id, targets if selected else None,
@@ -717,12 +739,12 @@ class BindingManager:
             # Selection and capability checks remain at dispatch time.
             return await async_control_lights(self.hass, self.store, targets, on=True,
                                              brightness=behavior["brightness"], color_temp_kelvin=behavior.get("color_temp_kelvin"),
-                                             context=context, guard=guard)
+                                             context=context, guard=guard, dispatch_guard=outer_guard)
         scene_id = behavior["scene_id"]
         if selected:
-            return await async_apply_scene_subset(self.hass, self.store, scene_id, targets, context=context, guard=guard)
+            return await async_apply_scene_subset(self.hass, self.store, scene_id, targets, context=context, guard=guard, dispatch_guard=outer_guard)
         _check_scene(self.hass, self.store, scene_id, area_id)
-        return await async_apply_scene(self.hass, self.store, scene_id, context=context, guard=guard)
+        return await async_apply_scene(self.hass, self.store, scene_id, context=context, guard=guard, dispatch_guard=outer_guard)
 
     async def _dim(self, area_id, direction, context):
         # Serialize with manual scenes and room controls as well as other button actions.
@@ -803,6 +825,9 @@ class BindingManager:
     async def shutdown(self):
         """Unsubscribe first, then cancel timers and queued/in-flight button work."""
         self.closed = True
+        self.ambient_first.shutdown()
+        if self.hass.data.get(DOMAIN, {}).get("ambient_first") is self.ambient_first:
+            self.hass.data[DOMAIN].pop("ambient_first", None)
         if self._unsubscribe is not None:
             self._unsubscribe()
             self._unsubscribe = None

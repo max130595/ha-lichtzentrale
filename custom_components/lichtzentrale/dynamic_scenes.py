@@ -190,6 +190,7 @@ class DynamicSceneManager:
         targets = [e for e in _current_targets(self.hass, self.store, scene["area_id"])
                    if e.startswith("light.")]
         layout_targets = list(targets)
+        targets = [e for e in targets if not scene.get("lamp_settings", {}).get(e, {}).get("effect")]
         if applied_targets is not None:
             targets = [e for e in targets if e in applied_targets]
         if resume_token is not None:

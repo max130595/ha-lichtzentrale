@@ -82,6 +82,8 @@ def list_lights(
     hass: HomeAssistant, allowed: list[str], include_hidden: bool = False
 ) -> list[dict]:
     """List eligible lights, retaining hidden approved entries for revocation."""
+    from .effects import effect_list
+
     areas = ar.async_get(hass)
     result = []
     for state in hass.states.async_all():
@@ -104,11 +106,13 @@ def list_lights(
                 "domain": state.domain,
                 "on": state.state == "on",
                 "supported_color_modes": list(attributes.get("supported_color_modes") or []),
+                "effect_list": effect_list(state),
                 "hidden_by_default": hidden,
                 **{
                     key: attributes.get(key)
                     for key in (
                         "brightness",
+                        "effect",
                         "color_mode",
                         "xy_color",
                         "rgb_color",

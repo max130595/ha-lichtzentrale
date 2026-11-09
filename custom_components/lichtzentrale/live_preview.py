@@ -85,6 +85,13 @@ class LivePreviewManager:
             await stop_dynamic(self.hass, area_id)
             original = {e: _remember_light(state) for e in targets
                         if (state := self.hass.states.get(e)) and state.state in {"on", "off"}}
+            from .effects import effect_list
+
+            for entity, value in original.items():
+                state = self.hass.states.get(entity)
+                effect = state.attributes.get("effect")
+                if value["on"] and effect in effect_list(state):
+                    value["effect"] = effect
             identifier = str(uuid4())
             session = {"id": identifier, "area_id": area_id, "owner": owner,
                        "original": original, "released": set(), "touched": set(),
@@ -160,13 +167,14 @@ class LivePreviewManager:
     async def _apply(self, session, scene=None, palette=None):
         draft, override = self._draft(session, scene, palette)
         generation = session["generation"]
+        sequence = session["sequence"]
         targets = [e for e in session["original"] if self._allowed(session, e)]
         if not targets:
             return {"applied": [], "skipped": list(session["original"])}
 
         def current():
             return (not self.closed and not session["closing"]
-                    and session["generation"] == generation
+                    and session["generation"] == generation and session["sequence"] == sequence
                     and all(self._allowed(session, e) for e in targets))
 
         result = await async_apply_scene_draft(self.hass, self.store, draft, session["context"],
@@ -258,7 +266,7 @@ class LivePreviewManager:
                             prepared[entity_id] = state
                     def safe(entity_id):
                         return self._allowed(session, entity_id) and self.hass.states.get(entity_id) is prepared[entity_id]
-                    result = await async_dispatch(self.hass, calls, result["skipped"], session["context"], guard=safe)
+                    result = await async_dispatch(self.hass, calls, result["skipped"], session["context"], guard=safe, effect_guard=lambda entity: self._allowed(session, entity))
                 return result
             finally:
                 if result.get("failed") and retain_failed and not self.closed:
