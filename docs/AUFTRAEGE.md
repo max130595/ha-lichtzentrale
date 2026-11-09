@@ -13,8 +13,8 @@ Bad oben in Tests oder Beispielen, Schalter (`switch`) werden nie gedimmt.
 | 5b Einfache Bedienung wie die Hue-App | `stufe-5b-einfach` | erledigt (PR #12, am echten System getestet 09.11.) |
 | 5c Stimmungen, eigene Paletten, Helligkeit pro Lampe | `stufe-5c-paletten` | zusammengeführt (PR #13, Review-Korrekturen K1/K2), Abnahme am echten System läuft |
 | 5d Dimmen schaltet nie aus | `stufe-5d-dimmgrenze` | erledigt (PR #14, 0.5.1) |
-| 5e Hue-Effekte, Ambiente-zuerst-Taster, Szene startet Skript | `stufe-5e-effekte` | offen – **als Nächstes** |
-| 6 Anwesenheitssimulation | `stufe-6-urlaub` | offen |
+| 5e Hue-Effekte, Ambiente-zuerst-Taster, Szene startet Skript | `stufe-5e-effekte` | zusammengeführt (PR #15, 0.5.2, Korrektur Effekt-Stopp), Abnahme am echten System läuft |
+| 6 Anwesenheitssimulation | `stufe-6-urlaub` | offen – **als Nächstes** |
 | 7 Sicherung, „Alles aus“, Öffnung für andere | `stufe-7-sicherung` | offen |
 
 ---
