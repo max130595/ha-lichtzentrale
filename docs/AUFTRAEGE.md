@@ -12,6 +12,7 @@ Bad oben in Tests oder Beispielen, Schalter (`switch`) werden nie gedimmt.
 | 5 Grundhelligkeit | `stufe-5-grundhelligkeit` | erledigt (PR #10, #11) |
 | 5b Einfache Bedienung wie die Hue-App | `stufe-5b-einfach` | erledigt (PR #12, am echten System getestet 09.11.) |
 | 5c Stimmungen, eigene Paletten, Helligkeit pro Lampe | `stufe-5c-paletten` | zusammengeführt (PR #13, Review-Korrekturen K1/K2), Abnahme am echten System läuft |
+| 5d Dimmen schaltet nie aus | `stufe-5d-dimmgrenze` | offen – **als Nächstes**, klein |
 | 6 Anwesenheitssimulation | `stufe-6-urlaub` | offen |
 | 7 Sicherung, „Alles aus“, Öffnung für andere | `stufe-7-sicherung` | offen |
 
@@ -235,6 +236,31 @@ Synthetisch in Tests (keine echten Entity-IDs). Fertig, wenn:
 5. Das Umbenennen einer Lampen-Entity alle Verweise mitzieht.
 6. Bestehende Szenen, Zeitpläne, Taster und Zonen unverändert weiterlaufen.
 Nach dem Draft-PR stoppen.
+
+## Stufe 5d – Dimmen schaltet nie aus
+
+Kleiner Nachtrag aus der Abnahme von 5c am 09.11. Problem: Wer mit einem Taster oder Drehring
+herunterdimmt, schaltet die Lampe am Ende ganz aus. Grund ist `brightness_step_pct: -10`, denn bei
+0 schaltet Home Assistant aus. Danach kann man sie nicht wieder hochdimmen, weil Hochdimmen
+absichtlich nur eingeschaltete Lampen anfasst.
+
+1. **Dunkler dimmen schaltet nie aus.** Gilt für alle Dimmwege: `dim_down` für Raum, Zone und
+   ausgewählte Lampen, Taster, Drehring, Halten, Grundhelligkeit und Bewegung, falls sie relativ
+   dimmen. Unterschreitet ein Schritt die Untergrenze, wird jede Lampe genau auf die Untergrenze
+   gesetzt (absoluter Wert statt relativem Schritt). Eine Lampe, die schon an der Grenze ist,
+   bekommt keinen Befehl.
+2. **Untergrenze:** 1 % (Helligkeit 3 von 255). Global unter Einstellungen einstellbar von 1 bis 20 %.
+   Gespeichert im Store mit Standardwert, ohne Migration. Für reine An/Aus-Lichter gibt es keine
+   Dimmbefehle.
+3. **Ausschalten bleibt unverändert:** Toggle- und Aus-Tasten, Zeitpläne und Szenen mit „aus“
+   schalten weiter aus.
+4. **Hochdimmen bleibt wie bisher:** Es wirkt nur auf eingeschaltete Lampen und schaltet nichts ein.
+5. **Tests:** Eine Lampe bei 5 % plus `dim_down` ergibt Helligkeit 3, kein `turn_off`. Eine Lampe bei
+   Helligkeit 3 plus `dim_down` ergibt keinen Befehl. Eine Lampe bei 50 % plus `dim_down` ergibt den
+   normalen Schritt. Gemischte Auswahl mit einer Lampe an der Grenze und einer darüber. Halten mit
+   Wiederholung. Ungültige Einstellwerte. Bestehende Dimm-Tests bleiben grün.
+6. Lieferung als Git-Bundle auf `stufe-5d-dimmgrenze` mit Basis aktuelles `main`, Version 0.5.1,
+   Screenshot der Einstellung bei 390 px. Keine Vorschauphase.
 
 ## Stufe 6 – Anwesenheitssimulation
 
