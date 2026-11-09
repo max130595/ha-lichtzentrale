@@ -135,6 +135,15 @@ dunkelgraue Wände; rosastichige Rottöne wirken darauf schmutzig.
 - Prüfen, dass Hue-Farblampen diese Töne gesättigt wiedergeben (xy im Farbraum der Lampe, nicht über
   einen Weißton angenähert). Lampen nur mit Weißtönen erhalten den wärmsten Weißton.
 
+### Mitgelieferte Stimmungen (wie die Szenen-Galerie der Hue-App)
+- Mindestens **20 eingebaute Paletten** in Kategorien: Herbst, Winter, Weihnachten, Frühling,
+  Sommer, Party, Entspannen, Romantik. Je 3–5 Farben, eine sinnvolle Grundhelligkeit und eine
+  Empfehlung „ruhig“ oder „dynamisch“ (Intervall/Übergang), die beim Anwenden vorausgewählt ist.
+- **Eigene Namen und eigene Farben**, keine Namen, Farben oder Bilder aus der Hue-App (AGENTS.md).
+- Farben passend zu warmen Wohnräumen mit Holz- und Grüntönen; Party darf kräftig sein.
+- Die bisherigen 12 Paletten bleiben erhalten (gleiche IDs), „Herbstglut“ ist eine der neuen.
+- Galerie nach Kategorien, Vorschau als Verlauf, „Auf Raum/Zone anwenden“ und „Als Szene speichern“.
+
 ### Helligkeit pro Lampe in Farbpaletten-Szenen
 - In einer Paletten-Szene (auch dynamisch) für jede Lampe eine eigene Helligkeit 1–100 % oder „wie
   Szene“. Standard bleibt „wie Szene“, bestehende Szenen ändern sich nicht.
@@ -144,8 +153,8 @@ dunkelgraue Wände; rosastichige Rottöne wirken darauf schmutzig.
 - Bedienung im Szenen-Editor: Liste der Lampen mit Schieberegler, Änderungen sofort live sichtbar
   (wie Hue), „Speichern“ übernimmt.
 
-**Fertig wenn:** Eine eigene Palette angelegt und live ausprobiert werden kann, „Herbstglut“
-mitgeliefert ist, und in einer dynamischen Zonen-Szene zwei Lampen dauerhaft dunkler laufen als die
+**Fertig wenn:** Eine eigene Palette angelegt und live ausprobiert werden kann, mindestens 20
+Stimmungen inklusive „Herbstglut“ mitgeliefert sind, und in einer dynamischen Zonen-Szene zwei Lampen dauerhaft dunkler laufen als die
 übrigen. Tests synthetisch, keine echten Entity-IDs. Nach dem Draft-PR stoppen.
 
 ## Stufe 6 – Anwesenheitssimulation
