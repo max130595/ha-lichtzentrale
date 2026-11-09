@@ -177,6 +177,17 @@ am echten Raum einstellen, pro Lampe Helligkeit und Verhalten festlegen.
 - **Handbedienung einer einzelnen Lampe** während der Dynamik: nur diese Lampe verlässt den Farbwechsel
   bis zum nächsten Szenenstart; die übrigen laufen weiter.
 
+### 4a. Jahreszeiten-Szene
+- Pro Raum/Zone eine **„Szene nach Jahreszeit“**: je eine Szene für Frühling, Sommer, Herbst, Winter,
+  optional Weihnachten (Zeitraum frei wählbar, Standard 1.–26. Dezember). Jahreszeitengrenzen
+  einstellbar (Standard meteorologisch: 1. März/Juni/September/Dezember).
+- Wählbar überall, wo eine Szene wählbar ist (Automationen, Taster, Kachel). Beim Auslösen wird die
+  Szene der aktuellen Jahreszeit gestartet; fehlt eine, wird die nächstliegende genommen, mit Hinweis.
+- Beispiele am echten System: Zone Wohnbereich abends nach Jahreszeit; Ambiente-Lichtstreifen im
+  Schlafzimmer nach Jahreszeit mit Schwerpunkt Kategorie **Romantik**.
+- Kategorie Romantik in 1. mit mindestens 4 Stimmungen (sinnlich, gedimmt, warm, auch tiefe Rot-,
+  Bernstein- und dezente Violetttöne für Lichtstreifen), alle eher dunkel und ruhig.
+
 ### 5. Akzent „Mondlicht nach Mondphase“
 - Pro Lampe wählbar (3.). Berechnet die beleuchtete Mondfläche lokal (synodischer Monat, ohne Cloud
   und ohne zusätzliche Integration).
