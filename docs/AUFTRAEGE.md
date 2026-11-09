@@ -189,6 +189,12 @@ am echten Raum einstellen, pro Lampe Helligkeit und Verhalten festlegen.
 - Auf jeder Raum-/Zonenkachel die **Lieblingsszenen als Chips** (antippen = starten), wie in Hue.
 - Kachel zeigt laufende Szene und ob sie dynamisch ist; Antippen der Szene stoppt/startet die Dynamik.
 
+### 6a. Taster: Einschalten mit fester Helligkeit
+- Für „Lampen ein/aus“ (`toggle_lights`, `turn_on_lights`) und „Raum ein/aus“ optional
+  **„beim Einschalten“**: letzter Zustand (wie bisher) · feste Helligkeit 1–100 % · eine Szene.
+  Beispiel am echten System: Esstisch-Lampen per Tap Dial Taste 1 an = immer 100 %, aus = aus.
+- Im Taster-Editor als Auswahl unter der Aktion; bestehende Belegungen bleiben „letzter Zustand“.
+
 ### 7. Umbenennen und Ersetzen von Lampen überstehen
 - Beim echten System wurden Lampen umbenannt und von der Hue-Bridge zu Zigbee2MQTT umgezogen; dabei
   gingen u. a. Positionen verloren.
