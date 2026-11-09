@@ -191,8 +191,11 @@ am echten Raum einstellen, pro Lampe Helligkeit und Verhalten festlegen.
 
 ### 6a. Taster: Einschalten mit fester Helligkeit
 - Für „Lampen ein/aus“ (`toggle_lights`, `turn_on_lights`) und „Raum ein/aus“ optional
-  **„beim Einschalten“**: letzter Zustand (wie bisher) · feste Helligkeit 1–100 % · eine Szene.
-  Beispiel am echten System: Esstisch-Lampen per Tap Dial Taste 1 an = immer 100 %, aus = aus.
+  **„beim Einschalten“**: letzter Zustand (wie bisher) · feste Helligkeit 1–100 % · eine Szene ·
+  **nach Tageszeit** (Liste von Zeitfenstern mit Uhrzeit oder Sonnenstand → Helligkeit/Weißton bzw.
+  Szene, z. B. tagsüber 100 % neutral, abends 30 % warm, nachts 5 %).
+  Beispiele am echten System: Esstisch-Lampen per Tap Dial Taste 1 an = immer 100 %, aus = aus;
+  Deckenlicht per Wandschalter-Modul an = Helligkeit nach Tageszeit.
 - Im Taster-Editor als Auswahl unter der Aktion; bestehende Belegungen bleiben „letzter Zustand“.
 
 ### 7. Umbenennen und Ersetzen von Lampen überstehen
