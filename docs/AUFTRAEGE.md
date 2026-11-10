@@ -14,7 +14,7 @@ Bad oben in Tests oder Beispielen, Schalter (`switch`) werden nie gedimmt.
 | 5c Stimmungen, eigene Paletten, Helligkeit pro Lampe | `stufe-5c-paletten` | zusammengeführt (PR #13, Review-Korrekturen K1/K2), Abnahme am echten System läuft |
 | 5d Dimmen schaltet nie aus | `stufe-5d-dimmgrenze` | erledigt (PR #14, 0.5.1) |
 | 5e Hue-Effekte, Ambiente-zuerst-Taster, Szene startet Skript | `stufe-5e-effekte` | zusammengeführt (PR #15, 0.5.2, Korrektur Effekt-Stopp), Abnahme am echten System läuft |
-| 6 Anwesenheitssimulation | `stufe-6-urlaub` | offen – **als Nächstes** |
+| 6 Anwesenheitssimulation | `stufe-6-urlaub` | erledigt (PR #16, 0.6.0, Korrekturen K1/K2 + hassfest), Probelauf am 10.11. bestanden |
 | 7 Sicherung, „Alles aus“, Öffnung für andere | `stufe-7-sicherung` | offen |
 
 ---
