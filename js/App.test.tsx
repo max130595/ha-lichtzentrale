@@ -108,7 +108,7 @@ describe('Farben', () => {
     fireEvent.click(screen.getAllByRole('checkbox').at(-1)!);
     callWS.mockRejectedValueOnce(new Error('Speicher nicht erreichbar'));
     fireEvent.click(screen.getByRole('button', {name: 'Freigaben speichern'}));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Speichern fehlgeschlagen');
+    expect(await screen.findByText(/Speichern fehlgeschlagen/)).toHaveAttribute('role', 'alert');
     expect(screen.getAllByRole('checkbox').at(-1)).toBeChecked();
   });
   it('ignores a late application response after unmount', async () => {

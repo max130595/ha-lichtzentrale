@@ -504,6 +504,24 @@ diese Taste überhaupt ein Doppelklick belegt ist.
   am echten System, keine Stufe 6. Tests und Browseransichten:
   [STUFE_5E_TESTPLAN.md](STUFE_5E_TESTPLAN.md).
 
+### Stufe 6 – Anwesenheitssimulation
+
+- Version 0.6.0 ergänzt einen ausschließlich manuell aktivierten Urlaubsmodus unter
+  Mehr, als HA-Schalter und über `lichtzentrale.set_vacation`. Optionales Enddatum und
+  Konfiguration werden additiv im Store gespeichert, ohne Datenmigration.
+- Seed-testbarer Tagesplan mit Abend und optionalem dunklem Morgen; frei gewählte
+  Räume/Zonen, Typ, Gewicht, Einschaltart und maximale Gleichzeitigkeit. Uhrzeit und
+  Sonnenstand verwenden die HA-Zeitzone. Neustart plant den Abschnitt neu, ohne Nachholen.
+- Optionales Recorder-Lernen bleibt ohne Recorder oder bei zu wenig Daten wirkungslos;
+  typische Zeiten werden um bis zu 20 Minuten verschoben. Keine neue Abhängigkeit.
+- Bewegungsautomatik, Grundhelligkeit, Zeitpläne und Taster-Ambiente pausieren. Normale
+  Taster bleiben wirksam und schließen betroffene Räume für den Abschnitt aus. Freigaben,
+  Handbedienung und nachweislicher Lampenbesitz begrenzen jede Simulation und deren Ende.
+- Probelauf für fünf Minuten nur mit gespeicherten ausgewählten Räumen, expliziter
+  Bestätigung und Abbruch. Keine automatische Aktivierung über Anwesenheit.
+- Prüfung und Grenzen: [STUFE_6_TESTPLAN.md](STUFE_6_TESTPLAN.md). Keine Live-Installation;
+  Geräteabnahme durch Claude ausschließlich mit Probelauf und freigegebener Testauswahl.
+
 ## Tests
 
 - Python: `pytest-homeassistant-custom-component` für Store, Szenen-Snapshot/Anwenden,

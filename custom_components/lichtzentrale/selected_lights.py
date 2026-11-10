@@ -139,7 +139,15 @@ async def async_control_lights(
                 and hass.states.get(entity_id) is prepared[entity_id]
             )
 
-        return await async_dispatch(hass, calls, skipped, context=context, guard=still_allowed)
+        def effect_allowed(entity_id):
+            # Own effect-stop/color commands change State identity. Continue to
+            # fence grants, membership and caller ownership between physical
+            # commands without comparing to the pre-command State object.
+            check_execution_guard(dispatch_guard)
+            return _still_allowed(hass, store, entity_id, areas)
+
+        return await async_dispatch(hass, calls, skipped, context=context,
+                                    guard=still_allowed, effect_guard=effect_allowed)
 
 
 async def async_dim_lights(hass, store, entity_ids, direction, context=None):

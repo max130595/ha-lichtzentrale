@@ -135,7 +135,14 @@ class DynamicSceneManager:
                     EVENT_HOMEASSISTANT_STARTED, started
                 )
             return
-        for area, saved in self.store.data.get("active_dynamic", {}).items():
+        from .vacation import vacation_paused
+
+        for area, saved in list(self.store.data.get("active_dynamic", {}).items()):
+            if vacation_paused(self.hass):
+                # Older persisted runs have no trustworthy origin marker. Do not
+                # resume automatic dynamics while vacation has paused automation.
+                await self.store.async_set_dynamic_run(area, None, expected_token=saved.get("token"))
+                continue
             if self.closed or area in self.active:
                 continue
             try:

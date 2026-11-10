@@ -181,6 +181,8 @@ async def test_legacy_store_additions_are_idempotent_and_preserve_every_collecti
     hass_storage[STORAGE_KEY] = {"version": 1, "data": deepcopy(original)}
     expected = {**deepcopy(original), "zones": [], "automatic_state": {}, "active_dynamic": {}}
     expected["settings"]["dim_min_pct"] = 1
+    from custom_components.lichtzentrale.storage import empty_data
+    expected["vacation"] = empty_data()["vacation"]
     first = LichtzentraleStore(hass)
     await first.async_load()
     assert first.data == expected

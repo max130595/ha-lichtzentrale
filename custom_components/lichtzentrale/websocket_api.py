@@ -163,6 +163,7 @@ def async_setup_websocket_api(hass: HomeAssistant) -> None:
         *SCHEDULE_HANDLERS,
         *STAGE_FIVE_B_HANDLERS,
         *STAGE_FIVE_C_HANDLERS,
+        *VACATION_HANDLERS,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -624,4 +625,23 @@ STAGE_FIVE_C_HANDLERS = (
     command("light/replace_options", {}, light_replace_options),
     command("light/replace_preview", _REPLACE_IDS, light_replace_preview),
     command("light/replace", {**_REPLACE_IDS, vol.Required("preview_token"): cv.string}, light_replace),
+)
+
+
+from .vacation_api import (  # noqa: E402
+    vacation_get,
+    vacation_notify_services,
+    vacation_save,
+    vacation_set,
+    vacation_test,
+)
+
+VACATION_HANDLERS = (
+    command("vacation/get", {}, vacation_get),
+    command("vacation/save", {vol.Required("config"): dict,
+                              vol.Optional("until"): vol.Any(None, cv.string)}, vacation_save),
+    command("vacation/set", {vol.Required("enabled"): bool,
+                             vol.Optional("until"): vol.Any(None, cv.string)}, vacation_set),
+    command("vacation/test", {}, vacation_test),
+    command("vacation/notify_services", {}, vacation_notify_services),
 )

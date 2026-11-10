@@ -17,7 +17,7 @@ class DynamicCommandLimiter:
     def entity_lock(self, entity_id):
         return self.entities.setdefault(entity_id, asyncio.Lock())
 
-    async def dispatch(self, hass, domain, service, params, context, guard):
+    async def dispatch(self, hass, domain, service, params, context, guard, *, ongoing_guard=None):
         # Only one outstanding command per running scene. The loop awaits the
         # whole tick before sleeping again, so slow devices cannot build a queue.
         async with self.lock:
@@ -30,20 +30,30 @@ class DynamicCommandLimiter:
             async with self.entity_lock(entity):
                 if not guard(entity):
                     return "skipped", entity
+                started = False
+
+                def current(target):
+                    # Initial identity guards apply until the first physical
+                    # command. Own stop/color changes must not cancel the effect.
+                    check = ongoing_guard if started and ongoing_guard is not None else guard
+                    return check(target)
+
                 async def send(call_domain, call_service, payload, call_context, effect_guard):
+                    nonlocal started
                     if self.last_command is not None:
                         await asyncio.sleep(max(0, self.last_command + COMMAND_SPACING - loop.time()))
-                    if not guard(entity) or (effect_guard is not None and not effect_guard()):
+                    if not current(entity) or (effect_guard is not None and not effect_guard()):
                         from homeassistant.exceptions import ServiceValidationError
 
                         raise ServiceValidationError("Der Lampenauftrag wurde inzwischen ersetzt.")
                     self.last_command = loop.time()
+                    started = True
                     return await hass.services.async_call(call_domain, call_service, payload, blocking=True, context=call_context)
 
                 try:
                     from .effects import async_call
 
-                    await async_call(hass, domain, service, params, context, guard=guard, command_call=send)
+                    await async_call(hass, domain, service, params, context, guard=current, command_call=send)
                 except asyncio.CancelledError:
                     raise
                 except Exception:

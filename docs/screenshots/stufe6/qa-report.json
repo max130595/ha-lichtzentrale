@@ -1,0 +1,73 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844,
+    "deviceScaleFactor": 1
+  },
+  "fixture": "Synthetic room/zone/device data; no live HA",
+  "screenshots": [
+    {
+      "filename": "01-urlaubsmodus-390.png",
+      "sha256": "8d7872c5b9c4691a1a52bd21501aa97726d2b1dd96653d5bd39248826d962c42",
+      "viewport": 390,
+      "document": 390,
+      "main": 390,
+      "mainScroll": 390,
+      "overflow": []
+    },
+    {
+      "filename": "02-raumauswahl-390.png",
+      "sha256": "92ce70d200352587667d97ab9e7b483bc17ac823ca897dc9dce76c1b0747fa30",
+      "viewport": 390,
+      "document": 390,
+      "main": 390,
+      "mainScroll": 390,
+      "overflow": []
+    },
+    {
+      "filename": "03-abendfenster-390.png",
+      "sha256": "af9b9557b20fe2bafdc8811f2b0f368a2345563ba258c55e28ac55503cfd3868",
+      "viewport": 390,
+      "document": 390,
+      "main": 390,
+      "mainScroll": 390,
+      "overflow": []
+    },
+    {
+      "filename": "04-morgen-optionen-390.png",
+      "sha256": "74e296589476dc3f35535be0e8724fc0aac18b25c26cab15cf2587580a53bdab",
+      "viewport": 390,
+      "document": 390,
+      "main": 390,
+      "mainScroll": 390,
+      "overflow": []
+    },
+    {
+      "filename": "05-plan-heute-390.png",
+      "sha256": "c85c7d35447aec97a0847b0057ee35640f2a38d95a023d5b1ca8727d0d2647cc",
+      "viewport": 390,
+      "document": 390,
+      "main": 390,
+      "mainScroll": 390,
+      "overflow": []
+    },
+    {
+      "filename": "06-probelauf-390.png",
+      "sha256": "d78bd25d048a24c08367ea38699b483d8487ace9a4f7dc3e87ca522494da22dc",
+      "viewport": 390,
+      "document": 390,
+      "main": 390,
+      "mainScroll": 390,
+      "overflow": []
+    }
+  ],
+  "passed": [
+    "Room type/action editors, brightness, scene validation, time/sun boundaries, learning and push options; dirty guards; failed-save retention and server-confirmed retry.",
+    "Enable/disable and changed end date reflect server state; enabled mode prevents trial.",
+    "Trial cancellation sends no command; explicit real-lamp warning confirmation starts synthetic transport only; active trial and stop verified.",
+    "Dirty navigation supports stay/discard; reopening reads server-confirmed state."
+  ],
+  "errors": [],
+  "browser": "157.0.8103.38",
+  "productionBundleSha256": "2e24cf71e5392a6a373c1c5f2d0edec36cd05215ca6ecee04ccd24ce267ef969"
+}

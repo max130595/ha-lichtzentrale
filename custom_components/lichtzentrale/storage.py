@@ -18,7 +18,10 @@ from .dimming import DEFAULT_DIM_MIN_PCT, validate_dim_min_pct
 
 def empty_data() -> dict[str, Any]:
     """Return independent containers for the planned data model."""
+    from .vacation_config import default_vacation_config
+
     return {
+        "vacation": {"enabled": False, "until": None, "config": default_vacation_config(), "runtime": {}},
         "scenes": [],
         "zones": [],
         "automatic_state": {},
@@ -53,6 +56,12 @@ class LichtzentraleStore:
             migrated = False
             if saved is not None:
                 updated.update(deepcopy(saved))
+                updated["vacation"] = {**empty_data()["vacation"], **deepcopy(saved.get("vacation", {}))}
+                # Default legacy settings in memory, without a storage migration
+                # or changing any saved option, including explicit safety_off=False.
+                vacation_config = updated["vacation"].get("config")
+                if isinstance(vacation_config, dict):
+                    vacation_config.setdefault("safety_off", True)
                 updated["settings"] = {
                     "light_entity_ids": [],
                     "dim_min_pct": DEFAULT_DIM_MIN_PCT,
@@ -79,6 +88,30 @@ class LichtzentraleStore:
             await self._store.async_save(updated)
             self._data = deepcopy(updated)
             return result
+
+    async def async_update_vacation(self, patch: dict) -> dict:
+        """Atomically merge private vacation state, publishing only after disk save."""
+        from homeassistant.helpers.dispatcher import async_dispatcher_send
+
+        from .vacation_config import validate_until, validate_vacation_config
+
+        if not isinstance(patch, dict):
+            raise ServiceValidationError("Ungültige Urlaubsmodus-Einstellungen.")
+        async with self._lock:
+            patch = deepcopy(patch)
+            if "enabled" in patch and type(patch["enabled"]) is not bool:
+                raise ServiceValidationError("Urlaubsmodus muss ein- oder ausgeschaltet sein.")
+            if "until" in patch:
+                patch["until"] = validate_until(patch["until"])
+            if "config" in patch:
+                patch["config"] = validate_vacation_config(self._hass, self, patch["config"])
+            updated = deepcopy(self._data)
+            updated["vacation"] = {**empty_data()["vacation"], **updated.get("vacation", {}), **patch}
+            await self._store.async_save(updated)
+            self._data = updated
+            result = deepcopy(updated["vacation"])
+        async_dispatcher_send(self._hass, f"{DOMAIN}_vacation_updated")
+        return result
 
     async def async_set_dynamic_run(self, area_id, record=None, *, expected_token=None):
         """Persist execution intent with compare-and-swap cleanup of stale runs."""

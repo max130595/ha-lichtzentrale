@@ -43,6 +43,44 @@ async def test_preserve_future_fields_and_fill_defaults(hass, hass_storage):
     assert persisted["schedules"] == []
 
 
+async def test_legacy_vacation_safety_default_without_migration(hass, hass_storage):
+    saved = empty_data()
+    saved["vacation"]["config"].pop("safety_off")
+    saved["vacation"]["config"].update(max_rooms=2, future_option={"nested": [1]})
+    saved["vacation"].update(enabled=True, until="2027-01-10", runtime={"seed": 42})
+    saved["rooms"] = {"synthetic-room": {"future_option": [2]}}
+    saved["settings"]["future_option"] = {"nested": [3]}
+    original = deepcopy(saved)
+    hass_storage[STORAGE_KEY] = {"version": 1, "data": deepcopy(saved)}
+    store = LichtzentraleStore(hass)
+    with patch.object(store._store, "async_save", wraps=store._store.async_save) as save:
+        await store.async_load()
+        save.assert_not_awaited()
+    expected = deepcopy(original)
+    expected["vacation"]["config"]["safety_off"] = True
+    assert store.data == expected
+    assert hass_storage[STORAGE_KEY]["data"] == original == saved
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_vacation_safety_off_save_reload_preserves_other_settings(
+    hass, store, hass_storage, enabled
+):
+    await store.async_set_lights(["light.synthetic_vacation_safety"])
+    before = store.data
+    config = {**before["vacation"]["config"], "safety_off": enabled, "max_rooms": 2}
+    result = await store.async_update_vacation({"config": config})
+    assert result["config"] == config
+    expected = deepcopy(before)
+    expected["vacation"]["config"] = config
+    assert store.data == expected == hass_storage[STORAGE_KEY]["data"]
+    reloaded = LichtzentraleStore(hass)
+    with patch.object(reloaded._store, "async_save", wraps=reloaded._store.async_save) as save:
+        await reloaded.async_load()
+        save.assert_not_awaited()
+    assert reloaded.data == expected
+
+
 async def test_save_failure_does_not_mutate_memory_or_disk(store, hass_storage):
     before = store.data
     disk_before = deepcopy(hass_storage[STORAGE_KEY])

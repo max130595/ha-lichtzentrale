@@ -54,6 +54,7 @@ jobs:
       - run: python scripts/smoke_stage5c_review.py
       - run: python scripts/smoke_stage5d.py
       - run: python scripts/smoke_stage5e.py
+      - run: python scripts/smoke_stage6.py
   hassfest:
     name: hassfest
     runs-on: ubuntu-latest

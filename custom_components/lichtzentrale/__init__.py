@@ -3,6 +3,7 @@
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service import async_register_admin_service
@@ -21,6 +22,8 @@ from .rooms import async_toggle_room
 from .scenes import async_apply_scene
 from .schedules import ScheduleManager
 from .storage import LichtzentraleStore
+from .vacation import VacationManager
+from .vacation_api import vacation_set
 from .view import async_remove_view, async_setup_view
 from .websocket_api import ADAPTIVE_FIELDS, APPLY_FIELDS, async_setup_websocket_api, get_store
 
@@ -112,6 +115,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=vol.Schema(ADAPTIVE_FIELDS),
         supports_response=SupportsResponse.OPTIONAL,
     )
+    runtime["vacation"] = VacationManager(hass, store)
     runtime["automatic_state"] = AutomaticStateManager(hass, store)
     await runtime["automatic_state"].start()
     runtime["brightness"] = BrightnessManager(hass, store)
@@ -125,6 +129,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     runtime["entity_references"] = EntityReferenceManager(hass, store)
     runtime["entity_references"].start()
     await runtime["dynamic"].restore()
+    runtime["vacation"].start()
+
+    async def set_vacation_service(call: ServiceCall):
+        return await vacation_set(hass, get_store(hass), call.data, call.context)
+
+    async_register_admin_service(
+        hass, DOMAIN, "set_vacation", set_vacation_service,
+        schema=vol.Schema({vol.Required("enabled"): bool,
+                           vol.Optional("until"): vol.Any(None, cv.string)}),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    await hass.config_entries.async_forward_entry_setups(entry, [Platform.SWITCH])
 
     async def next_scene_service(call: ServiceCall):
         return await hass.data[DOMAIN]["bindings"].async_next_scene(
@@ -144,6 +160,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload without removing persisted user settings."""
+    if not await hass.config_entries.async_unload_platforms(entry, [Platform.SWITCH]):
+        return False
+    if vacation := hass.data[DOMAIN].pop("vacation", None):
+        await vacation.shutdown()
     if references := hass.data[DOMAIN].pop("entity_references", None):
         await references.shutdown()
     if preview := hass.data[DOMAIN].pop("live_preview", None):
@@ -167,6 +187,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "stop_dynamic")
     hass.services.async_remove(DOMAIN, "set_adaptive")
     hass.services.async_remove(DOMAIN, "next_scene")
+    hass.services.async_remove(DOMAIN, "set_vacation")
     hass.data[DOMAIN].pop("store", None)
     return True
 

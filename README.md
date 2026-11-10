@@ -4,7 +4,7 @@ Eine lokale Licht-App als Custom Integration für Home Assistant. Oberfläche au
 für schmale Bildschirme ausgelegt. Kein Cloud-Konto und keine zusätzlichen
 Python-Abhängigkeiten zur Laufzeit.
 
-**Stand: Stufe 5e (Entwurf zur Abnahme), Version 0.5.2.** Fünf Reiter:
+**Stand: Stufe 6 (Entwurf zur Abnahme), Version 0.6.0.** Fünf Reiter:
 Zuhause, Farben, Automationen, Taster und Mehr. 37 originale Stimmungen, eigene Paletten
 und ein Live-Szenen-Editor mit Helligkeit und Verhalten pro Lampe ergänzen Räume, Zonen,
 Taster und Automationen. Dynamik kann nach einem Neustart fortgesetzt werden. Alle
@@ -45,6 +45,48 @@ nur den Einschaltbefehl. `switch.*`-Lichtschalter bleiben bei statischen und dyn
 Paletten unverändert; Snapshot-Szenen stellen ihren gespeicherten An/Aus-Wert her.
 Nicht erreichbare oder unbekannte Lampen werden übersprungen
 und gemeldet. Übergänge werden nur an Lampen gesendet, die sie unterstützen.
+
+## Urlaubsmodus
+
+Unter **Mehr → Urlaubsmodus** werden Räume oder Zonen ausgewählt, als Wohnraum,
+Durchgang oder Schlafraum eingestuft und mit Gewicht und Einschaltart versehen.
+Der Modus wird ausschließlich manuell aktiviert: in der Oberfläche, über
+`switch.lichtzentrale_urlaubsmodus` oder den Dienst `lichtzentrale.set_vacation`.
+Ein optionales Enddatum gilt einschließlich des gewählten Tages in der HA-Zeitzone.
+
+- Abend: standardmäßig Sonnenuntergang minus 15 Minuten bis zu einem täglich zufälligen
+  Ende zwischen 22:30 und 23:30. Morgen optional: 06:30 bis 07:30, nur bei Dunkelheit,
+  ein oder zwei Räume mit insgesamt 10–30 Minuten. Grenzen sind Uhrzeit oder Sonne
+  mit Versatz. **Plan heute** zeigt die Abfolge und die nächste Schaltung.
+- Höchstens drei Räume gleichzeitig als Standard. Wohnraum lang (45–150 Minuten),
+  Durchgang kurz (2–12), Schlafraum spät (10–40). Für den kurzen Morgen werden lange
+  Wohnraumbesuche ausdrücklich verkürzt. Gewicht 0 nimmt einen Raum aus dem Plan.
+- Szene, feste Helligkeit oder letzter Zustand. Bereits eingeschaltete Lampen werden
+  nicht übernommen. Die Simulation beachtet Freigaben, Effekte und den Befehlsbegrenzer.
+- Bewegungsautomatik, Grundhelligkeit, Lichtzentrale-Zeitpläne und Taster-Ambiente
+  pausieren. Taster funktionieren normal und nehmen betroffene Räume für den restlichen
+  Abschnitt aus der Simulation. Verpasste Zeitpläne werden nicht nachgeholt.
+- Beim Beenden werden nur noch eigene, unverändert freigegebene Lampen ausgeschaltet.
+  Handbedienung hat Vorrang. Zustand und Enddatum bleiben im HA-Store; nach Neustart
+  wird der aktuelle Abschnitt neu geplant. Nicht mehr sicher nachweisbarer Lampenbesitz
+  wird nicht aus einem gleichen Farb-/Helligkeitswert geraten.
+- **Am Ende jedes Abschnitts alles ausschalten (empfohlen)** ist standardmäßig an.
+  Am Ende des Abend-/Morgenabschnitts und einmalig zehn Minuten später werden alle
+  aktuell eingeschalteten, freigegebenen Lampen der ausgewählten Räume ausgeschaltet,
+  auch ohne nachweisbaren Simulationsbesitz. Im Abschnitt per Taster bediente Räume
+  bleiben ausgenommen. Nur bei aktivem Urlaubsmodus, niemals beim Probelauf.
+- Kurze Nichterreichbarkeit (`unavailable`/`unknown`) mit Rückkehr zum gleichen Zustand
+  beendet den Simulationsbesitz nicht; echte Ein/Aus-Wechsel und fremde Dienste weiterhin schon.
+- Optionales Lernen liest die letzten 14 Tage aus einem vorhandenen Recorder. Mindestens
+  drei unterschiedliche Tage müssen eine typische Einschaltzeit stützen. Sonst gilt der
+  Zufallsplan. Ohne Recorder läuft der Modus ebenfalls. Optional sind Ein-/Aus-Hinweise
+  über einen vorhandenen benannten `notify`-Dienst möglich.
+
+**Probelauf 5 min** schaltet echte Lampen, ausschließlich in den gespeicherten ausgewählten
+Räumen. Er benötigt eine bewusste Bestätigung, ist jederzeit beendbar und startet nach
+Neustart nicht erneut. Für die Entwicklung wurden nur synthetische Lampen verwendet.
+Tests, Browseransichten und die eingeschränkte Geräteabnahme durch Claude:
+[STUFE_6_TESTPLAN.md](docs/STUFE_6_TESTPLAN.md).
 
 ## Effekte, Ambiente und Skripte
 

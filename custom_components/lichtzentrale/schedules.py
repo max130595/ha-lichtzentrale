@@ -17,6 +17,7 @@ from homeassistant.util import dt as dt_util
 
 from .schedule_config import action_targets, list_persons, validate_schedule
 from .schedule_windows import next_window_run, window_is_open
+from .vacation import vacation_paused
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ class ScheduleManager:
         self._unsub = None
         self._unsub_start = None
         self._runtime = {}
+        self._contexts = set()
 
     def _state(self, plan_id):
         return self._runtime.setdefault(plan_id, {
@@ -108,6 +110,20 @@ class ScheduleManager:
             if self._started and not self.closed:
                 self._arm(plan_id)
 
+    @callback
+    def vacation_changed(self, paused):
+        """Drop pending work; resume only future triggers, never a held lux level."""
+        for plan in self.store.data.get("schedules", []):
+            runtime = self._state(plan["id"])
+            runtime["generation"] += 1
+            runtime["lux_epoch"] += 1
+            self._cancel_timer(runtime)
+            for task in tuple(runtime["tasks"]):
+                task.cancel()
+            runtime.update(latched=True, lux_ready=False, last_attempt_date=None)
+            if not paused and self._started and not self.closed:
+                self._arm(plan["id"])
+
     def _cancel_timer(self, runtime):
         runtime["timer_token"] += 1
         if runtime["cancel"]:
@@ -136,7 +152,7 @@ class ScheduleManager:
 
     def _arm(self, plan_id):
         plan = self._plan(plan_id)
-        if not plan or not plan.get("enabled") or self.closed:
+        if not plan or not plan.get("enabled") or self.closed or vacation_paused(self.hass):
             return
         runtime = self._state(plan_id)
         generation, token = runtime["generation"], runtime["timer_token"]
@@ -187,7 +203,7 @@ class ScheduleManager:
 
     @callback
     def _changed(self, event):
-        if self.closed:
+        if self.closed or vacation_paused(self.hass):
             return
         for plan in self.store.data.get("schedules", []):
             trigger = plan["trigger"]
@@ -199,7 +215,8 @@ class ScheduleManager:
     def _fire(self, plan_id, generation, token=None):
         runtime = self._state(plan_id)
         plan = self._plan(plan_id)
-        if (self.closed or generation != runtime["generation"] or not plan or not plan["enabled"]
+        if (self.closed or vacation_paused(self.hass) or generation != runtime["generation"]
+            or not plan or not plan["enabled"]
             or (token is not None and token != runtime["timer_token"])):
             return
         self._cancel_timer(runtime)
@@ -290,7 +307,7 @@ class ScheduleManager:
         runtime = self._state(plan_id)
         async with runtime["lock"]:
             plan = self._plan(plan_id)
-            if self.closed or generation != runtime["generation"]:
+            if self.closed or vacation_paused(self.hass) or generation != runtime["generation"]:
                 raise ServiceValidationError("Der Zeitplan wurde zwischenzeitlich geändert.")
             if plan is None:
                 raise ServiceValidationError("Der Zeitplan wurde nicht gefunden.")
@@ -317,12 +334,13 @@ class ScheduleManager:
                 if not claimed:
                     return {"condition_met": False, "applied": [], "skipped": [], "reason": "daily_limit"}
             context = context or Context()
+            self._contexts.add(context.id)
             transition = plan["transition"]
 
             def dispatch_guard():
                 # Unlike the full condition, time/lux eligibility must survive
                 # asynchronous preparation without rechecking a batch's own on/off changes.
-                if self.closed or generation != runtime["generation"]:
+                if self.closed or vacation_paused(self.hass) or generation != runtime["generation"]:
                     raise ServiceValidationError("Der Zeitplan wurde zwischenzeitlich geändert.")
                 if self._plan(plan_id) != original_plan:
                     raise ServiceValidationError("Der Zeitplan wurde zwischenzeitlich geändert.")
@@ -360,7 +378,7 @@ class ScheduleManager:
                 return (dispatch_guard()
                         and self._conditions(plan, action_targets(self.hass, self.store, action)))
 
-            launch_guard = dispatch_guard if plan["condition"].get("time_window") else None
+            launch_guard = dispatch_guard
 
             if kind == "scene":
                 from .scenes import async_apply_scene
