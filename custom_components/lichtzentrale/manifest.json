@@ -1,6 +1,9 @@
 {
   "domain": "lichtzentrale",
   "name": "Lichtzentrale",
+  "after_dependencies": [
+    "recorder"
+  ],
   "codeowners": [
     "@max130595"
   ],
